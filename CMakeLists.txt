@@ -144,34 +144,49 @@ if (RE4_PC_BUILD_ALL_GAME)
   )
   list(FILTER RE4_GAME_ALL_SOURCES EXCLUDE REGEX ".*/(memset_2|yz2asm)\\.cpp$")
 
-  # Custom target: `cmake --build build-pc --target re4_rewrite_casts` runs the Phase 2 rewriter
-  # (tools/port/rewrite_casts.py) over every re4_game_all source, using *this* configure's own
-  # compile_commands.json. Two-pass by construction (see the RE4_REWRITE_CASTS comment above): a
-  # first `cmake --build` (or plain `cmake -S . -B build-pc`) is needed before build-pc/gen/ exists
-  # at all, so RE4_REWRITE_CASTS's source-swap below only takes effect once build-pc/gen/<file> is
-  # already on disk from a previous run of this target -- not a per-file incremental custom command
-  # yet (docs/port-phase2.md, "steps not started").
-  add_custom_target(re4_rewrite_casts
-    COMMAND ${Python3_EXECUTABLE} ${RE4_ROOT}/tools/port/rewrite_casts.py
-            --compile-commands ${CMAKE_BINARY_DIR}/compile_commands.json
-            --rewriter ${RE4_CAST_REWRITER_BIN}
-            --out-dir ${RE4_ROOT}/build-pc/gen
-            --sources-filter /src/game/
-    WORKING_DIRECTORY ${RE4_ROOT}
-    COMMENT "re4_rewrite_casts: rewriting src/game pointer<->integer casts into build-pc/gen/"
-    VERBATIM
-  )
-
+  # Per-file incremental cast rewriting: one add_custom_command per source (DEPENDS the source and
+  # the rewriter binary), not a single whole-tree custom target -- editing one file only
+  # regenerates that file's build-pc/gen/ copy, not all 293. This bootstraps cleanly within a
+  # single configure: CMAKE_EXPORT_COMPILE_COMMANDS writes compile_commands.json during the
+  # Generate step, which happens before ninja ever runs a build command, so the `-p` compilation
+  # database the rewriter needs already exists by the time any of these rules execute -- no
+  # two-pass workflow needed any more (superseded the previous re4_rewrite_casts custom target).
   if (RE4_REWRITE_CASTS)
+    execute_process(COMMAND xcrun --show-sdk-path OUTPUT_VARIABLE RE4_SYSROOT
+                     OUTPUT_STRIP_TRAILING_WHITESPACE)
+    execute_process(COMMAND /opt/homebrew/opt/llvm/bin/clang -print-resource-dir
+                     OUTPUT_VARIABLE RE4_CLANG_RESOURCE_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
+
     set(RE4_GAME_ALL_SOURCES_REWRITTEN "")
     foreach(_src IN LISTS RE4_GAME_ALL_SOURCES)
       file(RELATIVE_PATH _rel ${RE4_ROOT} ${_src})
-      set(_gen "${RE4_ROOT}/build-pc/gen/${_rel}")
-      if (EXISTS ${_gen})
-        list(APPEND RE4_GAME_ALL_SOURCES_REWRITTEN ${_gen})
-      else()
-        list(APPEND RE4_GAME_ALL_SOURCES_REWRITTEN ${_src}) # not rewritten yet: fall back to the original
-      endif()
+      set(_gen "${CMAKE_BINARY_DIR}/gen/${_rel}")
+      # `re4_cast_rewriter`'s own exit code reflects whether the *parse* it ran to build the AST
+      # had zero diagnostics -- not whether rewriting itself succeeded (it always writes -o as long
+      # as parsing got far enough to build an AST at all, errors and all: see
+      # EndSourceFileAction()). Real, pre-existing errors in the tree (unrelated undeclared
+      # identifiers, casts to plain `int`/`short` that Sema itself won't turn into a rewritable
+      # AST node even at RE4_U32_32=OFF -- docs/port-phase2.md section 9's newest finding) are
+      # expected and do not mean this step failed, so success here is "did -o get written",
+      # not the tool's own exit code.
+      add_custom_command(
+        OUTPUT ${_gen}
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/gen/src/game"
+        # -URE4_U32_32 always, regardless of what this build tree's own compile_commands.json bakes
+        # in (build-pc-u32on's does, since that is the point of that tree): the rewriter needs
+        # RE4_U32_32 OFF to see the cast AST nodes it exists to rewrite at all -- with it ON, the
+        # narrowing pointer<->integer cast is a hard Sema error and clang builds a RecoveryExpr
+        # instead of a real CStyleCastExpr, so the rewriter silently sees (and rewrites) almost
+        # nothing (measured: running this rule against build-pc-u32on's own database without the
+        # -U produced unrewritten-looking output and a 1535-error aggregate instead of ~170 --
+        # docs/port-phase2.md section 9). A trailing -U after -D undefines it on the same command
+        # line regardless of argument order in the base compile command.
+        COMMAND bash -c "${RE4_CAST_REWRITER_BIN} -p ${CMAKE_BINARY_DIR} ${_src} -o ${_gen} --report ${_gen}.report.txt --resource-dir=${RE4_CLANG_RESOURCE_DIR} --extra-arg=-isysroot --extra-arg=${RE4_SYSROOT} --extra-arg=-URE4_U32_32 --extra-arg=-ferror-limit=0 ; test -f ${_gen}"
+        DEPENDS ${_src} ${RE4_CAST_REWRITER_BIN} ${CMAKE_BINARY_DIR}/compile_commands.json
+        COMMENT "cast-rewrite ${_rel}"
+        VERBATIM
+      )
+      list(APPEND RE4_GAME_ALL_SOURCES_REWRITTEN ${_gen})
     endforeach()
     set(RE4_GAME_ALL_SOURCES ${RE4_GAME_ALL_SOURCES_REWRITTEN})
   endif()
@@ -181,7 +196,11 @@ if (RE4_PC_BUILD_ALL_GAME)
   target_compile_definitions(re4_game_all PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_game_all PRIVATE ${RE4_GAME_OPTIONS})
   if (RE4_REWRITE_CASTS)
-    add_dependencies(re4_game_all re4_rewrite_casts)
+    # Forced include instead of patching an #include into every generated copy: simplest way to
+    # get re4_port::GC32/GCPTR/Ptr32<T> declared in every rewritten TU regardless of whether its
+    # original #include set happened to pull in ptr32.h transitively (measured gap, 8 sites,
+    # docs/port-phase2.md section 9).
+    target_compile_options(re4_game_all PRIVATE -include ${RE4_ROOT}/include/port/ptr32.h)
   endif()
 endif()
 
