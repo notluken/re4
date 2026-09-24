@@ -47,6 +47,23 @@ option(RE4_PC_BUILD_ALL_GAME "Add re4_game_all: every src/game/*.c(pp) as its ow
 # set for that switch; the error-inventory targets below are still expected to fail widely with it on.
 option(RE4_U32_32 "s32/u32 = 4-byte int/unsigned int under TARGET_PC (Phase 2 step 1, off by default)" OFF)
 
+# One global setting, not a per-target list a new target can forget to opt into (docs/port-boot.md
+# section 25: re4_port's own target_compile_definitions() once carried TARGET_PC but not
+# RE4_U32_32, so os_thread.cpp's #include <dolphin/os/OSThread.h> silently fell back to
+# dolphin/types.h's u32=`unsigned long` (8 bytes) branch while every other TU's OSThread was 4-byte
+# u32/856 bytes -- an ODR violation that corrupted the scheduler's Task[] array). add_compile_
+# definitions() here applies from this point in the directory scope onward, so it reaches every
+# target this file defines below *and* Aurora's add_subdirectory() (RE4_BUILD_BOOT) -- verified
+# intentional, not incidental: Aurora's own dolphin/types.h (a different copy, ../aurora/include/
+# dolphin/types.h) has the identical #ifdef TARGET_PC branch, <stdint.h> fixed-width types, so
+# without this Aurora's own compiled objects (aurora_os/aurora_gx/...) were using 8-byte u32/s32
+# throughout while every game/port TU used 4-byte -- the same class of bug, one level up, at every
+# Dolphin-shaped struct that crosses the game<->Aurora call boundary (GXTexObj, OSThread, ...).
+add_compile_definitions(TARGET_PC)
+if (RE4_U32_32)
+  add_compile_definitions(RE4_U32_32)
+endif()
+
 set(RE4_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Phase 2 section 8 (docs/port-phase2.md): the build-time cast rewriter. Implied by RE4_U32_32
@@ -83,14 +100,12 @@ set(RE4_GAME_INCLUDES
   ${RE4_ROOT}/build/G4BE08/include
 )
 set(RE4_GAME_DEFINES
-  TARGET_PC
   BUILD_VERSION=0
   VERSION_G4BE08
   NDEBUG=1
 )
-if (RE4_U32_32)
-  list(APPEND RE4_GAME_DEFINES RE4_U32_32)
-endif()
+# TARGET_PC and (conditionally) RE4_U32_32 are global (add_compile_definitions() above), not
+# listed here -- kept as a plain list of the *other* per-target defines game code needs.
 # -Wno-address-of-temporary: `&((Vec){...})` compound-literal-address idiom (GNU C, several em*/wep*
 # units), legal for the vendor's GCC 2.95 and alive for the length of the enclosing full expression;
 # clang's default diagnostic for it is an error, not a warning, so it needs the flag, not -Wno-error.
@@ -271,21 +286,9 @@ add_library(re4_port STATIC
   src/port/os_thread.cpp
 )
 target_include_directories(re4_port PUBLIC ${RE4_GAME_INCLUDES})
-target_compile_definitions(re4_port PUBLIC TARGET_PC)
-if (RE4_U32_32)
-  # Without this, os_thread.cpp's #include <dolphin/os/OSThread.h> picks up dolphin/types.h's
-  # #else branch (s32/u32 = host `long`, 8 bytes on this LP64 host) instead of the 4-byte int
-  # every other RE4_U32_32=ON TU uses (scheduler.h pre-defines _DOLPHIN_TYPES_H_ before including
-  # the same OS headers precisely to dodge dolphin/types.h's typedefs, so scheduler.cpp always
-  # got the correct 4-byte width regardless of this target's own defines) -- an ODR-violating
-  # OSContext/OSThread whose sizeof() disagrees with every other TU that embeds one (TASK::Thread,
-  # include/scheduler.h). OSCreateThread's writes through that oversized view walk past the real,
-  # smaller OSThread embedded in TASK and corrupt whatever TASK slot follows in Task[] (root cause
-  # of docs/port-boot.md section 24's "Task[1] corrupted" blocker -- lldb watchpoint on
-  # &Task[1].Status caught OSCreateThread(&Task[0].Thread, ...)'s `thread->state = ...` store
-  # landing on Task[1].Status instead).
-  target_compile_definitions(re4_port PUBLIC RE4_U32_32)
-endif()
+# TARGET_PC/RE4_U32_32 are global (add_compile_definitions() near the top of this file) -- see
+# docs/port-boot.md section 25 for why a per-target copy of this list is exactly the bug class
+# that global directive exists to make impossible.
 find_package(Threads REQUIRED)
 target_link_libraries(re4_port PUBLIC Threads::Threads)
 
