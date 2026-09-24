@@ -1,5 +1,8 @@
 // game/mes: in-game message system (D:/Bio4/Prog/mes.cpp).
 #include "types.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 #include "vec.h"
 #include "model.h"
 // Declared before global.h/mes.h name MesData: uninitialised objects are emitted in first-declaration
@@ -59,10 +62,17 @@ struct OSFontHeader {
 // as the sum, which is what the original codegen shows.
 #define MES(no) ((Message*) ((no) * sizeof(Message) + (u32) this + sizeof(u32)))
 
-// Font file: offsets to the TPL and to the width table.
+// Font file: offsets to the TPL and to the width table. On-disc, big-endian (Phase 3,
+// docs/port-phase3.md) -- BE<u32> under TARGET_PC; setupFont()'s `f->tplOfs`/`f->widthOfs` reads
+// go through the normal implicit conversion, no call-site change needed.
 struct MesFontFile {
+#ifdef TARGET_PC
+    re4_port::BE<u32> tplOfs;    // 0x00
+    re4_port::BE<u32> widthOfs;  // 0x04
+#else
     u32 tplOfs;    // 0x00
     u32 widthOfs;  // 0x04
+#endif
 };
 
 u32 mes_col_tbl[10] = {
@@ -188,12 +198,39 @@ void MessageFont::create(int char_w, int char_h, TEXPalette* addr, u8* size)
     FONT_TEX* t;
 
     m_tpl = addr;
-    if ((s32) addr->descriptorArray >= 0) {
 #ifdef TARGET_PC
-        addr->descriptorArray = (TEXDescriptor*) ((u8*) addr + addr->descriptorArray.raw_handle());
+    // Phase 3 (docs/port-phase3.md): the raw pre-relocation offset in this field is big-endian on
+    // disc (the buffer is never swapped, only the header's plain integer fields are BE<T>'d) --
+    // ptr32.h's raw_handle_be() reads the *offset's numeric value* correctly on this little-endian
+    // host, needed for the pointer arithmetic below (docs/port-boot.md section 21's blocker). The
+    // sign-bit guard itself, however, must stay unswapped (raw_handle(), not raw_handle_be()): a
+    // small on-disc offset's top disc byte is always 0 regardless of byte order, and once this
+    // field has been relocated its Ptr32<T> holds a runtime-computed, already-host-native handle
+    // (top bit set for an arena address) -- swapping *that* value on a second call (create() is
+    // called again with the same already-relocated buffer for the non-Japanese system font,
+    // MessageControl::loadSystemFont()) would corrupt the "already relocated" check and re-run
+    // this block on live pointers. Both reads see the same raw storage; only the arithmetic one
+    // needs the disk-order swap, because it is only ever reached once (guarded by this check).
+    if ((s32) addr->descriptorArray.raw_handle() >= 0) {
+        addr->descriptorArray =
+            (TEXDescriptor*) ((u8*) addr + addr->descriptorArray.raw_handle_be());
+        d = addr->descriptorArray;
+        for (i = 0; i < addr->numDescriptors; i++, d++) {
+            d->textureHeader = (TEXHeader*) ((u8*) addr + d->textureHeader.raw_handle_be());
+            d->CLUTHeader = (CLUTHeader*) ((u8*) addr + d->CLUTHeader.raw_handle_be());
+            if (d->textureHeader->unpacked == 0) {
+                d->textureHeader->data = (u8*) addr + d->textureHeader->data.raw_handle_be();
+                d->textureHeader->unpacked = 1;
+            }
+            if (d->CLUTHeader->unpacked == 0) {
+                d->CLUTHeader->data = (u8*) addr + d->CLUTHeader->data.raw_handle_be();
+                d->CLUTHeader->unpacked = 1;
+            }
+        }
+    }
 #else
+    if ((s32) addr->descriptorArray >= 0) {
         addr->descriptorArray = (TEXDescriptor*) ((u32) addr->descriptorArray + (u32) addr);
-#endif
         d = addr->descriptorArray;
         for (i = 0; i < addr->numDescriptors; i++, d++) {
             d->textureHeader = (TEXHeader*) ((u8*) addr + (u32) d->textureHeader);
@@ -208,6 +245,7 @@ void MessageFont::create(int char_w, int char_h, TEXPalette* addr, u8* size)
             }
         }
     }
+#endif
     d = m_tpl->descriptorArray;
     t = m_mTex;
     for (i = 0; i < m_tpl->numDescriptors; i++, d++, t++) {
