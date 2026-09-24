@@ -5,6 +5,16 @@
 #include <string.h>
 #include <stdio.h>
 
+#ifdef TARGET_PC
+// The GCC 2.95/MSL libc this was written against declares a single non-const-correct strstr
+// overload (always returns char*); libc++ has the standard const-correct pair, so a const char*
+// first argument here picks the const-returning overload and the plain `char* p = strstr(...)`
+// below no longer converts implicitly. Same behaviour, host-correct overload, macro'd over the
+// call sites instead of touching each one.
+static inline char* strstr_host(const char* s, const char* n) { return const_cast<char*>(strstr(s, n)); }
+#define strstr strstr_host
+#endif
+
 // Finds "<tag" in `src`; *out = its position. 0 when absent.
 int XmlSimple::GetXmlStart(char** pOut, const char* pIn, const char* pName)
 {

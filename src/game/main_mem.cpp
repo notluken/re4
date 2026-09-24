@@ -24,6 +24,13 @@
 #include <dolphin/os/OSAlloc.h>
 #include "main.h"
 
+#ifdef TARGET_PC
+// Same const-correctness gap as xml.cpp's strstr: the GCC 2.95/MSL libc's single strrchr overload
+// always returns char*, libc++ has the const-correct pair. Host-correct overload, same behaviour.
+static inline char* strrchr_host(const char* s, int c) { return const_cast<char*>(strrchr(s, c)); }
+#define strrchr strrchr_host
+#endif
+
 
 // Fixed memory map of the debug build.
 struct SystemMemMap {

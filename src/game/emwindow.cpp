@@ -2,6 +2,9 @@
 // the enemies jump through (ExeWindowEvent), with a scenario field (SceAtCreateFieldAt) on
 // each side.
 
+#ifdef TARGET_PC
+#include <cstring>
+#endif
 #include "atari.h"
 #include "light.h"
 #include "dmg.h"

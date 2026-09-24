@@ -44,6 +44,15 @@
 #include "st_mgr_event.h"
 #include <string.h>
 
+#ifdef TARGET_PC
+// Same const-correctness gap as xml.cpp's strstr: the GCC 2.95/MSL libc's single strstr overload
+// always returns char*, libc++ has the const-correct pair (and both r332.cpp call sites pass a
+// string literal, so both a const char* first argument and a const char* second argument pick the
+// const-returning overload here). Host-correct overload, same behaviour.
+static inline char* strstr_host(const char* s, const char* n) { return const_cast<char*>(strstr(s, n)); }
+#define strstr strstr_host
+#endif
+
 // Room 3-32 (D:/Bio4/Prog/r332.cpp): the final battle. The two cranes drop their steel beams on the
 // boss (R332ExecCrane), the two bridges the boss opens and closes (R332BridgeTask, the player runs
 // across them by the action button), the down / rocket cut scenes and the s00/s10/s20 events.
@@ -104,7 +113,9 @@ struct R332Work {
 };
 
 // The original object's .data is 8-aligned (0x260 in the REL after r330's 12-byte table).
+#ifndef TARGET_PC
 asm(".section .data; .balign 8");
+#endif
 static SceElevatorData r332_elv = {1, 0x24, {-45093.0f, 15811.0f, 47400.0f}, {-45120.0f, 15800.0f, 47200.0f}, {0.0f, 1.54f, 0.0f}, 7, 0, 5, 0, 7, {-44950.0f, 1745.0f, 47280.0f}, {0.0f, 1.49f, 0.0f}, 0x331};
 static f32 r332_craneUpY[2] = {21180.0f, 19670.0f};
 static f32 r332_craneDownY[2] = {20910.0f, 19400.0f};
