@@ -280,3 +280,91 @@ No window renders this session (still predates any actual GX/VI frame submission
 - A systematic (not per-crash) sweep of every remaining `// 0xNN`-commented struct for un-`BE<T>`'d
   plain fields (title archive's TPL is covered via `tpl.h`, but nothing downstream of section 8's
   blocker has been reached yet to know what else it touches) is still open.
+
+## 10. OSPanic made fatal, and a real OSThread implementation (coordinator review, 2026-09-24)
+
+Two follow-ups from the coordinator's review of section 8's blocker.
+
+### OSPanic now aborts
+
+`OSPanic()` (`src/port/stubs/generated_c_stubs.cpp`) was a logging-only stub -- a real call means
+the game itself detected an unrecoverable condition (`ASSERTMSGLINE`, scheduler.cpp's stack-overflow
+guard) and never returns on real hardware; letting it fall through silently meant everything downstream
+ran in a state the vendor explicitly gave up on. Now logs the file/line/message, flushes, and calls
+`std::abort()`.
+
+### Root cause of "Stack overflow in Thread 0": `OSCreateThread` was a complete no-op
+
+With `OSPanic()` now fatal, the crash it was hiding needed a real fix, not a louder log line.
+`OSCreateThread`/`OSResumeThread`/`OSSuspendThread`/`OSSleepThread`/`OSWakeupThread`/
+`OSGetCurrentThread`/`OSExitThread` (`src/game/scheduler.cpp`'s entire cooperative task-scheduler
+API) were **all** pure logging stubs -- `OSCreateThread` in particular just returned 0 without ever
+starting the given function or writing the `OS_THREAD_STACK_MAGIC` guard word a real implementation
+sets at the low end of the new thread's stack. That guard word is exactly what
+`scheduler.cpp::StackOverflowCheck()` reads -- since no task's thread had ever actually run, the
+word was never written, and the very first task dispatched (`Title_task`, slot 0) tripped the
+"stack overflow" check on frame 1, every run, deterministically. **No task's code had ever executed
+even once** before this pass.
+
+`include/port/os_thread.h` / `src/port/os_thread.cpp` (new): a real, from-scratch OSThread
+implementation on top of host `std::thread`s. Full design rationale is in the file's own header
+comment; the short version: real hardware gives the scheduler mutual exclusion (only one task's
+code genuinely running at a time) through true preemptive scheduling with priorities, which cannot
+be reproduced at instruction granularity with plain host threads. Instead, a single explicit
+"whose turn is it" token (`g_holder`, a condvar-guarded `OSThread*`) is passed by hand:
+`OSResumeThread`/`OSWakeupThread` stay **non-blocking**, exactly like the real API (this matters --
+`TaskSleep`/`TaskExit`/`TaskChain` call `OSResumeThread(pParentThread)` themselves to hand control
+back, and if that call blocked its caller, the caller -- often the task about to sleep or exit --
+would deadlock); every thread calls `BecomeRunner(self)` (block until `g_holder == self`) whenever
+it's about to actually execute task code, fresh or woken; and the **driving** thread (real
+hardware: main, running `TaskSchedulerMain`) has no way to know when the task it just resumed hands
+control back, so a new, `TARGET_PC`-only call, `WaitForHandback()`, is added at the three call sites
+in `scheduler.cpp` right after its own `OSResumeThread`/`OSWakeupThread` calls -- this is this host's
+explicit stand-in for the preemption/priority mechanism real hardware uses implicitly.
+
+**Verified working**: with this in place, `Title_task` genuinely runs for the first time -- the
+boot log shows real game-logic stub calls (`cGameSave::alloc()`, `ItemMgr.init()` (not stubbed, real
+code), `CoreDataRead()`, `OptionDataRead()`, `ScreenReSize()`) that were never reached before. Traced
+with instrumented builds (temporary, not committed) confirming the handoff protocol itself works
+correctly: `main` genuinely blocks in `WaitForHandback()` for the task's entire turn and only
+proceeds once the task hands control back via `TaskSleep`/`TaskExit`'s own `OSResumeThread` call --
+this was checked directly against the alternative hypothesis (a synchronization race letting main
+run concurrently with the task) and ruled out; the two threads do not overlap.
+
+`ctest`: 4/4 (`RE4_U32_32=ON`) / 3/3 (default). `re4_game_all -k 0` failing-file list unchanged (34
+files, identical set). `re4_boot` reaches the same crash frontier as before this fix with no
+regression (confirming the cleanup of temporary debug instrumentation didn't change behavior).
+
+### New blocker found downstream: a real allocation corrupts an unrelated global
+
+With tasks actually running, a **new**, previously-unreachable bug surfaced: `Task[1]` (the second
+scheduler slot, otherwise untouched -- nothing calls `TaskExec(1, ...)` this early) is observed with
+`Status == TASK_EXEC` and `hook`/`pFunc == NULL` by the time `TaskScheduler()`'s per-frame loop
+reaches it, immediately after dispatching slot 0. Since `TaskExec()`/`TaskChain()` are the only
+places that ever set `Status` to `TASK_EXEC`, and both **always** set `hook = TaskExec_hook`
+unconditionally first, `hook == NULL` proves neither ran for this slot -- something wrote directly
+into `Task[1]`'s memory instead.
+
+Traced with temporary instrumentation (not committed): confirmed `TaskSchedulerInit()` correctly
+zeroes `Task[1]` (`Status == 0` right after init); the corruption happens during `Title_task`'s very
+first turn, before it even reaches its own state machine (`titleFuncTbl[0]`/`titleInit()`) --
+narrowed to somewhere in `pSaveData = GameSave.alloc(); ItemMgr.init(); CoreDataRead();
+OptionDataRead(); w = MEM_CALLOC(sizeof(TitleWork), 1, 13);`. `GameSave.alloc()`/`CoreDataRead()`/
+`OptionDataRead()` are confirmed inert (logged `STUB: ... called`, do nothing). `w` itself is a
+real, correctly-allocated pointer nowhere near `&Task[1]` (checked directly -- ruled out a
+heap-aliasing coincidence with `TitleWork::Rno0` writes, the first hypothesis). `cItemMgr::init()`
+(`src/game/item.cpp`) is **not stubbed** -- real code, allocates three buffers via
+`MEM_ALLOC(..., 1, 13)` (heap argument `13` == `MEM_HEAP_CURRENT`, the normal "current heap"
+idiom, confirmed not itself a bug) and writes `p->flags = 0` in a 0x180-iteration loop over one of
+them -- the leading suspect, not yet confirmed: either `OSAllocFromHeap` (Aurora's real
+implementation) is returning a pointer that doesn't actually own 0x180 `sizeof(ItemWork)`-sized
+slots' worth of memory, or a size/count is computed wrong somewhere in this call chain, and the
+resulting out-of-bounds write happens to land in `Task[]`'s memory. **Not root-caused this pass** --
+budget-limited; whoever picks this up next should instrument `cItemMgr::init()`'s three
+`MEM_ALLOC` calls' return pointers and sizes directly, and check them against the heap's actual
+bounds (`Heap[CurrentHeap]`), rather than continuing to bisect from the scheduler side.
+
+No window renders this session (crash still predates any GX/VI frame submission) -- no screenshot.
+Sections 2 (Render/VI/GX SDK parity, real render-path units) and the `CRoomInfo`/DVD-size-table BE
+audit the coordinator also asked for were not reached this pass -- the OSThread root-cause fix and
+this new blocker took the full remaining budget.

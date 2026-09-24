@@ -1085,3 +1085,26 @@ unchanged (34 files); remote byte-identity re-checked (0 non-OK `dtk shasum` lin
 --all` TOTAL 231, unchanged).
 
 No window renders this session (crash still predates any GX/VI frame submission) -- no screenshot.
+
+## 24. OSPanic fatal, real OSThread implementation, tasks run for the first time (2026-09-24)
+
+Full write-up: docs/port-phase3.md section 10. Summary:
+
+- `OSPanic()` now logs and `std::abort()`s instead of silently continuing (`src/port/stubs/
+  generated_c_stubs.cpp`).
+- Root cause of section 22/23's "Stack overflow in Thread 0": `OSCreateThread` (and the rest of the
+  scheduler's OS-thread API) was a pure logging stub -- no task's code had ever executed, and the
+  stack-overflow guard word a real `OSCreateThread` writes was simply never set. Real implementation:
+  `include/port/os_thread.h` / `src/port/os_thread.cpp` (new), real host `std::thread`s with an
+  explicit hand-off token (`WaitForHandback()`, three new `TARGET_PC`-only lines in
+  `src/game/scheduler.cpp`). `Title_task` now genuinely runs for the first time.
+
+**New blocker**: a real, previously-unreached allocation bug -- `cItemMgr::init()`
+(`src/game/item.cpp`, not stubbed) corrupts the unrelated `Task[1]` scheduler slot via one of its
+`MEM_ALLOC(..., 1, 13)` calls (heap `13` == `MEM_HEAP_CURRENT`, confirmed not itself the bug).
+Not root-caused this pass -- next step is instrumenting the three allocation's return pointers/sizes
+directly against `Heap[CurrentHeap]`'s actual bounds. Verified no regression: `ctest` 4/4 (`ON`) /
+3/3 (`OFF`), `re4_game_all -k 0` failing-file list unchanged (34 files).
+
+No window renders this session -- no screenshot. Render/VI/GX SDK-parity work and the
+`CRoomInfo`/DVD-size-table BE audit were not reached this pass.
