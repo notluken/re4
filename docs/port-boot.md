@@ -704,3 +704,93 @@ mattering (past `SndInit`), since `GXTexObj`-family objects are exactly the kind
 copy-identical.
 
 No window opens this session either (crash still predates any GX/VI frame submission) -- no screenshot.
+
+## 15. `SND_DATA_TOP` follow-up: GCPTR routing confirmed correct, stubbed `SndInit()` per Phase 5 (2026-09-24)
+
+Coordinator pushback on section 14's diagnosis: `SND_DATA_TOP` (`0x80370000`) is not a new design
+question -- Phase 2 (docs/port-phase2.md step 8) already covers fixed GameCube addresses in
+`0x80000000..0x81800000`: they fall inside the arena by construction (`GCPTR(0x80370000) == g_base +
+0x80370000`). Checked directly, and section 14's write-up undersold what was already working:
+
+- `build-pc-boot/gen/src/game/snd.cpp` (the cast-rewriter's actual output) shows every cast of
+  `SND_DATA_TOP`-derived values to a pointer type **already** rewritten to `re4_port::GCPTR<T>(...)`
+  -- `DvdRead(0, re4_port::GCPTR<void>((std::uint32_t)(0x80370000)), ...)`,
+  `SndMem.str_file[i] = re4_port::GCPTR<SndStrFile>((std::uint32_t)((SND_DATA_TOP + ...)))`, etc. The
+  rewriter did its job correctly here; section 14's framing of this as "a GC-address integer used as
+  a host pointer without GCPTR" was wrong -- confirmed by reading the actual generated file, not just
+  the vendor source.
+- Broader grep across `src/game/*.cpp` for other `0x80xxxxxx`/`0x81xxxxxx` literals used as pointers
+  (`debug.cpp`'s/`dvd.cpp`'s `OS_BUS_CLOCK` macro, `dvd.cpp`'s `DVD_BUFF`/`DVD_BUFF2`) shows the same:
+  all already rewritten to `GCPTR<T>(...)` in the generated files. No missed class of this bug found
+  on the boot path this pass.
+- Live in `lldb` (breakpoint on `Snd_str_blk_init`, printing `re4_port::g_base` and `data`): one run
+  showed `g_base = 0x80d3c000` (nonzero, correctly set) and `data` a real, large host-range pointer
+  for `blk_no=0` -- GCPTR is genuinely producing dereferenceable addresses. A different run crashed
+  on `blk_no=1` with `data=0x812fc000` (small, GC-looking, no `g_base` offset) -- **not reproducible
+  every run**, consistent with reading genuinely uninitialized/wrong-offset data out of the sound
+  file's header table (a real parsing bug somewhere in the stream-file format or its DVD read, not a
+  missing pointer conversion) rather than a systematic GCPTR gap. Not root-caused further --
+
+Per the coordinator's explicit fallback ("if sound itself misbehaves, stub `SndInit()`/sound under
+`TARGET_PC` for first boot rather than going deep" -- sound is Phase 5, no Aurora audio backend
+exists regardless), `SndInit()` (`src/game/snd.cpp`) now returns early under `TARGET_PC` right after
+`pSnd = &Snd; memclr_asm(pSnd, sizeof(SndWork));` (same pattern as `main.cpp`'s existing
+`#ifdef TARGET_PC`/`#ifndef TARGET_PC` boot-path branches -- inserted before the function's first
+`#line`-tracked region, so the non-`TARGET_PC`/matching build's preprocessed output, and therefore
+its bytes, is untouched). Verified: `re4_boot` runs past `SndInit()`/`SofdecInit()`/`init_dbmodule()`
+into `MessageControl::init()` (the message/font system) before hitting a new blocker (below).
+
+## 16. Current blocker: `Font/common_p.fnt` DVD read completes but reports failure
+
+```
+MesCtrl::fontLoad() Font load failed
+* thread, EXC_BAD_ACCESS, address=0x2
+  frame #0: MessageFont::create(addr=0x...) at mes.cpp:235 -> t->pTex->width
+  frame #1: MessageControl::setupFont(...) at mes.cpp:358
+  frame #2: MessageControl::loadSystemFont(...) at mes.cpp
+  frame #3: MessageControl::init(...) at mes.cpp:753
+  frame #4: ::systemStartInit() at main.cpp:638
+```
+
+**Confirmed NOT a missing-file or entrynum-resolution problem**: `grep -a -o "Font/[A-Za-z0-9_./]*\.fnt"
+orig/G4BE08/re4_debug_disc1.iso` shows `Font/common_j.fnt`, `Font/common_p.fnt`,
+`Font/stage1_j.fnt`, `Font/system_j.fnt` genuinely present at exactly this path/casing on the real
+disc image Aurora reads from; `Dvd.FileExistCheck("Font/common_p.fnt", ...)` (called earlier in
+`MessageControl::loadCommonFont()`) also succeeds (no "Font file not found" log, only "Font load
+failed" -- a different message, from a different check). `cDvd::ReadReq()`'s synchronous path
+(`blockRead`/`ReadProc`/`readProcMain`) busy-loops `cDvdQueue::Read()` to actual completion before
+`DvdReadN` returns (confirmed by reading `src/game/dvd.cpp:1194-1230`), so by the time
+`Dvd.ReadCheck()` is called the read has genuinely finished, one way or the other -- this is not a
+"caller didn't poll long enough" race. But `dvdread_callback` (`src/game/dvd.cpp:465`, the async DVD
+completion handler, `result` = Aurora's real transferred-byte-count/error code) only fires **once**
+this whole run (`result=6208`, a real success, for an earlier read, before the font code runs) --
+the font read's failure happens without that callback ever firing again, meaning the font read fails
+at an earlier stage than Aurora's actual disc I/O (most likely inside `cDvdQueue::Initialize()`'s
+`entrynum = DVDConvertPathToEntrynum(w->name)` resolving differently than `FileExistCheck`'s own
+resolution, or a `SysFlagChk(pG, SYS_SN_PC_READ)` path rewriting the name -- **TO VERIFY**, not
+root-caused this pass, budget-limited). Next step for whoever picks this up: breakpoint on
+`cDvdQueue::Initialize()`/`readInit`/`readMain` specifically (the `m_Rno0` state-machine functions,
+`src/game/dvd.cpp` near line 837) to see which state the font read actually fails in, rather than the
+lower-level Aurora callback (confirmed not reached).
+
+The crash itself (`MessageFont::create` dereferencing `t->pTex` at address `0x2`) is downstream of
+that failure: `MessageControl::loadSystemFont()`'s non-Japanese branch
+(`pSys->language != 0`) unconditionally reuses slot 0's font buffer
+(`setupFont(0x20, 0x20, (TEXPalette*) m_font_addr[0], 1)`) regardless of whether slot 0's own load
+(`common_p.fnt`, the one that just failed) actually succeeded -- vendor logic, correct on real
+hardware where this read cannot fail, not a bug to fix on its own; the real bug is upstream (why the
+read fails at all).
+
+## 17. cam_ctrl.cpp build-pc error, checked as asked
+
+The `re4_game_all` (not `re4_game_core`, which ctest depends on and which stayed clean) compile error
+seen this pass (`operator[] is ambiguous ... Ptr32<Vec> and s32`) is **not** the documented
+GlobalISel/`AArch64RegisterBankInfo::hasFPConstraints` backend crash (docs/port-phase2.md) -- it is a
+genuine overload-ambiguity diagnostic, a different symptom. Confirmed unrelated to this session's
+changes (`git diff --stat` before this fix touched only `CMakeLists.txt`/`docs/`, nothing under
+`src/game`). Not chased further (out of scope, pre-existing, `re4_game_all` is not part of the ctest
+acceptance gate) -- **TO VERIFY** whether this is a third already-known-but-undocumented failure or
+genuinely new; whoever next builds `re4_game_all` standalone (`cmake --build build-pc --target
+re4_game_all -k 0`) should log the full failing-file list the way docs/port-phase2.md section 9 did.
+
+No window renders this session (crash still predates GX/VI frame submission) -- no screenshot.

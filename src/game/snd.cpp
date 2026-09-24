@@ -91,6 +91,18 @@ void* reverb_mem_alloc(u32 size)
 // the saved output mode.
 void SndInit()
 {
+#ifdef TARGET_PC
+    // Sound is Phase 5 (docs/port-boot.md), no Aurora/host backend exists yet for any of AX/ADX/
+    // mwPly -- every SDK call below this point is a logging stub. The GCPTR/GC32 routing itself is
+    // correct here (SND_DATA_TOP's fixed 0x80xxxxxx literals do compress/decompress through the
+    // arena like any other GameCube address, verified with lldb -- docs/port-boot.md section 14);
+    // what crashes is the deeper sound-file-format parsing this reads into, real ARAM/DSP-format
+    // work with no host equivalent yet, not a missed pointer conversion. Stub to "sound off" for
+    // first boot, same as SofdecInit()/init_dbmodule() just below it are already deferred.
+    pSnd = &Snd;
+    memclr_asm(pSnd, sizeof(SndWork));
+    return;
+#endif
     int len;
     int r;
     u32 adr;
