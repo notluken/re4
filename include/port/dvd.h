@@ -20,6 +20,19 @@ namespace re4_port {
 // image; opens it in place.
 void InitDvd(int argc, char** argv);
 
+// A small, ordinary linked-in-global buffer standing in for cDvd::Init()'s
+// DVDGetFSTLocation() lookup (src/game/dvd.cpp). Aurora's real DVDGetFSTLocation() returns a
+// pointer into its own private std::vector<FSTEntry> -- ordinary host heap memory with no
+// relationship to the GC address window at all -- so it must never be fed to GC32()/GCPTR()
+// (include/port/arena.h's "no game-visible pointer to host malloc memory" rule; this call site
+// used to crash there with exactly that shape of bug, a 0x9xxxxxxxx-range host heap address
+// reaching GC32()'s bounds check). GC32()-safe by construction: an ordinary linked-in global is
+// always inside the window since docs/port-boot.md section 28's g_base-anchoring fix. Confirmed
+// the resulting FstSize value is never read again anywhere in src/game or any REL module (grep),
+// so this placeholder's exact address/size is inconsequential to gameplay -- it exists only so
+// the log line and computation have a real, GC-mapped address instead of a foreign host one.
+void* GetFstPlaceholder();
+
 } // namespace re4_port
 
 #endif // RE4_PORT_DVD_H

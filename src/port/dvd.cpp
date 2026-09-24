@@ -21,6 +21,18 @@
 
 namespace re4_port {
 
+namespace {
+// See include/port/dvd.h's GetFstPlaceholder() comment. 16 bytes, arbitrary but plausible for a
+// small header-shaped stand-in; never actually read as FST content by anything (FstSize is dead
+// code, confirmed by grep), only its address matters.
+alignas(4) unsigned char s_fstPlaceholder[16] = {};
+} // namespace
+
+void* GetFstPlaceholder()
+{
+    return s_fstPlaceholder;
+}
+
 void InitDvd(int argc, char** argv)
 {
     const char* path = "orig/G4BE08/re4_debug_disc1.iso";

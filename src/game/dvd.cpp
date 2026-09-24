@@ -16,6 +16,9 @@
 //    the r9 anti-dependence and its load ranked first).
 #include "types.h"
 #include "dvd.h"
+#ifdef TARGET_PC
+#include "port/dvd.h"
+#endif
 
 // The file table is defined before the other headers are included: its strings precede the
 // map_obj.h/light.h/widget.h/card.h/sofdec.h strings in the original .rodata.
@@ -1163,9 +1166,19 @@ void cDvd::Init()
     memclr_asm(this, sizeof(cDvd));
     memclr_asm(&Aram, sizeof(cAram));
     ReadID = 1;
+#ifdef TARGET_PC
+    // DVDGetFSTLocation() -> a foreign host pointer on this port (Aurora's own std::vector
+    // storage, not a GC address); GC32() must never see it. See include/port/dvd.h's
+    // GetFstPlaceholder() for the full reasoning -- this #else branch is byte-identical to the
+    // original.
+    OSReport("FST Address = 0x%8x\n", re4_port::GetFstPlaceholder());
+    size = OSGetConsoleSimulatedMemSize();
+    fst = (u32) re4_port::GetFstPlaceholder() - 0x80000000;
+#else
     OSReport("FST Address = 0x%8x\n", DVDGetFSTLocation());
     size = OSGetConsoleSimulatedMemSize();
     fst = (u32) DVDGetFSTLocation() - 0x80000000;
+#endif
     FstSize = size - fst;
 }
 
