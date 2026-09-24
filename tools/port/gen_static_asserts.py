@@ -34,6 +34,15 @@ STRUCTS = [
     ("include/atari.h", "cSatBlock", None),
 ]
 
+# Structs defined inside a .cpp rather than a shared header (Phase 3, docs/port-phase3.md): can't
+# be #include'd standalone (the .cpp pulls in its own translation unit's worth of other headers),
+# so these get their own tiny extracted-body redeclaration instead of an #include line. (source
+# file, struct name) -- the struct body is copied verbatim out of the source file, not re-derived,
+# so it stays honest to whatever the source actually says.
+INLINE_STRUCTS = [
+    ("src/game/mes.cpp", "MesFontFile"),
+]
+
 # Matches "<type> <name>[array];  // 0xNN ...", tolerant of the repo's inconsistent spacing.
 FIELD_RE = re.compile(r'^\s*[\w:<>*&,\s]+?\s([A-Za-z_]\w*)(?:\[[^\]]*\])?\s*;\s*//\s*(0x[0-9A-Fa-f]+)')
 
@@ -84,7 +93,14 @@ def main():
     print()
     print("#include <cstddef>")
     print()
+    for source, struct_name in INLINE_STRUCTS:
+        text = (ROOT / source).read_text()
+        body = extract_struct_body(text, struct_name)
+        print(f"// {struct_name} (extracted verbatim from {source})")
+        print(f"struct {struct_name} {{{body}}};")
+        print()
     total = 0
+    all_structs = [(h, n) for h, n, _ in STRUCTS] + INLINE_STRUCTS
     for header, struct_name, _ in STRUCTS:
         text = (ROOT / header).read_text()
         body = extract_struct_body(text, struct_name)
@@ -97,7 +113,19 @@ def main():
                   f'"{struct_name}::{name} must stay at {off}");')
             total += 1
         print()
-    print(f"// {total} offsetof() checks across {len(STRUCTS)} structs.")
+    for source, struct_name in INLINE_STRUCTS:
+        text = (ROOT / source).read_text()
+        body = extract_struct_body(text, struct_name)
+        fields = fields_of(body)
+        if not fields:
+            sys.exit(f"no \"// 0xNN\" fields found for struct {struct_name} in {source}")
+        print(f"// {struct_name} ({source}, {len(fields)} fields, inline-extracted)")
+        for name, off in fields.items():
+            print(f'static_assert(offsetof({struct_name}, {name}) == {off}, '
+                  f'"{struct_name}::{name} must stay at {off}");')
+            total += 1
+        print()
+    print(f"// {total} offsetof() checks across {len(all_structs)} structs.")
     print("int main() { return 0; }")
 
 

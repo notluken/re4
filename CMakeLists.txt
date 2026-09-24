@@ -305,6 +305,7 @@ if (RE4_U32_32)
     DEPENDS ${RE4_ROOT}/tools/port/gen_static_asserts.py
             ${RE4_ROOT}/include/model.h ${RE4_ROOT}/include/tpl.h ${RE4_ROOT}/include/cam_ctrl.h
             ${RE4_ROOT}/include/game.h ${RE4_ROOT}/include/room_jmp.h ${RE4_ROOT}/include/atari.h
+            ${RE4_ROOT}/src/game/mes.cpp
     VERBATIM
   )
   add_executable(re4_port_static_asserts ${CMAKE_BINARY_DIR}/gen/port_static_asserts.cpp)
