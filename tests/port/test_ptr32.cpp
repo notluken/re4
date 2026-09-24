@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <type_traits>
 
 using re4_port::g_base;
@@ -78,6 +79,57 @@ int main()
     arr[0] = 10;
     arr[1] = 20;
     CHECK(arr[0] == 10 && arr[1] == 20);
+
+    // Phase 3 (docs/port-phase3.md): Ptr32<T> storage is always big-endian, whether the field
+    // currently holds a raw pre-relocation file offset or an already-relocated handle -- the
+    // coordinator's diagnosis of the mixed-storage design this replaced. Simulates a real on-disc
+    // read (raw bytes written directly, big-endian, bypassing Ptr32<T> the way a DVD read would)
+    // for an offset whose low byte is >= 0x80 -- exactly the value class that broke the old,
+    // partially-swapped design's sign-bit guard (0x000000C0: BE bytes 00 00 00 C0, reinterpreted
+    // raw as a native little-endian s32 that would misread as negative).
+    struct OnDiscNode {
+        Ptr32<int> field; // 0x00, big-endian on disc, like a real GameCube pointer field
+    };
+    OnDiscNode* disc = reinterpret_cast<OnDiscNode*>(arena + 0x500);
+    unsigned char be_offset[4] = {0x00, 0x00, 0x00, 0xC0}; // 0x000000C0, big-endian
+    std::memcpy(&disc->field, be_offset, 4);
+
+    // 1. Raw read before relocation: raw_handle() must decode the true numeric offset (0xC0), not
+    //    the byte-swapped 0xC0000000 a fully-unswapped design would have returned.
+    CHECK(disc->field.raw_handle() == 0x000000C0u);
+
+    // 2. The "already relocated?" sign-bit guard, unswapped storage would have gotten wrong for
+    //    this exact offset (low byte >= 0x80): must read as "not yet relocated" (>= 0).
+    CHECK((int) disc->field.raw_handle() >= 0);
+
+    // 3. Relocate: offset -> real pointer (same pattern as model.cpp's RelocOffsetToPtr /
+    //    mes.cpp's MessageFont::create).
+    int* real = reinterpret_cast<int*>(arena + 0x600);
+    *real = 0x5A5A;
+    disc->field = (int*) ((unsigned char*) disc + disc->field.raw_handle());
+    CHECK(static_cast<int*>(disc->field) == reinterpret_cast<int*>((unsigned char*) disc + 0xC0));
+
+    // 4. Now the sign-bit guard must read the *other* way (an arena handle's top bit is set):
+    //    "already relocated". If load()/store() ever regressed back to mixed storage, this would
+    //    silently re-enter the relocation branch on a live pointer, corrupting it.
+    CHECK((int) disc->field.raw_handle() < 0);
+
+    // 5. Unrelocate: pointer -> offset (RelocPtrToOffset/game.cpp's inverse-relocation direction),
+    //    using the same base GC32(disc) the relocation added.
+    std::uint32_t gc_base = GC32(reinterpret_cast<void*>(disc));
+    disc->field = Ptr32<int>::FromRaw(disc->field.raw_handle() - gc_base);
+    CHECK(disc->field.raw_handle() == 0x000000C0u);
+
+    // 6. Byte-identical round trip: the field's raw storage bytes must match the original on-disc
+    //    big-endian bytes exactly (this is the save-compatibility half of the coordinator's bug
+    //    report -- a relocate/unrelocate round trip must not silently change byte order).
+    unsigned char roundtrip_bytes[4];
+    std::memcpy(roundtrip_bytes, &disc->field, 4);
+    CHECK(std::memcmp(roundtrip_bytes, be_offset, 4) == 0);
+
+    // 7. Relocate a second time: must reach the exact same real pointer as step 3.
+    disc->field = (int*) ((unsigned char*) disc + disc->field.raw_handle());
+    CHECK(static_cast<int*>(disc->field) == reinterpret_cast<int*>((unsigned char*) disc + 0xC0));
 
     std::free(arena);
     std::printf("test_ptr32: OK\n");

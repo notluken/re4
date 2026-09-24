@@ -71,6 +71,44 @@ inline T* GCPTR(std::uint32_t h)
 // assigns the field keeps working unchanged); explicit only to the raw 32-bit handle, since that
 // value is meaningless without g_base. Trivially copyable (a plain u32 under the hood) so it can sit
 // in a struct that gets bulk-copied/relocated/memset like the vendor's on-disc structs already are.
+//
+// Storage is ALWAYS big-endian (Phase 3, docs/port-phase3.md), whether the field currently holds a
+// raw pre-relocation file offset or an already-relocated compressed handle -- the same invariant
+// include/port/be.h's BE<T> keeps for plain integer/float fields, applied here too. This was NOT
+// the original design (a first pass stored the post-relocation handle host-native/unswapped, only
+// swapping the raw pre-relocation read on demand via a since-removed raw_handle_be()) and that
+// design was a real, latent bug, found by inspection rather than by a crash:
+//   - The "already relocated?" sign-bit guard used throughout this codebase (`(s32) field >= 0` /
+//     `(s32) field.raw_handle() >= 0`, cam_ctrl.cpp/game.cpp/mes.cpp/model.cpp/...) is only correct
+//     if reading the field's raw bytes as a plain native s32 gives the same sign both before and
+//     after relocation. With mixed storage (BE pre-relocation, host-native post-relocation) it does
+//     not: a small on-disc offset like 0x000000C0 is stored in memory as bytes 00 00 00 C0 (its
+//     semantic MSB -- always zero for a small offset -- at the *lowest* address, BE convention);
+//     reading those same 4 bytes back as a native little-endian int reinterprets the *last* byte
+//     (0xC0, actually the offset's LSB) as the sign byte, giving 0xC0000000 -- negative, i.e. a false
+//     "already relocated". Any raw offset whose low byte is >= 0x80 broke the guard; this went
+//     unnoticed in-session only because the specific offsets exercised so far happened to have a
+//     low byte < 0x80.
+//   - The inverse-relocation direction (`RelocPtrToOffset`/`SlidePtr`, src/game/model.cpp; the
+//     equivalent in src/game/game.cpp for save data) computed a plain host-native numeric offset and
+//     wrote it back through FromRaw() with no swap -- so a relocate -> unrelocate -> relocate round
+//     trip (or a save write) would silently flip these fields' byte order relative to a real
+//     GameCube's, breaking save compatibility and corrupting a second relocation pass.
+// Storing every Ptr32<T> field big-endian at all times, and swapping on every read/write through
+// this class (never anywhere else -- see below), fixes both: the sign-bit guard now reads the same
+// swapped value whether or not relocation has happened yet (a real GameCube's CPU is *always*
+// big-endian, so it never had two different interpretations to begin with -- this restores that),
+// and FromRaw()/raw_handle() are exact inverses of each other regardless of how many times they are
+// composed, so relocate/unrelocate round-trips and save writes stay byte-identical to a real
+// GameCube's.
+//
+// This means every existing call site that already used raw_handle() for pointer-relocation
+// arithmetic (cam_ctrl.cpp, card.cpp, game.cpp, model.cpp, room_jmp.cpp, texture.cpp, trans.cpp)
+// needed NO call-site changes -- raw_handle() now does the right thing uniformly, pre- or
+// post-relocation, by construction. (src/game/mes.cpp's since-reverted raw_handle_be() workaround
+// is exactly what this class-wide fix replaces; it was correct for the one call site it touched but
+// left every other user of raw_handle() still broken, per the "systematic, not ad hoc" project
+// rule.)
 template <class T>
 class Ptr32 {
 public:
@@ -80,38 +118,24 @@ public:
     // constants), and a literal 0 converts to *both* nullptr_t and T* equally well, which is
     // ambiguous between two constructors -- one is enough, since a literal 0 or nullptr both convert
     // to T* directly (a null pointer constant), and GC32(nullptr) already returns 0 below.
-    Ptr32(T* p) : m_handle(GC32(p)) {}
+    Ptr32(T* p) { store(GC32(p)); }
 
     // Some on-disc formats reuse a pointer field to also hold a small plain integer (typically a
     // file-relative byte offset, before the field is relocated into a real pointer -- e.g.
-    // cModelData::pClr before calcModelAddr runs). FromRaw/raw_handle give direct access to the
-    // 4-byte storage for exactly that case; nothing else should need them (ordinary pointer use goes
-    // through the constructor/conversion operators above, which route through GC32/GCPTR).
+    // cModelData::pClr before calcModelAddr runs). FromRaw/raw_handle give direct access to that
+    // value (as an ordinary host-native u32 -- the swap to/from the field's actual big-endian
+    // storage happens inside store()/load(), not at these call sites) for exactly that case;
+    // nothing else should need them (ordinary pointer use goes through the constructor/conversion
+    // operators below, which route through GC32/GCPTR the same way).
     static Ptr32<T> FromRaw(std::uint32_t raw)
     {
         Ptr32<T> p;
-        p.m_handle = raw;
+        p.store(raw);
         return p;
     }
-    std::uint32_t raw_handle() const { return m_handle; }
+    std::uint32_t raw_handle() const { return load(); }
 
-    // Phase 3 (docs/port-phase3.md, include/port/be.h's design note): a pointer field's raw,
-    // *pre-relocation* value is a big-endian file-relative byte offset straight off disc -- the
-    // buffer holding it is never swapped (only the header's plain integer fields get BE<T>'d), so
-    // reading those 4 bytes with raw_handle()/the explicit u32 cast gives the wrong number on this
-    // little-endian host. Relocation code (cTexSys::CalcTplAddr, MessageFont::create, and similar
-    // "addr + rawOffset" call sites) must read the raw offset through this accessor instead, until
-    // that offset has been turned into a real pointer and assigned back (that assignment computes
-    // a runtime handle via GC32(), already host-native -- no further swap, which is why this is a
-    // read-only helper, not a change to how m_handle is stored or to operator T*()/raw_handle()
-    // themselves).
-    std::uint32_t raw_handle_be() const
-    {
-        return ((m_handle & 0x000000FFu) << 24) | ((m_handle & 0x0000FF00u) << 8) |
-               ((m_handle & 0x00FF0000u) >> 8) | ((m_handle & 0xFF000000u) >> 24);
-    }
-
-    operator T*() const { return GCPTR<T>(m_handle); }
+    operator T*() const { return GCPTR<T>(load()); }
     // A C-style/explicit cast only looks for a conversion function whose return type matches the
     // target exactly (or is reached by a *further* user-defined conversion, which overload
     // resolution does not chain for explicit operators) -- so these have to be spelled `u32`/`s32`,
@@ -121,15 +145,15 @@ public:
     // stored 4-byte handle into an 8-byte u32/s32 when RE4_U32_32 is off loses nothing. `s32` and
     // `int` are the same type when RE4_U32_32 is on (both 4-byte int), so only one of the two
     // operators is declared then -- a duplicate declaration is otherwise an error.
-    explicit operator u32() const { return static_cast<u32>(m_handle); }
+    explicit operator u32() const { return static_cast<u32>(load()); }
 #if defined(RE4_U32_32)
-    explicit operator int() const { return static_cast<int>(m_handle); }
+    explicit operator int() const { return static_cast<int>(load()); }
 #else
-    explicit operator int() const { return static_cast<int>(m_handle); }
-    explicit operator s32() const { return static_cast<s32>(m_handle); }
+    explicit operator int() const { return static_cast<int>(load()); }
+    explicit operator s32() const { return static_cast<s32>(load()); }
 #endif
 
-    T* operator->() const { return GCPTR<T>(m_handle); }
+    T* operator->() const { return GCPTR<T>(load()); }
     // Templated on the index type (rather than a fixed std::size_t) so overload resolution always
     // has an exact match on the index argument, same as it would with GCPTR<T>(m_handle)[i] written
     // out longhand: with a fixed std::size_t parameter and RE4_U32_32 off (where s32 is `long`,
@@ -142,12 +166,26 @@ public:
     // the index argument (identity vs. the built-in's implicit-object-conversion tax), so it always
     // wins outright.
     template <class Index, class = std::enable_if_t<std::is_integral<Index>::value>>
-    T& operator[](Index i) const { return GCPTR<T>(m_handle)[static_cast<std::ptrdiff_t>(i)]; }
+    T& operator[](Index i) const { return GCPTR<T>(load())[static_cast<std::ptrdiff_t>(i)]; }
 
     bool operator==(std::nullptr_t) const { return m_handle == 0; }
     bool operator!=(std::nullptr_t) const { return m_handle != 0; }
 
 private:
+    // Always big-endian (disk order), regardless of whether the field currently holds a raw
+    // pre-relocation offset or an already-relocated handle -- see the class comment above. load()/
+    // store() are the ONLY place that ever swaps; every accessor above goes through one of them, and
+    // nothing outside this class should ever touch m_handle directly (a raw `(u32*)&field` read/
+    // write anywhere in this tree bypasses the swap and must not exist -- docs/port-phase3.md's
+    // survey looked for this pattern and found none on the Ptr32<T>-converted fields).
+    static std::uint32_t swap(std::uint32_t v)
+    {
+        return ((v & 0x000000FFu) << 24) | ((v & 0x0000FF00u) << 8) | ((v & 0x00FF0000u) >> 8) |
+               ((v & 0xFF000000u) >> 24);
+    }
+    std::uint32_t load() const { return swap(m_handle); }
+    void store(std::uint32_t v) { m_handle = swap(v); }
+
     std::uint32_t m_handle;
 };
 
