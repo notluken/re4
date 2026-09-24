@@ -13,6 +13,9 @@
 #include "scheduler.h"
 #include <dolphin/gx/GXFifo.h>
 #include <dolphin/os.h>
+#ifdef TARGET_PC
+#include "port/os_thread.h"
+#endif
 
 void DbMenuRestoreStopFlag();
 
@@ -117,6 +120,9 @@ void TaskSchedulerMain(TASK* pT)
         pT->Status = TASK_RUN;
         OSResumeThread(&pT->Thread);
         GXSetCurrentGXThread();
+#ifdef TARGET_PC
+        re4_port::WaitForHandback();
+#endif
         break;
     case TASK_SLEEP:
         pT->SleepCtr--;
@@ -126,10 +132,16 @@ void TaskSchedulerMain(TASK* pT)
         pT->Status = TASK_RUN;
         OSWakeupThread(&pT->Queue);
         GXSetCurrentGXThread();
+#ifdef TARGET_PC
+        re4_port::WaitForHandback();
+#endif
         break;
     case TASK_RUN:
         OSResumeThread(&pT->Thread);
         GXSetCurrentGXThread();
+#ifdef TARGET_PC
+        re4_port::WaitForHandback();
+#endif
         break;
     default:
         return;
