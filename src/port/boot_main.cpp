@@ -7,6 +7,7 @@
 #ifdef TARGET_PC
 
 #include "port/arena.h"
+#include "port/dvd.h"
 #include "port/dvd_root.h"
 #include "port/ptr32.h"
 
@@ -43,9 +44,18 @@ void* GameThreadEntry(void*)
 
 int main(int argc, char** argv)
 {
-    re4_port::InitDvdRoot(argc, argv); // argv[1], else $RE4_DVD_ROOT, else orig/G4BE08/files
+    re4_port::InitDvdRoot(argc, argv); // argv[1], else $RE4_DVD_ROOT, else orig/G4BE08/files --
+                                        // logged only; not the active DVD backend (see InitDvd)
     std::fprintf(stderr, "re4_boot: DVD root=%s\n", re4_port::GetDvdRoot());
+    re4_port::InitDvd(argc, argv); // argv[2], else $RE4_DISC, else orig/G4BE08/re4_debug_disc1.iso
+                                    // -- aurora_dvd_open() on the real disc image (must run before
+                                    // the game thread's first DVDOpen/DVDRead)
     re4_port::InitArena(); // aborts internally on failure (see include/port/arena.h)
+    // re4_port::InitMem1() (include/port/mem1.h) is NOT called here: OSInit() (src/game/main.cpp,
+    // TARGET_PC branch) calls it itself, right after Aurora's own OSInit() has run once with
+    // mem1Size still 0 -- calling it earlier, before that first (no-op) OSInit() pass, would set
+    // mem1Size nonzero too soon and make OSInit()'s internal AuroraOSInitMemory() call allocate
+    // its own MEM1 block on top of what this would have set up.
     std::fprintf(stderr, "re4_boot: arena base=%p size=%zu\n", re4_port::GetArenaBase(),
                  re4_port::GetArenaSize());
 
