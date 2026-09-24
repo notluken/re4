@@ -386,7 +386,7 @@ if (RE4_BUILD_BOOT)
   target_compile_definitions(re4_boot_stubs PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_boot_stubs PRIVATE ${RE4_GAME_OPTIONS})
 
-  add_executable(re4_boot src/port/boot_main.cpp $<TARGET_OBJECTS:re4_boot_game>)
+  add_executable(re4_boot src/port/boot_main.cpp src/port/mem1.cpp src/port/dvd.cpp $<TARGET_OBJECTS:re4_boot_game>)
   target_include_directories(re4_boot PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
   target_compile_definitions(re4_boot PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_boot PRIVATE ${RE4_GAME_OPTIONS})
