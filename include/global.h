@@ -5,6 +5,10 @@
 #include "vec.h"
 #include "camera.h"
 
+#ifdef TARGET_PC
+#include <cstddef> // PG_OFS's TARGET_PC branch below (offsetof), no meaning for the original target
+#endif
+
 // Archive header at pG->pCore: a table of file offsets to the sub-files. Only the entries that
 // matched units use are named.
 struct ArcFile {
@@ -1429,9 +1433,18 @@ static inline void U16Set(u16& d, u16 v) { d = v; }
 // Offset of a GlobalWork member, written with the null-pointer idiom. Address arithmetic that adds it to pG
 // keeps the offset as the last term (`pG->field` adds it first), which some callers need.
 // Not a real address at any width (the "pointer" is null + a small member offset, never actually
-// dereferenced as a GlobalWork*): safe unchanged under TARGET_PC, the value never exceeds
-// sizeof(GlobalWork).
+// dereferenced as a GlobalWork*): the *value* is safe unchanged under TARGET_PC (never exceeds
+// sizeof(GlobalWork)), but the null-pointer-idiom spelling still forms a real (never-dereferenced)
+// pointer expression whose *type* clang flags as a narrowing pointer-to-integer cast on this host
+// regardless of the value being a compile-time-safe small offset (RE4_U32_32=ON measured: hundreds
+// of expansion sites, e.g. every SAVE_ITEM_*/EM_FLG_ROW user, all from this one macro) -- so
+// TARGET_PC gets a same-value, no-pointer-formed rewrite via offsetof() instead (needs no
+// GC32/GCPTR: it was never a GC address, per the comment above, just spelled as one).
+#ifdef TARGET_PC
+#define PG_OFS(f) ((u32) offsetof(GlobalWork, f))
+#else
 #define PG_OFS(f) ((u32) &((GlobalWork*) 0)->f)
+#endif
 // Death words of enemy list `list` (Em_flg row: eight u32, one bit per entry). The scaled index is added to pG
 // first and the member offset last; written as `pG->Em_flg[list]` the address is built differently.
 // pG is a live in-memory pointer here (unlike PG_OFS's null-based offset above), so the same
