@@ -3235,4 +3235,6 @@ void cItemMgr::debugWeapon(ITEM_ID id)
 }
 
 // the split object pads .sdata to 8 bytes (lbl_80313F4C)
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+#endif

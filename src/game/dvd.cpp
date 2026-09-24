@@ -2078,4 +2078,8 @@ void cDvd::DiscReadInfo()
 }
 
 // The original's .rodata is 8-aligned (0x1D98: 4 bytes of end padding after the last pool).
+#ifndef TARGET_PC
+#ifndef TARGET_PC
 asm(".section .rodata; .balign 8");
+#endif
+#endif

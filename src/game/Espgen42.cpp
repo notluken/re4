@@ -1227,4 +1227,7 @@ int Espgen42_SetFreeWork(EspgenWork* pGen, EspGenWork* pSeq, EspSeqData* pSeqHed
     return 0;
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

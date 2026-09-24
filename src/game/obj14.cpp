@@ -318,4 +318,7 @@ void obj14ClothMove(cObjBell* pObj)
 }
 
 // The next unit's .sdata starts 8-byte aligned in the original link.
+#ifndef TARGET_PC
 asm(".section .sdata,\"aw\"\n\t.balign 8\n\t.text");
+
+#endif

@@ -1174,4 +1174,7 @@ void Estgen45SetParam(Esp4cWork* pFree)
     StaFlagOn(pG, STA_ESPGEN45_SET);
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

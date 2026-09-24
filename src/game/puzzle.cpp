@@ -1776,4 +1776,7 @@ placed:
     return ok;
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata,\"aw\"\n\t.balign 8\n\t.text");
+
+#endif

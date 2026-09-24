@@ -660,4 +660,7 @@ static void Em30ClothStop(cModel* m, PlCloth* c)
     c->WindSin = 0.0f;
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

@@ -73,4 +73,7 @@ int Espgen44_SetFreeWork(EspgenWork* pGen, EspGenWork* pSeq, EspSeqData* pSeqHed
 }
 
 // the split object pads .rodata to 8 bytes
+#ifndef TARGET_PC
 asm(".section .rodata; .balign 8");
+
+#endif

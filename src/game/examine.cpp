@@ -904,4 +904,7 @@ void ItemExamine::reset()
     m_pModel->matUpdate();
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata,\"aw\"\n\t.balign 32\n\t.text");
+
+#endif

@@ -3687,4 +3687,7 @@ void setMsgBG(int a, int flag)
     }
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 32");
+
+#endif

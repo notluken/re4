@@ -595,4 +595,7 @@ int EspgenSeqSet(EspSeqData* pSeqHed, int seq_ptr, EspInfo* pCore, cModel* pMod,
 }
 
 // the split object pads .rodata to 8 bytes
+#ifndef TARGET_PC
 asm(".section .rodata; .balign 8");
+
+#endif

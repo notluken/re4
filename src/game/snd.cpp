@@ -2817,4 +2817,7 @@ void SndSeqFadeOutAll_sec(u8 type, int time)
 }
 
 // The split object's .sdata is 8-aligned (0x18 bytes: the u8 flag_bak is followed by 7 bytes of pad).
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

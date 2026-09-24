@@ -1647,4 +1647,7 @@ void PenWindSet(f32 dir, f32 power, f32 x)
 }
 
 // The next unit's .sdata starts 8-byte aligned in the original link.
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

@@ -468,4 +468,7 @@ void FuncPathClear(void* pPath)
 }
 
 // The split object's .sdata is 8-aligned.
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

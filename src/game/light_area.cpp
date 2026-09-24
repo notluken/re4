@@ -210,4 +210,7 @@ void LightAreaUpdateSub(cEm* em, int type)
     }
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

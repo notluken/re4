@@ -586,4 +586,7 @@ int Espgen43_SetFreeWork(EspgenWork* pGen, EspGenWork* pSeq, EspSeqData* pSeqHed
     return 1;
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

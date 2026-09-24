@@ -375,8 +375,10 @@ void AreaDataEdit(AreaData* area, u32 col, int flg, Mtx pMat, f32 move_scale)
 }
 
 // The split object's .sdata (sel/Rcnt below) is 8-byte aligned.
+#ifndef TARGET_PC
 asm(".section .sdata,\"aw\"\n\t.balign 8\n\t.text");
 
+#endif
 // Quad editor: L / R select a point, A moves the selected point, X moves all four, Y moves the
 // floor, Y + B changes the height, Z rotates the quad about its centre; then draws it.
 void area_xz4_Edit(AreaXZ4* pXz4, u32 col, int flg, Mtx pMat, u32 state, Vec vec1, Vec vec2, f32 move_x, f32 move_y, f32 move_scale)

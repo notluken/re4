@@ -691,4 +691,7 @@ void cObj09::move()
     partsWorldCalc();
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

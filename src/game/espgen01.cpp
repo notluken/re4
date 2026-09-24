@@ -405,4 +405,7 @@ int Espgen01_SetFreeWork(EspgenWork* w, EspGenWork* rec, EspSeqData* head, cMode
     return 1;
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

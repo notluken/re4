@@ -295,4 +295,7 @@ void Filter04DrawBuffer()
     GXSetAlphaUpdate(1);
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata,\"aw\"\n\t.balign 32\n\t.text");
+
+#endif

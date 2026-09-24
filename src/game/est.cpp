@@ -477,4 +477,7 @@ void EstSetEm10WaterFall(Vec* pMod)
     }
 }
 
+#ifndef TARGET_PC
 asm(".section .rodata; .balign 8");
+
+#endif

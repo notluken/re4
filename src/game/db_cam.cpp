@@ -1573,4 +1573,7 @@ int adjust_qFPS(JOY* pJoy, int x, int y, int flag, int* out)
     return ret;
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

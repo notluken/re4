@@ -351,4 +351,7 @@ void DrawGage(int x, int y, int h, int w, int now, int max, int color)
 }
 
 // the split object's .sdata is 8-aligned
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

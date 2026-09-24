@@ -6,4 +6,7 @@
 #include "ctrl.h"
 
 // The original .rodata is 8-aligned (0x18 bytes) although only the ctrl.h string survived the link.
+#ifndef TARGET_PC
 asm(".section .rodata; .balign 8");
+
+#endif

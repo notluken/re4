@@ -886,4 +886,7 @@ void printCursor(int x, int y)
 }
 
 // .sdata is 8-aligned in the split object (4-byte pad after the last static).
+#ifndef TARGET_PC
 asm(".section .sdata,\"aw\"\n\t.balign 8\n\t.text");
+
+#endif

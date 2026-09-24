@@ -1023,4 +1023,6 @@ void* GetDataExt(void* pData, const char* pName, int no)
     return NULL;
 }
 
+#ifndef TARGET_PC
 asm(".section .bss; .balign 32");
+#endif

@@ -1605,4 +1605,7 @@ void Esp1b_SpTrans(cEsp* esp)
 }
 
 // The split object's .sdata is padded to 8 bytes.
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

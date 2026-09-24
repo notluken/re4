@@ -302,4 +302,7 @@ void Filter06Render()
     }
     GXEnableTexOffsets(0, 0, 0);
 }
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 32");
+
+#endif

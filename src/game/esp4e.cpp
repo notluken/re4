@@ -222,4 +222,7 @@ int cEsp4e::SetFreeWork(EspGenWork* pSeq, u32* pRand_seed)
     return 1;
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata; .balign 8");
+
+#endif

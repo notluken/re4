@@ -250,4 +250,7 @@ void cLogWork::clear()
     m_Str[0] = 0;
 }
 
+#ifndef TARGET_PC
 asm(".section .sdata,\"aw\"\n\t.balign 8\n\t.text");
+
+#endif
