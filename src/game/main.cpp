@@ -274,7 +274,18 @@ void systemStartInit()
     systemVISetBlack(1);
     LCEnable();
     VIWaitForRetrace();
+#ifdef TARGET_PC
+    // Real GameCube VI callbacks take a retrace-count argument (VIRetraceCallback); postVSyncCallback
+    // takes none -- an incompatible-function-pointer conversion GCC 2.95's C++ tolerated (or the
+    // real vendor signature differs and this decompilation's VIRetraceCallback typedef is imprecise;
+    // TO VERIFY), which clang's C++ rejects outright. Phase 4 SDK-call-site material
+    // (docs/port-phase1-errors.md already flagged this exact line); the cast just gets it to link
+    // against whatever host/Aurora VISetPostRetraceCallback ends up looking like, not a claim about
+    // the real signature.
+    VISetPostRetraceCallback((VIRetraceCallback) postVSyncCallback);
+#else
     VISetPostRetraceCallback(postVSyncCallback);
+#endif
     Dvd.Init();
     CardInit();
 #ifndef TARGET_PC
