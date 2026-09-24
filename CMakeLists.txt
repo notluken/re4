@@ -299,15 +299,18 @@ target_link_libraries(re4_port PUBLIC Threads::Threads)
 # --- tests/port: host unit tests for re4_port (Phase 2 step 2/3, docs/port-phase2.md) ---
 option(RE4_PC_BUILD_TESTS "Add the tests/port/ host unit tests (ctest)" ON)
 if (RE4_PC_BUILD_TESTS)
-  add_executable(test_ptr32 tests/port/test_ptr32.cpp)
+  # src/port/lowmem.cpp listed FIRST in every one of these (docs/port-boot.md section 28): ld orders
+  # same-segment sections by first appearance among the *directly listed* link inputs, so this keeps
+  # `__re4low` ahead of these tests' own ordinary `.data`/`.bss` the same way it must be in re4_boot.
+  add_executable(test_ptr32 src/port/lowmem.cpp tests/port/test_ptr32.cpp)
   target_link_libraries(test_ptr32 PRIVATE re4_port)
   add_test(NAME test_ptr32 COMMAND test_ptr32)
 
-  add_executable(test_arena tests/port/test_arena.cpp)
+  add_executable(test_arena src/port/lowmem.cpp tests/port/test_arena.cpp)
   target_link_libraries(test_arena PRIVATE re4_port)
   add_test(NAME test_arena COMMAND test_arena)
 
-  add_executable(test_be tests/port/test_be.cpp)
+  add_executable(test_be src/port/lowmem.cpp tests/port/test_be.cpp)
   target_link_libraries(test_be PRIVATE re4_port)
   add_test(NAME test_be COMMAND test_be)
 endif()
@@ -443,7 +446,13 @@ if (RE4_BUILD_BOOT)
   target_compile_definitions(re4_boot_stubs PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_boot_stubs PRIVATE ${RE4_GAME_OPTIONS})
 
-  add_executable(re4_boot src/port/boot_main.cpp src/port/mem1.cpp src/port/dvd.cpp src/port/vi.cpp $<TARGET_OBJECTS:re4_boot_game>)
+  # src/port/lowmem.cpp and src/port/game_stack.cpp listed FIRST (docs/port-boot.md section 28) --
+  # ld orders same-segment sections by first appearance among the *directly listed* link inputs, so
+  # this keeps `__re4low` (then `__re4stack`) ahead of every other object's `.data`/`.bss`/`.common`,
+  # and ahead of `__re4arena` (which stays last -- it lives inside the re4_port static library,
+  # linked after every source listed directly here).
+  add_executable(re4_boot src/port/lowmem.cpp src/port/game_stack.cpp src/port/boot_main.cpp
+    src/port/mem1.cpp src/port/dvd.cpp src/port/vi.cpp $<TARGET_OBJECTS:re4_boot_game>)
   target_include_directories(re4_boot PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
   target_compile_definitions(re4_boot PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_boot PRIVATE ${RE4_GAME_OPTIONS})

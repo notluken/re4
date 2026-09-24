@@ -1,0 +1,30 @@
+diff --git a/lib/dolphin/gx/GXVert.cpp b/lib/dolphin/gx/GXVert.cpp
+index 789ed14..60fc188 100644
+--- a/lib/dolphin/gx/GXVert.cpp
++++ b/lib/dolphin/gx/GXVert.cpp
+@@ -10,9 +10,24 @@ bool sInBegin = false;
+ // GX_AUTO: offset of the u32 byte-length placeholder to patch in GXEnd
+ u32 sBeginSizeOffset = 0;
+ bool sBeginAuto = false;
++} // namespace
++
++extern "C" void GXEnd();
+ 
++namespace {
+ void pre_begin() {
+-  CHECK(!sInBegin, "GXBegin: called without matching GXEnd");
++  // re4-port: real GameCube hardware auto-completes a fixed-vertex-count primitive (GXBegin's
++  // nVerts != GX_AUTO) once that many vertices have been submitted -- GXEnd() is a real-hardware
++  // no-op for that case (the real SDK's dolphin/gx/GXGeometry.h defines it `static inline`, empty
++  // outside DEBUG builds), so many real games never call it explicitly between two fixed-count
++  // primitives (confirmed against Resident Evil 4's own decompiled source, which never calls
++  // GXEnd() at all across ~30 units that call GXBegin). Treating a second GXBegin as implicitly
++  // closing whatever the previous one started (the same cleanup GXEnd() itself performs) matches
++  // that real-hardware behavior instead of asserting -- this emulation's own sInBegin/GXEnd
++  // bookkeeping is software-only state real hardware has no equivalent restriction for.
++  if (sInBegin) {
++    GXEnd();
++  }
+ 
+   // Flush dirty state before starting a draw
+   if (__gx->dirtyState != 0) {

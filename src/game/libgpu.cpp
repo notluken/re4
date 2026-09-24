@@ -5,6 +5,15 @@
 #include "libgpu.h"
 #ifdef TARGET_PC
 #include "port/ptr32.h"
+
+// Not declared in this repo's own include/gx.h (no vendor unit ever calls GXEnd, confirmed by grep
+// across src/game -- real hardware's GXEnd is a static-inline, DEBUG-only assert with no emitted
+// code at all outside DEBUG builds, dolphin/gx/GXGeometry.h, so nobody needed an extern for it
+// before). A plain, local (not include/gx.h-wide, to avoid clashing with a `static inline` copy of
+// the same name some other TU sees through a different header) extern declaration reaching Aurora's
+// real, exported `GXEnd()` (../aurora/lib/dolphin/gx/GXVert.cpp) is all this file needs --
+// docs/port-boot.md section 28.
+extern "C" void GXEnd(void);
 #endif
 
 // The primitive is handed over as the OT tag word and cast at every access: a pointer kept in an
@@ -133,6 +142,14 @@ void make_g3(u32 tag)
     GXColor4u8(p->c1.r, p->c1.g, p->c1.b, 0xFF);
     GXPosition3s16(p->x2, p->y2, p->z2);
     GXColor4u8(p->c2.r, p->c2.g, p->c2.b, 0xFF);
+#ifdef TARGET_PC
+    // Aurora's GX emulation tracks GXBegin/GXEnd pairing in software (a `sInBegin` flag,
+    // ../aurora/lib/dolphin/gx/GXVert.cpp) and asserts on a second GXBegin() with no GXEnd() in
+    // between -- real hardware auto-completes a fixed-vertex-count primitive (GXBegin's `nVerts`
+    // not GX_AUTO) without needing GXEnd() at all, which is why the vendor's own code (unchanged
+    // above) never calls it. docs/port-boot.md section 28.
+    GXEnd();
+#endif
 }
 #undef p
 
@@ -153,6 +170,9 @@ void make_g4(u32 tag)
     GXColor4u8(p->c2.r, p->c2.g, p->c2.b, 0xFF);
     GXPosition3s16(p->x3, p->y3, p->z3);
     GXColor4u8(p->c3.r, p->c3.g, p->c3.b, 0xFF);
+#ifdef TARGET_PC
+    GXEnd(); // see make_g3's comment above
+#endif
 }
 #undef p
 
@@ -253,6 +273,9 @@ void make_lg2(u32 tag)
     GXColor4u8(p->c0.r, p->c0.g, p->c0.b, 0xFF);
     GXPosition3s16(p->x1, p->y1, p->z1);
     GXColor4u8(p->c1.r, p->c1.g, p->c1.b, 0xFF);
+#ifdef TARGET_PC
+    GXEnd(); // see make_g3's comment above
+#endif
 }
 #undef p
 
@@ -271,6 +294,9 @@ void make_lg3(u32 tag)
     GXColor4u8(p->c1.r, p->c1.g, p->c1.b, 0xFF);
     GXPosition3s16(p->x2, p->y2, p->z2);
     GXColor4u8(p->c2.r, p->c2.g, p->c2.b, 0xFF);
+#ifdef TARGET_PC
+    GXEnd(); // see make_g3's comment above
+#endif
 }
 #undef p
 
@@ -291,6 +317,9 @@ void make_lg4(u32 tag)
     GXColor4u8(p->c2.r, p->c2.g, p->c2.b, 0xFF);
     GXPosition3s16(p->x3, p->y3, p->z3);
     GXColor4u8(p->c3.r, p->c3.g, p->c3.b, 0xFF);
+#ifdef TARGET_PC
+    GXEnd(); // see make_g3's comment above
+#endif
 }
 #undef p
 

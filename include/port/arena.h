@@ -48,6 +48,14 @@ std::size_t GetArenaSize();
 bool CreateArenaThread(std::size_t stack_offset, std::size_t stack_size, void* (*start)(void*),
                        void* arg);
 
+// Starts a detached pthread whose real (machine) stack is exactly [stack_base, stack_base +
+// stack_size) -- the general form CreateArenaThread() and src/port/boot_main.cpp (the main game
+// thread, on include/port/game_stack.h's dedicated pre-arena region) and src/port/os_thread.cpp
+// (OSCreateThread, on the game-provided/heap-allocated stack buffer scheduler.cpp already passes it)
+// both build on. `stack_base` must be the LOWEST address of the stack (pthread_attr_setstack's own
+// convention), not the top. Returns false (does not abort) on failure.
+bool CreateThreadOnStack(void* stack_base, std::size_t stack_size, void* (*start)(void*), void* arg);
+
 } // namespace re4_port
 
 #endif // RE4_PORT_ARENA_H

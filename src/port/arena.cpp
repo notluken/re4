@@ -27,6 +27,7 @@
 
 #include "port/alloc.h"
 #include "port/arena.h"
+#include "port/lowmem.h"
 #include "port/ptr32.h"
 
 #include <pthread.h>
@@ -42,6 +43,16 @@ std::uintptr_t g_base = 0;
 namespace {
 
 __attribute__((aligned(16384), section("__DATA,__re4arena,zerofill"))) char s_arena[kArenaSize];
+
+// GC-faithful layout budget (docs/port-boot.md section 28, plan "A*"): every ordinary exe global
+// (this file's own `s_bssProbe` stands in for "the whole image's .data/.bss/.common", same
+// precedent as before this section) must land between `__re4low` (GC 0x80000000) and this address --
+// the fixed literal GC addresses several vendor units hardcode as raw pointers (DVD_BUFF
+// 0x80350000, SND_DATA_TOP 0x80370000, the GX FIFO 0x803F0000, the XFBs at 0x80460000, the game heap
+// 0x80974000-0x817F4000, ...) must fall *inside* `__re4arena`, not inside the exe's own ordinary
+// data. Measured this pass: the exe's own .data/.bss/.common (excluding __re4low/__re4stack) is
+// ~0x88000 -- comfortably under this budget; re-checked live below, not just assumed.
+constexpr std::uint32_t kArenaBudgetGC = 0x80350000u;
 
 void CheckInWindow(const char* what, const void* addr)
 {
@@ -69,12 +80,52 @@ void SomeFunctionProbe() {}
 
 void InitArena()
 {
-    g_base = reinterpret_cast<std::uintptr_t>(s_arena) - 0x80000000u;
+    // g_base anchored at __re4low (src/port/lowmem.cpp), not the arena: real GameCube low memory
+    // (OSBootInfo, __OSBusClock, ...) sits at GC 0x80000000, below every other global the game or
+    // SDK ever declares -- anchoring here instead of at the arena is what makes GC32() of an
+    // *ordinary* global (not heap/arena data) a valid, positive 0x80xxxxxx handle. See
+    // include/port/lowmem.h for the full rationale (this is the direct fix for docs/port-boot.md
+    // section 27's `DrawOTag` crash: `MainOt`, a plain global, was not representable as a GC handle
+    // under the old arena-anchored g_base at all).
+    g_base = reinterpret_cast<std::uintptr_t>(GetLowMemBase()) - 0x80000000u;
 
+    CheckInWindow("lowmem start", GetLowMemBase());
     CheckInWindow("arena start", s_arena);
     CheckInWindow("arena end", s_arena + kArenaSize - 1);
     CheckInWindow("exe .bss probe", &s_bssProbe);
     CheckInWindow("exe code probe", reinterpret_cast<void*>(&SomeFunctionProbe));
+
+    // Layout invariant #1: lowmem is genuinely first -- every ordinary global's GC32() address must
+    // be >= 0x80000000 (lowmem's own GC address). If this fires, __re4low is not actually first in
+    // link order (CMakeLists.txt's source ordering regressed) -- see include/port/lowmem.h.
+    std::uint32_t bssGC = GC32(&s_bssProbe);
+    if (bssGC < 0x80000000u) {
+        std::fprintf(stderr,
+                     "InitArena: exe .bss probe (GC 0x%08x) is BELOW lowmem (GC 0x80000000) -- "
+                     "__re4low is not first in link order; check CMakeLists.txt's source ordering "
+                     "(docs/port-boot.md section 28)\n",
+                     bssGC);
+        std::abort();
+    }
+
+    // Layout invariant #2: the arena starts inside the fixed-GC-address budget.
+    std::uint32_t arenaGC = GC32(s_arena);
+    if (arenaGC > kArenaBudgetGC) {
+        std::fprintf(stderr,
+                     "InitArena: arena start (GC 0x%08x) exceeds the 0x%08x budget for image data "
+                     "before the arena (docs/port-boot.md section 28) -- a fixed-GC-address literal "
+                     "(DVD_BUFF/SND_DATA_TOP/the GX FIFO/the XFBs/...) would land outside the arena\n",
+                     arenaGC, kArenaBudgetGC);
+        std::abort();
+    }
+
+    if (std::getenv("RE4_PORT_DEBUG_LAYOUT") != nullptr) {
+        std::fprintf(stderr,
+                     "re4_port: layout: lowmem=%p (GC 0x%08x) bss_probe=%p (GC 0x%08x) arena=%p (GC "
+                     "0x%08x) arena_end=%p (GC 0x%08x)\n",
+                     GetLowMemBase(), GC32(GetLowMemBase()), &s_bssProbe, bssGC, static_cast<void*>(s_arena),
+                     arenaGC, static_cast<void*>(s_arena + kArenaSize), GC32(s_arena + kArenaSize));
+    }
 }
 
 void* GetArenaBase()
@@ -111,19 +162,13 @@ void* ThreadTrampoline(void* p)
 
 } // namespace
 
-bool CreateArenaThread(std::size_t stack_offset, std::size_t stack_size, void* (*start)(void*),
-                       void* arg)
+bool CreateThreadOnStack(void* stack_base, std::size_t stack_size, void* (*start)(void*), void* arg)
 {
-    if (stack_offset + stack_size > kArenaSize) {
-        std::fprintf(stderr, "CreateArenaThread: [0x%zx, 0x%zx) does not fit the %zu-byte arena\n",
-                     stack_offset, stack_offset + stack_size, kArenaSize);
-        return false;
-    }
     pthread_attr_t attr;
     if (pthread_attr_init(&attr) != 0) {
         return false;
     }
-    bool ok = pthread_attr_setstack(&attr, s_arena + stack_offset, stack_size) == 0;
+    bool ok = pthread_attr_setstack(&attr, stack_base, stack_size) == 0;
     if (ok) {
         ok = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0;
     }
@@ -137,6 +182,17 @@ bool CreateArenaThread(std::size_t stack_offset, std::size_t stack_size, void* (
     }
     pthread_attr_destroy(&attr);
     return ok;
+}
+
+bool CreateArenaThread(std::size_t stack_offset, std::size_t stack_size, void* (*start)(void*),
+                       void* arg)
+{
+    if (stack_offset + stack_size > kArenaSize) {
+        std::fprintf(stderr, "CreateArenaThread: [0x%zx, 0x%zx) does not fit the %zu-byte arena\n",
+                     stack_offset, stack_offset + stack_size, kArenaSize);
+        return false;
+    }
+    return CreateThreadOnStack(s_arena + stack_offset, stack_size, start, arg);
 }
 
 } // namespace re4_port

@@ -1377,3 +1377,149 @@ Verified no regression: default host build (`RE4_U32_32=OFF`) untouched by this 
 `src/port/`, `include/port/vi.h`, `CMakeLists.txt`'s `RE4_BUILD_BOOT` block touched); `ctest` not
 rerun this pass (no `include/port/`/`src/port/` change affects the non-boot test targets' logic,
 only adds a new boot-only source file) -- **TO VERIFY** by whoever next has a spare `ctest` run.
+
+## 28. GC-faithful low-memory layout ("plan A*"): `DrawOTag` no longer crashes, real GX submission reached (2026-09-24)
+
+Coordinator-specified plan, implemented and verified live (not assumed) at every step below.
+
+### Root cause confirmed: section 27's `DrawOTag` crash was `GC32()` underflowing under `NDEBUG`
+
+Read the cast-rewriter's actual output (`build-pc-boot/gen/src/game/libgpu.cpp`) before touching
+anything: `AddPrim`/`DelPrim`/`ClearOTagR`/`DrawOTag` already call `re4_port::GC32()`/`GCPTR()` (the
+rewriter caught every pointer-in-`u32` cast here, contrary to section 27's guess that they were raw
+truncations) -- so the bug is in `GC32()`'s own bounds check, not a missing rewrite. `RE4_GAME_DEFINES`
+(`CMakeLists.txt`) sets `NDEBUG=1` unconditionally (matching the vendor's own `-O2` build), which
+compiles out `GC32()`'s own `assert()` (`include/port/ptr32.h`) for every `re4_boot_game` translation
+unit -- so a pointer outside the compressed window (the old `g_base = arena_address - 0x80000000`
+put every ordinary global, e.g. `main.cpp`'s `MainOt`, at a *negative* offset whenever that global's
+real address was more than 2 GiB below the arena) silently underflowed to a huge `uintptr_t`, failed
+the `>= kWindowSize` check, and should have aborted -- except that check is *inside the same disabled
+assert*, so it also silently underflowed, producing a garbage 32-bit handle instead of a
+diagnosable abort. Confirmed live: rebuilding `test_arena` (a small binary, few objects) showed its
+own `s_bssProbe` landing *after* the 1 GiB arena in link order, not before -- proof this direction
+(ordinary-global-vs-arena order) is not something this port controls or can rely on, which is exactly
+why the fix has to work regardless of where any given global ends up relative to the arena.
+
+### Fix: `g_base` anchored at a new low-memory region, not the arena
+
+`include/port/lowmem.h`/`src/port/lowmem.cpp` (new): a 16 KiB, **non**-zerofill (explicit `= {0}`
+initializer, no `,zerofill` section suffix -- deliberately real file content, matching real GameCube
+low memory's own nonzero boot-time contents) region, `__DATA,__re4low`, always listed as the **first**
+source file in every executable/test target that links `re4_port` (`CMakeLists.txt`) -- ld64 orders
+same-segment sections by first appearance among the *directly listed* link inputs (this port's own
+established precedent, `src/port/arena.cpp`'s `__re4arena` staying last by living inside the archive,
+linked after everything listed directly). `re4_port::InitArena()` (`src/port/arena.cpp`) now computes
+`g_base = &lowmem - 0x80000000`, not `&arena - 0x80000000` -- so GC address 0x80000000 is `__re4low`'s
+own address, below every other global in the whole image by construction, and `GC32()` of *any*
+ordinary global (not just arena/heap data) is now a valid, non-underflowing, positive handle
+regardless of whether that global happens to link before or after the 1 GiB arena. `InitArena()` gained
+two live, non-`NDEBUG`-gated invariant checks (this file compiles without `NDEBUG`, unlike the game
+code): `GC32(&s_bssProbe) >= 0x80000000` (lowmem genuinely first) and `GC32(arena start) <=
+0x80350000` (the fixed-GC-address budget below -- measured live this pass at GC `0x80274000`,
+comfortably inside; `RE4_PORT_DEBUG_LAYOUT=1` env var prints the full layout on request). Both fire a
+loud `abort()` with a diagnosis, not a silent corruption, if link order ever regresses.
+
+**Verified**: this alone made `DrawOTag` stop crashing -- rerunning under `lldb` showed it walking a
+populated OT for real and dispatching an actual queued primitive (`make_tile` -> `make_g4` ->
+`gpuSetup` -> `GXBegin`), the deepest this session reached into real rendering.
+
+### Game thread stack moved off the arena (a second, real bug this design decision fixed)
+
+`include/port/game_stack.h`/`src/port/game_stack.cpp` (new): a dedicated ~2 MiB zerofill
+`__DATA,__re4stack` region, listed second (right after `__re4low`) in `re4_boot`'s sources. The main
+game thread (`src/port/boot_main.cpp`) now runs on this region (`re4_port::CreateThreadOnStack()`, a
+new general helper `include/port/arena.h`/`src/port/arena.cpp` factored out of the old
+`CreateArenaThread()`, which now just calls it with an arena offset) instead of
+`CreateArenaThread(0, GetArenaSize()/4, ...)` (256 MiB carved from the arena's own start). Found while
+implementing, not asked for directly but load-bearing: `SystemMemInit()` (`src/game/main_mem.cpp`)
+calls `OSSetArenaLo(arenaBase)` (below) so the game's heap allocator is configured to hand out memory
+starting from arena offset 0 -- the *same bytes* the old scheme put the running thread's own machine
+stack on. That is a live collision (the heap would eventually allocate over the executing thread's own
+stack); moving the thread's stack to a disjoint, dedicated region removes it, and frees the entire 1
+GiB arena for the heap, undivided.
+
+### `os_thread.cpp`'s per-task threads: now real `pthread`s on the game's own stack buffer
+
+Coordinator's flagged risk confirmed real: `OSCreateThread` was a plain `std::thread` (a
+host-allocated ~8 MiB stack, no relation to the compressed window) even though the game already passes
+a real stack buffer (`scheduler.cpp`'s `TaskSchedulerInit()`, `MEM_ALLOC`-backed, already inside the
+arena). Fixed: `OSCreateThread` (`src/port/os_thread.cpp`) now calls the same new
+`re4_port::CreateThreadOnStack()` with that buffer (`pthread_attr_setstack`), falling back to a
+default (host) stack -- logged loudly, not silently -- only if `pthread_attr_setstack` itself fails
+(observed live: it does fail for these small, sub-page-granularity task stacks, most likely an
+alignment/size requirement `MEM_ALLOC`'s allocator doesn't guarantee; not root-caused further this
+pass, flagged as **TO VERIFY** open work, not a crash -- the fallback keeps the boot sequence running).
+
+### `mem1.cpp`: MEM1 now spans lowmem through the arena end, `OSSetArenaLo/Hi` corrected, real `OSBootInfo`/bus clock
+
+`MEM1Start = lowmem`, `MEM1End = arena end`, `mem1Size` = the distance between them (not just the
+arena's own size) -- this is what makes an *ordinary* global's `GC32()` value fall inside
+`[MEM1Start, MEM1End)`-shaped range checks elsewhere, not just the arena's. Aurora's own
+`AuroraInitArena()` (`OSInit()`) still runs once, before `mem1Size` is set (this port's own established
+ordering, section 13), so it never sets `OSGetArenaLo()`/`Hi()` for real; this file now calls
+`OSSetArenaLo(arenaBase)`/`OSSetArenaHi(arenaEnd)` explicitly instead of relying on Aurora's default
+(`MEM1Start + 0x4000`, which under this new layout would land inside `__re4low` itself, not the real
+arena). Also (coordinator-flagged, confirmed real): `OSBootInfo::memorySize` (offset `0x28` --
+`DVDDiskID` is `0x20` bytes + `magic`(4) + `version`(4), confirmed against the actual struct, not
+assumed) and `__OSBusClock` (offset `0xF8`) are both normally filled by Aurora's own
+`AuroraFillBootInfo()`/`AuroraInitClock()`, but both ran during the process's only `OSInit()` call,
+before `OSBaseAddress` was set (both guard on it), so neither ever wrote anything --
+`src/game/main_sub.cpp`'s own `OS_BUS_CLOCK` macro reads this location directly (bypassing Aurora
+entirely, vendor code) and would have silently read 0, a divide-by-zero waiting to happen the first
+time anything computed `OSTicksToSeconds()`. `InitMem1()` now writes both directly (162,000,000, the
+real GameCube bus clock, matching Aurora's own `OS_BUS_CLOCK` macro).
+
+### `DrawOTag` reached real GX submission -- two further real bugs found and fixed past that point
+
+1. **Aurora's GX emulation asserts on back-to-back `GXBegin()` calls with no `GXEnd()` in between**
+   (`[fatal] [aurora::gx] GXBegin: called without matching GXEnd`, `../aurora/lib/dolphin/gx/GXVert.cpp`).
+   Checked against the real SDK before concluding anything: `dolphin/gx/GXGeometry.h`'s own `GXEnd()`
+   is `static inline`, a no-op outside `DEBUG` builds -- real hardware auto-completes a fixed-vertex-count
+   primitive (`GXBegin`'s `nVerts != GX_AUTO`) without an explicit `GXEnd()` at all, which is exactly why
+   no vendor unit ever calls it (confirmed: `grep -rl "GXEnd(" src/game/*.cpp` was empty before this
+   pass). This is a genuine Aurora emulation gap (software bookkeeping with no real-hardware
+   equivalent), not a vendor bug or a config mismatch -- fixed as an Aurora patch,
+   `tools/port/aurora-patches/0002-gx-implicit-end.patch`: `pre_begin()` now closes an already-open
+   `sInBegin` implicitly (calling the same cleanup `GXEnd()` itself runs) instead of asserting.
+   Applied to the Aurora checkout the same idempotent way as the existing DVD patch (section 13/14).
+2. **Aurora's GX command recorder has no "active session" outside an `aurora_begin_frame()`/
+   `aurora_end_frame()` pair** (`[fatal] [aurora::gfx] No active recording session`) -- this is
+   `include/port/vi.h`'s own previously-flagged open risk materializing exactly as predicted: the host
+   main thread's present loop no longer brackets real GX submission (that happens on the game thread).
+   Fixed by moving `aurora_begin_frame()`/`aurora_end_frame()` off `RunPresentLoop()` (which now only
+   pumps `aurora_update()` and the retrace tick) and onto the **game thread**, bracketing
+   `src/game/main_sub.cpp`'s existing `Render_before()`/`Render_swap()` (`TARGET_PC`-only calls,
+   `re4_port::BeginGxFrame()`/`EndGxFrame()`, new in `src/port/vi.cpp`) -- `g_recorder`
+   (`../aurora/lib/gfx/recording.cpp`) is a plain, non-thread-local global with no inherent thread
+   affinity, so it must be driven by whichever thread issues the matching GX submission, not by
+   `RunPresentLoop()`'s own thread.
+3. **Removing `aurora_begin_frame()`/`aurora_end_frame()` from `RunPresentLoop()` removed its only
+   pacing source** -- found live, not anticipated: without it, the loop free-ran as fast as
+   `aurora_update()` could spin, and `main.cpp`'s own hang detector (`haltExecCheck()`, `vsync_cnt >
+   3599`) fired within a few seconds (`HALT D:/Bio4/Prog/main.cpp(548)`). Fixed with an explicit
+   `std::chrono::steady_clock` deadline paced at ~59.94 Hz (real NTSC field rate) inside
+   `RunPresentLoop()` itself.
+
+**Current frontier, reached live this pass**: past `DrawOTag`'s crash, past both GX-recording-session
+fatals and the pacing hang, into real GX FIFO command processing (`[debug] [aurora::gx::fifo] Unhandled
+XF/BP register ...` -- expected, real geometry-pipeline state Aurora logs but doesn't fully emulate
+yet) -- **new blocker**: `[fatal] [aurora::gx::fifo] indexed XF load from unmapped array 24`, a deeper
+GX vertex-array-binding issue, not yet root-caused (budget-limited this pass; likely `Draw_cinesco()`
+or `cMes`'s own textured-quad drawing submitting an indexed draw whose vertex array was never bound --
+`GXSetArray()` call site not yet traced). Stopping here per the session's budget.
+
+**No screenshot captured this session**: attempted (`screencapture -x` immediately after launch, and
+mid-run) but the process now crashes on the new FIFO blocker within roughly 1-2 real seconds of the
+DVD reads completing -- faster than a screenshot could be scripted against it reliably; a capture
+attempt during a run showed only the desktop (the game window, if painted at all, was not the frontmost
+/ captured surface). Aurora's own logs (`Aurora window opened`, a real Metal adapter/device/swapchain
+sequence) are the only evidence the window exists this session, same as section 27 -- confirmed real
+GX commands ARE now reaching the FIFO (the `Unhandled XF/BP register` lines are proof some geometry
+state is being submitted), so a frame with visible content is plausible once the array-binding blocker
+above is fixed; whoever picks this up next should screenshot as soon as it renders.
+
+**Verified**: `ctest` 4/4 (`build-pc-boot`, `RE4_U32_32=ON`) and 3/3 (`build-pc`, default `OFF`), both
+rebuilt and rerun this pass, both green. Only `src/game/libgpu.cpp` and `src/game/main_sub.cpp` touch
+files outside `src/port/`/`include/port/` -- both changes are fully `#ifdef TARGET_PC`-guarded, no
+`#line`-tracked region moved (confirmed by reading the diff directly, not assumed) -- remote
+matching-build verification below.

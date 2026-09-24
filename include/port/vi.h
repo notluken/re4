@@ -55,6 +55,19 @@ namespace re4_port {
 // is created here, not in boot_main.cpp) and aurora_shutdown() before returning.
 void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit);
 
+// Brackets one GX "recording session" (aurora_begin_frame()/aurora_end_frame()) around the game
+// thread's own real GX submission for a frame -- called from src/game/main_sub.cpp's
+// Render_before()/Render_swap() (TARGET_PC branch), NOT from RunPresentLoop(). Found necessary
+// live: Aurora's GX command recorder (`g_recorder`, ../aurora/lib/gfx/recording.cpp) is a plain,
+// non-thread-local global with no "active session" outside a begin_frame()/end_frame() pair, and it
+// asserts ("No active recording session") the moment any real GX draw command runs without one --
+// which happens on the game thread (src/game/libgpu.cpp's DrawOTag and friends), not the host main
+// thread RunPresentLoop() runs on. BeginGxFrame()/EndGxFrame() must therefore run on the same
+// thread as the GX submission they bracket (the game thread), while RunPresentLoop() keeps owning
+// only the window/event pump and the ~60 Hz retrace tick on the host main thread.
+void BeginGxFrame();
+void EndGxFrame();
+
 } // namespace re4_port
 
 #endif // RE4_PORT_VI_H

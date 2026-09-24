@@ -47,11 +47,14 @@
 // renderable frame, flagged here for whoever revisits this after first boot.
 #ifdef TARGET_PC
 
+#include "port/arena.h"
 #include "port/os_thread.h"
 
 #include <condition_variable>
 #include <cstdio>
+#include <memory>
 #include <mutex>
+#include <pthread.h>
 #include <thread>
 #include <unordered_map>
 
@@ -80,15 +83,44 @@ OSThread g_mainThread{}; // storage for the main game thread's OSThread identity
 
 struct ThreadExitException {}; // OSExitThread's unwind mechanism -- see the file header.
 
-struct ThreadCtx {
-    std::thread native;
+// Every task thread this file starts now runs a real pthread whose *machine* stack is the game's
+// own stack buffer (scheduler.cpp's `TaskSchedulerInit()` -> `MEM_ALLOC`, already a real host
+// pointer inside re4_port's arena -- see include/port/game_stack.h's header comment for why this
+// matters: any local variable's address on this thread's stack must itself be a valid, GC32()-able
+// pointer for the vendor's own "pointer stored in a u32" idioms (docs/port-boot.md section 27's
+// `DrawOTag` bug and its kin) to work, and a host-allocated (plain `std::thread`) stack is not
+// guaranteed to land inside the compressed-handle window at all.
+std::unordered_map<OSThread*, bool> g_threads; // presence only -- no join primitive yet (arena.cpp's
+                                                // own CreateArenaThread precedent: detached,
+                                                // fire-and-forget)
+
+struct OSTaskThreadArgs {
+    OSThread* thread;
+    void* (*func)(void*);
+    void* param;
 };
-std::unordered_map<OSThread*, std::unique_ptr<ThreadCtx>> g_threads;
 
 void BecomeRunner(OSThread* self)
 {
     std::unique_lock<std::mutex> lk(g_mutex);
     g_cv.wait(lk, [&] { return g_holder == self; });
+}
+
+void* OSTaskThreadEntry(void* p)
+{
+    std::unique_ptr<OSTaskThreadArgs> args(static_cast<OSTaskThreadArgs*>(p));
+    OSThread* thread = args->thread;
+    void* (*func)(void*) = args->func;
+    void* param = args->param;
+    t_self = thread;
+    BecomeRunner(thread);
+    try {
+        func(param);
+    } catch (const ThreadExitException&) {
+        // Normal termination path (OSExitThread) -- see the file header's design note.
+    }
+    thread->state = OS_THREAD_STATE_MORIBUND;
+    return nullptr;
 }
 
 } // namespace
@@ -144,21 +176,37 @@ int OSCreateThread(OSThread* thread, void* (*func)(void*), void* param, void* st
         *thread->stackEnd = OS_THREAD_STACK_MAGIC;
     }
 
-    auto ctx = std::make_unique<re4_port::ThreadCtx>();
-    ctx->native = std::thread([thread, func, param]() {
-        re4_port::t_self = thread;
-        re4_port::BecomeRunner(thread);
-        try {
-            func(param);
-        } catch (const re4_port::ThreadExitException&) {
-            // Normal termination path (OSExitThread) -- see the file header's design note.
+    // Runs on the game-provided stack buffer (`stack`/`stackSize`, above -- scheduler.cpp's
+    // TaskSchedulerInit() allocates it with MEM_ALLOC, already inside re4_port's arena) via
+    // pthread_attr_setstack, not a host-allocated std::thread stack -- see this file's own comment
+    // on `g_threads` for why (docs/port-boot.md section 28).
+    auto* targs = new re4_port::OSTaskThreadArgs{thread, func, param};
+    bool started = false;
+    if (stack != nullptr && stackSize != 0) {
+        started =
+            re4_port::CreateThreadOnStack(thread->stackEnd, stackSize, re4_port::OSTaskThreadEntry, targs);
+        if (!started) {
+            std::fprintf(stderr,
+                         "OSCreateThread: pthread_attr_setstack failed for stack=[%p, %p) -- falling "
+                         "back to a host-allocated stack (game-visible pointers on this thread's own "
+                         "stack would then be unsafe, docs/port-boot.md section 28)\n",
+                         (void*) thread->stackEnd, (void*) thread->stackBase);
         }
-        thread->state = OS_THREAD_STATE_MORIBUND;
-    });
-    ctx->native.detach(); // fire-and-forget, matching src/port/arena.cpp's CreateArenaThread
+    }
+    if (!started) {
+        pthread_t pt;
+        started = pthread_create(&pt, nullptr, re4_port::OSTaskThreadEntry, targs) == 0;
+        if (started) {
+            pthread_detach(pt);
+        }
+    }
+    if (!started) {
+        delete targs;
+        return 0;
+    }
     {
         std::lock_guard<std::mutex> lk(re4_port::g_mutex);
-        re4_port::g_threads[thread] = std::move(ctx);
+        re4_port::g_threads[thread] = true;
     }
     return 1;
 }

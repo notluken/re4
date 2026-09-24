@@ -9,6 +9,7 @@
 #include "port/arena.h"
 #include "port/dvd.h"
 #include "port/dvd_root.h"
+#include "port/game_stack.h"
 #include "port/os_thread.h"
 #include "port/ptr32.h"
 #include "port/vi.h"
@@ -65,10 +66,15 @@ int main(int argc, char** argv)
     std::fprintf(stderr, "re4_boot: arena base=%p size=%zu\n", re4_port::GetArenaBase(),
                  re4_port::GetArenaSize());
 
-    // CreateArenaThread is detached (include/port/arena.h) -- no join primitive is exposed yet.
-    std::size_t stack_size = re4_port::GetArenaSize() / 4; // leave room for the game's own heap use
-    if (!re4_port::CreateArenaThread(0, stack_size, GameThreadEntry, nullptr)) {
-        std::fprintf(stderr, "re4_boot: CreateArenaThread failed\n");
+    // The game thread's real (machine) stack is include/port/game_stack.h's dedicated ~2 MiB
+    // pre-arena region, not carved from the 1 GiB arena (docs/port-boot.md section 28) -- so the
+    // arena is available to SystemMemInit()'s heap allocator (OSSetArenaLo(arenaBase),
+    // src/port/mem1.cpp) in full, with no reserved-for-the-stack carve-out inside it that the heap
+    // could otherwise grow into while this thread is still running on it.
+    // CreateThreadOnStack is detached (include/port/arena.h) -- no join primitive is exposed yet.
+    if (!re4_port::CreateThreadOnStack(re4_port::GetGameStackBase(), re4_port::GetGameStackSize(),
+                                        GameThreadEntry, nullptr)) {
+        std::fprintf(stderr, "re4_boot: CreateThreadOnStack (game thread) failed\n");
         return 1;
     }
     // The host process's real main thread owns Aurora's window/event/present loop (AppKit requires

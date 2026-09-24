@@ -28,6 +28,9 @@
 #include "trans_ot.h"
 #include <dolphin/os.h>
 #include "sce_sys.h"
+#ifdef TARGET_PC
+#include "port/vi.h"
+#endif
 
 void SetDrawTmpBufType(int type);
 
@@ -128,6 +131,13 @@ void Render_init()
 // Frame start: field-rendering viewport jitter and the default (dim) copy filter.
 void Render_before()
 {
+#ifdef TARGET_PC
+    // Opens this frame's Aurora GX recording session on the game thread (docs/port-boot.md section
+    // 28) -- must happen before any real GX submission (DrawOTag et al., called between this
+    // function and Render_swap() in main.cpp's frame loop) or Aurora aborts ("No active recording
+    // session").
+    re4_port::BeginGxFrame();
+#endif
     if (Rmode.field_rendering) {
         GXSetViewportJitter(0.0f, 0.0f, Screen.width, Screen.height, 0.0f, 1.0f, VIGetNextField());
     } else {
@@ -180,6 +190,10 @@ void Render_swap()
         }
     }
     VIFlush();
+#ifdef TARGET_PC
+    // Closes the GX recording session Render_before() opened -- see its comment above.
+    re4_port::EndGxFrame();
+#endif
 }
 
 // Start of the game frame: restores ZNEAR to 100 unless a SetNearClipDist request is pending

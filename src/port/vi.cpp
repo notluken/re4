@@ -12,11 +12,15 @@
 #include <aurora/event.h>
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <mutex>
-#include <condition_variable>
+#include <thread>
 
 namespace {
+
+thread_local bool t_gxFrameActive = false;
 
 std::mutex g_mutex;
 std::condition_variable g_cv;
@@ -82,17 +86,49 @@ VIRetraceCallback VISetPostRetraceCallback(VIRetraceCallback cb)
 
 namespace re4_port {
 
+void BeginGxFrame()
+{
+    t_gxFrameActive = aurora_begin_frame();
+    if (!t_gxFrameActive) {
+        std::fprintf(stderr, "re4_port: aurora_begin_frame() returned false -- this frame's GX "
+                              "submission has no active recording session (window minimized/GPU "
+                              "not ready); Render()/DrawOTag still run unconditionally (main.cpp's "
+                              "own frame loop, unchanged) -- TO VERIFY whether that risks the same "
+                              "\"No active recording session\" abort this function exists to avoid\n");
+    }
+}
+
+void EndGxFrame()
+{
+    if (t_gxFrameActive) {
+        aurora_end_frame();
+        t_gxFrameActive = false;
+    }
+}
+
 void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
 {
     AuroraConfig config{};
     config.appName = appName;
-    config.vsync = true; // paces this loop off the real display refresh (aurora_end_frame()
-                          // blocks on the swapchain present) instead of a manual sleep.
+    config.vsync = true;
     config.mem1Size = 0; // re4_port::InitMem1() (src/game/main.cpp's TARGET_PC OSInit() branch)
     config.mem2Size = 0; // already owns MEM1/ARAM sizing -- do not let Aurora allocate its own.
 
     aurora_initialize(0, nullptr, &config);
     std::fprintf(stderr, "re4_boot: Aurora window opened\n");
+
+    // Paces this loop's retrace tick to ~59.94 Hz (real NTSC field rate, VIGetTvFormat()==0) with an
+    // explicit deadline, not a plain fixed sleep_for() (which would drift) and NOT
+    // aurora_end_frame()'s own real-vsync block (this loop no longer calls aurora_begin_frame()/
+    // aurora_end_frame() at all -- see BeginGxFrame()/EndGxFrame() above for why those moved to the
+    // game thread). Without this, main.cpp's own hang detector (haltExecCheck(), vsync_cnt > 3599)
+    // fires within a few seconds: found live, this session, after moving begin/end_frame off this
+    // loop removed its only previous pacing source and this loop free-ran as fast as aurora_update()
+    // itself could spin.
+    using clock = std::chrono::steady_clock;
+    constexpr auto kFieldPeriod =
+        std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(1001.0 / 60000.0));
+    auto nextTick = clock::now();
 
     bool exiting = false;
     while (!exiting && !shouldExit->load()) {
@@ -107,9 +143,10 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
             break;
         }
 
-        if (aurora_begin_frame()) {
-            aurora_end_frame();
-        }
+        // aurora_begin_frame()/aurora_end_frame() are NOT called here (contrary to this loop's
+        // first version) -- see include/port/vi.h's BeginGxFrame()/EndGxFrame() for why: Aurora's
+        // GX recording session must be active on whichever thread issues the real GX submission
+        // calls (the game thread), not this one.
 
         // One "retrace": bump the counter and run the game's registered callbacks, on this thread
         // (see include/port/vi.h for why this is deliberately not the game thread).
@@ -129,6 +166,15 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
             post(count);
         }
         g_cv.notify_all();
+
+        nextTick += kFieldPeriod;
+        auto now = clock::now();
+        if (nextTick > now) {
+            std::this_thread::sleep_until(nextTick);
+        } else {
+            nextTick = now; // fell behind (e.g. a slow aurora_update()) -- don't try to catch up by
+                             // bursting retraces, just resume pacing from here.
+        }
     }
 
     aurora_shutdown();
