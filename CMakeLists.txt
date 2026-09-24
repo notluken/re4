@@ -266,6 +266,8 @@ endif()
 # except by #ifdef TARGET_PC); this is new, port-only code with no original-target counterpart.
 add_library(re4_port STATIC
   src/port/arena.cpp
+  src/port/alloc.cpp
+  src/port/dvd_root.cpp
 )
 target_include_directories(re4_port PUBLIC ${RE4_GAME_INCLUDES})
 target_compile_definitions(re4_port PUBLIC TARGET_PC)

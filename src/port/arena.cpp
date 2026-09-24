@@ -25,6 +25,7 @@
 #error "src/port/arena.cpp is host-only (TARGET_PC)"
 #endif
 
+#include "port/alloc.h"
 #include "port/arena.h"
 #include "port/ptr32.h"
 
@@ -86,6 +87,30 @@ std::size_t GetArenaSize()
     return kArenaSize;
 }
 
+namespace {
+
+// CreateArenaThread's real entry point: marks the new thread as "the game runs here" (so
+// include/port/alloc.h's split allocator routes its `new`s to the game heap once one exists)
+// before handing off to the caller's own start function. Heap-allocated (not stack/arena -- it
+// must outlive this function's own return, and it's tiny, one-shot, host malloc is fine for it),
+// freed by the trampoline itself once the real start function is reached.
+struct ThreadTrampolineArgs {
+    void* (*start)(void*);
+    void* arg;
+};
+
+void* ThreadTrampoline(void* p)
+{
+    ThreadTrampolineArgs* args = static_cast<ThreadTrampolineArgs*>(p);
+    void* (*start)(void*) = args->start;
+    void* arg = args->arg;
+    delete args;
+    MarkCurrentThreadGame();
+    return start(arg);
+}
+
+} // namespace
+
 bool CreateArenaThread(std::size_t stack_offset, std::size_t stack_size, void* (*start)(void*),
                        void* arg)
 {
@@ -103,8 +128,12 @@ bool CreateArenaThread(std::size_t stack_offset, std::size_t stack_size, void* (
         ok = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0;
     }
     pthread_t thread;
+    ThreadTrampolineArgs* targs = ok ? new ThreadTrampolineArgs{start, arg} : nullptr;
     if (ok) {
-        ok = pthread_create(&thread, &attr, start, arg) == 0;
+        ok = pthread_create(&thread, &attr, ThreadTrampoline, targs) == 0;
+        if (!ok) {
+            delete targs;
+        }
     }
     pthread_attr_destroy(&attr);
     return ok;
