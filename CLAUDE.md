@@ -85,7 +85,7 @@ tools/research/kit/variant.sh <unit> <variant-src> [FUNC]
 
 | Code | Compiler | Style |
 |---|---|---|
-| `src/game/`, `src/em*/`, `src/pl*/`, `src/wep*/`, `src/st*/`, `src/t_*/`, `src/Tools/`, `src/Sscrn/` | SN ProDG 3.9.3 = GCC 2.95.3 "SN BUILD v1.79", `-O2 -mfast-cast` | 4-space, `.clang-format` |
+| `src/game/`, `src/em*/`, `src/pl*/`, `src/wep*/`, `src/st*/`, `src/t_*/`, `src/tools/`, `src/tools_mod/`, `src/Sscrn/` | SN ProDG 3.9.3 = GCC 2.95.3 "SN BUILD v1.79", `-O2 -mfast-cast` | 4-space, `.clang-format` |
 | `src/lib/adx_*`, `sfd_*`, `mpv_*`, `mps_*`, `dct_*`, `gcci`, `cri_cvfs` (CRI middleware) | Metrowerks CodeWarrior 2.4.7 | vendor's tabs, leave as-is |
 | `src/lib/OS*`, `GX*`, … (Nintendo SDK) | CodeWarrior GC/1.2.5n, dolsdk2004 sources | vendor's tabs, leave as-is |
 
