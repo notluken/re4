@@ -26,8 +26,9 @@ int Espgen42_SetFreeWork(EspgenWork*, EspGenWork*, EspSeqData*, cModel*, u16, Mt
 int Espgen43_SetFreeWork(EspgenWork*, EspGenWork*, EspSeqData*, cModel*, u16, Mtx*, Vec*, Vec*, EspSeqOpt*) { return 0; }
 int Espgen45_SetFreeWork(EspgenWork*, EspGenWork*, EspSeqData*, cModel*, u16, Mtx*, Vec*, Vec*, EspSeqOpt*) { return 0; }
 
-// -- OS thread creation (function-pointer parameter) --
-int OSCreateThread(OSThread*, void* (*)(void*), void*, void*, u32, OSPriority, u16) { return 0; }
+// OSCreateThread: real semantics now in src/port/os_thread.cpp (docs/port-phase3.md's
+// continuation -- this stub returning 0 without ever starting `func` was the root cause of no
+// task's code ever running, which in turn tripped scheduler.cpp's stack-overflow guard).
 
 // -- pl_sub: function-pointer parameters --
 void SetPlDamage(cEm*, void (*)(cPlayer*)) {}

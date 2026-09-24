@@ -9,6 +9,7 @@
 #include "port/arena.h"
 #include "port/dvd.h"
 #include "port/dvd_root.h"
+#include "port/os_thread.h"
 #include "port/ptr32.h"
 
 #include <cstdio>
@@ -34,6 +35,10 @@ std::atomic<bool> g_gameThreadDone{false};
 
 void* GameThreadEntry(void*)
 {
+    // Registers this thread as the "main" OSThread identity for src/game/scheduler.cpp's task
+    // scheduler (include/port/os_thread.h) -- must happen before systemStartInit() reaches
+    // TaskSchedulerInit()/the first TaskScheduler() call inside main_game()'s frame loop.
+    re4_port::MarkCurrentThreadAsMainOSThread();
     main_game(); // never expected to return in practice (src/game/main.cpp's main() is an infinite
                  // frame loop) -- this is just the "if it somehow does" case.
     g_gameThreadDone.store(true);

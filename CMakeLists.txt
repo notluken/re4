@@ -268,6 +268,7 @@ add_library(re4_port STATIC
   src/port/arena.cpp
   src/port/alloc.cpp
   src/port/dvd_root.cpp
+  src/port/os_thread.cpp
 )
 target_include_directories(re4_port PUBLIC ${RE4_GAME_INCLUDES})
 target_compile_definitions(re4_port PUBLIC TARGET_PC)
