@@ -7,6 +7,7 @@
 #ifdef TARGET_PC
 
 #include "port/arena.h"
+#include "port/dvd_root.h"
 #include "port/ptr32.h"
 
 #include <cstdio>
@@ -42,6 +43,8 @@ void* GameThreadEntry(void*)
 
 int main(int argc, char** argv)
 {
+    re4_port::InitDvdRoot(argc, argv); // argv[1], else $RE4_DVD_ROOT, else orig/G4BE08/files
+    std::fprintf(stderr, "re4_boot: DVD root=%s\n", re4_port::GetDvdRoot());
     re4_port::InitArena(); // aborts internally on failure (see include/port/arena.h)
     std::fprintf(stderr, "re4_boot: arena base=%p size=%zu\n", re4_port::GetArenaBase(),
                  re4_port::GetArenaSize());
