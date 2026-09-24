@@ -51,18 +51,6 @@ typedef struct {
 // everything between them.
 #ifndef __GXVERT_H__
 #define __GXVERT_H__
-typedef union {
-    u8 u8;
-    u16 u16;
-    u32 u32;
-    u64 u64;
-    s8 s8;
-    s16 s16;
-    s32 s32;
-    s64 s64;
-    f32 f32;
-    f64 f64;
-} WGPipe;
 
 #ifdef TARGET_PC
 // Aurora (../aurora/lib/dolphin/gx/GXVert.cpp) provides real, external-linkage implementations of
@@ -87,21 +75,92 @@ void GXNormal3s8(s8 x, s8 y, s8 z);
 void GXTexCoord2f32(f32 s, f32 t);
 void GXPosition2u16(u16 x, u16 y);
 void GXTexCoord2s16(s16 s, s16 t);
+// GXParam1xx/GXCmd1xx: real, exported Aurora symbols (../aurora/lib/dolphin/gx/GXVert.cpp) that
+// each append one raw, appropriately-sized value to the same software GX FIFO buffer every
+// function above writes into internally (aurora::gx::fifo::write_u8/u16/u32/f32/...) -- the public
+// equivalent of a raw `GXWGFifo->field = value` write on real hardware. No same-named Aurora
+// symbol exists for a per-vertex matrix-index write (the real SDK has no dedicated GX*() entry
+// point for one either -- games write that byte straight to GXWGFifo, confirmed there is no
+// `GXMatrixIndex1x8`/similar symbol anywhere in Aurora, grepped ../aurora/include, ../aurora/lib),
+// so GXMatrixIndex1u8 (this repo's own name for that write) below routes through GXParam1u8
+// instead, which does the identical FIFO append.
+void GXParam1u8(u8 x);
+void GXParam1u16(u16 x);
+void GXParam1u32(u32 x);
+void GXParam1s8(s8 x);
+void GXParam1s16(s16 x);
+void GXParam1s32(s32 x);
+void GXParam1f32(f32 x);
+void GXCmd1u64(u64 x);
 }
 
-// GXMatrixIndex1u8 is this repo's own name for a raw one-byte FIFO write (the real SDK has no
-// dedicated GX*() entry point for a per-vertex matrix-index attribute -- games write it straight to
-// GXWGFifo); Aurora accordingly has no same-named symbol to redirect to. Not on the boot/title-
-// screen render path (only src/game/id_sys.cpp, dbmodule.cpp, esp01.cpp call it, none reached by
-// this port yet) -- left as a discarding stub for now. **TO VERIFY** once one of those call sites
-// is actually reached: needs a real route into Aurora's FIFO (no public API for that exists yet,
-// only the private lib/gx/fifo.hpp this repo cannot include without an Aurora patch).
-extern volatile WGPipe GXWGFifo[];
 static inline void GXMatrixIndex1u8(u8 idx)
 {
-    GXWGFifo->u8 = idx;
+    GXParam1u8(idx);
 }
+
+// Some units (src/game/mes.cpp's RomFont::draw()/MessageFont-family code, src/game/dbmodule.cpp)
+// bypass every GX*() vertex-write wrapper above entirely and write straight to `GXWGFifo->field`
+// themselves (the same real-hardware idiom this header's own -- now-fixed -- static inline copies
+// used) -- confirmed by grep, not assumed (`grep -rn GXWGFifo src/game`). Those call sites cannot
+// change (vendor code, byte-identical requirement) and there is no reason to hunt down every
+// current and future occurrence of this idiom individually. Instead, under TARGET_PC, `GXWGFifo`'s
+// element type itself is a set of small proxy objects whose `operator=` calls the matching
+// GXParam1xx/GXCmd1xx function above -- so `GXWGFifo->s16 = x;` (unchanged source text) now
+// genuinely appends `x` to Aurora's real FIFO, the same as if the call site had used one of the
+// GXParam1xx functions directly. `u64`/`s64` route through GXCmd1u64 (Aurora has no
+// GXParam1u64/s64 -- GXCmd1xx and GXParam1xx both call the identical aurora::gx::fifo::write_*
+// primitive, confirmed by reading ../aurora/lib/dolphin/gx/GXVert.cpp, so this is not a semantic
+// downgrade). `f64` has no real FIFO primitive at all on either real hardware or Aurora (the real
+// SDK's FIFO is 32-bit-word-oriented) and is written by nothing in this tree (confirmed by grep) --
+// its proxy aborts if ever exercised rather than silently doing the wrong thing.
+struct WGPipe {
+    struct U8Proxy {
+        void operator=(u8 v) const { GXParam1u8(v); }
+    } u8;
+    struct U16Proxy {
+        void operator=(u16 v) const { GXParam1u16(v); }
+    } u16;
+    struct U32Proxy {
+        void operator=(u32 v) const { GXParam1u32(v); }
+    } u32;
+    struct U64Proxy {
+        void operator=(u64 v) const { GXCmd1u64(v); }
+    } u64;
+    struct S8Proxy {
+        void operator=(s8 v) const { GXParam1s8(v); }
+    } s8;
+    struct S16Proxy {
+        void operator=(s16 v) const { GXParam1s16(v); }
+    } s16;
+    struct S32Proxy {
+        void operator=(s32 v) const { GXParam1s32(v); }
+    } s32;
+    struct S64Proxy {
+        void operator=(s64 v) const { GXCmd1u64(static_cast<::u64>(v)); }
+    } s64;
+    struct F32Proxy {
+        void operator=(f32 v) const { GXParam1f32(v); }
+    } f32;
+    struct F64Proxy {
+        void operator=(f64) const;
+    } f64;
+};
+extern WGPipe GXWGFifo[1];
 #else
+typedef union {
+    u8 u8;
+    u16 u16;
+    u32 u32;
+    u64 u64;
+    s8 s8;
+    s16 s16;
+    s32 s32;
+    s64 s64;
+    f32 f32;
+    f64 f64;
+} WGPipe;
+
 // The FIFO is a linker-provided absolute symbol (`GXWGFifo = 0xCC008000` in
 // config/G4BE08/ldscript.ld), the way the SDK's GXVert.h declares it for non-CodeWarrior
 // compilers. The address must be a SYMBOL_REF, not a constant: the scheduler then issues

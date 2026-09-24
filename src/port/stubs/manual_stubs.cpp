@@ -45,13 +45,9 @@ u32 SndCall__FUsUsP3VeciiP5cUnit(u16, u16, Vec*, int, int, cUnit*) { return 0; }
 
 } // extern "C"
 
-// -- GXWGFifo: the GX write-gather pipe, normally a linker-provided absolute symbol at a real
-// hardware MMIO address (config/G4BE08/ldscript.ld, see include/gx.h's comment). No such address
-// exists on a hosted macOS process; a plain zeroed object satisfies the link (nothing on this boot
-// path is expected to actually drive the GP FIFO through it -- Aurora's GX owns real vertex
-// submission). TO VERIFY once GX submission is wired up for real. Plain C++ linkage (gx.h declares
-// it outside any `extern "C"` block), unlike the sound/OS functions above.
-volatile WGPipe GXWGFifo[1];
+// -- GXWGFifo: superseded by a real implementation, src/port/gx_wgfifo.cpp (docs/port-boot.md
+// section 30) -- every `GXWGFifo->field = v` write now genuinely reaches Aurora's GX FIFO via a
+// GXParam1xx()/GXCmd1xx() call, not a discarded plain global.
 
 // -- PlReloadSpeedTbl / PlShotFrameTbl: 2-D const f32 tables (include/player.h), normally defined
 // in pl_class.cpp (excluded, cmake/boot_exclude.txt). Zero-filled placeholders -- gameplay-wrong,

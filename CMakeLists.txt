@@ -452,7 +452,8 @@ if (RE4_BUILD_BOOT)
   # and ahead of `__re4arena` (which stays last -- it lives inside the re4_port static library,
   # linked after every source listed directly here).
   add_executable(re4_boot src/port/lowmem.cpp src/port/game_stack.cpp src/port/boot_main.cpp
-    src/port/mem1.cpp src/port/dvd.cpp src/port/vi.cpp $<TARGET_OBJECTS:re4_boot_game>)
+    src/port/mem1.cpp src/port/dvd.cpp src/port/vi.cpp src/port/gx_wgfifo.cpp
+    $<TARGET_OBJECTS:re4_boot_game>)
   target_include_directories(re4_boot PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
   target_compile_definitions(re4_boot PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_boot PRIVATE ${RE4_GAME_OPTIONS})
