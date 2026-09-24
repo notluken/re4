@@ -33,10 +33,15 @@ What had to be learned to get there:
   `CPP.exe`, `NgcAs.exe` and `ngcld.exe` under wibo, which needs real x86 segmentation. Under amd64
   emulation on Apple Silicon it crashes: Rosetta `invalid gdt selector index 4`, QEMU user-mode SIGSEGV
   on every unit.
-- **Case-sensitive filesystem is required.** `src/Tools/` (3-line module wrappers) and `src/tools/`
-  (shared bodies) are distinct directories in git. On APFS they fold into one, so a macOS checkout shows
-  `src/Tools/{t_prim,t_util,tools}.cpp` as modified (they hold the `src/tools/` bytes) and dtk warns about
-  11 such pairs. Never commit those three "changes"; never build from a bind-mounted macOS tree.
+- **Case-sensitive filesystem was required; no longer, as of the `src/Tools` → `src/tools_mod`
+  rename (below).** `src/Tools/` (3-line module wrappers) and `src/tools/` (shared bodies) used to be
+  distinct directories in git that folded into one on APFS, so a macOS checkout showed
+  `src/Tools/{t_prim,t_util,tools}.cpp` as modified (they held the `src/tools/` bytes). Verified with
+  `git ls-files | tr A-Z a-z | sort | uniq -d` (empty output = no case-colliding path anywhere in the
+  tree, repo-wide, not just this pair) after the rename. `tools/project.py`'s `check_path_case` (a
+  generic case-insensitive-filesystem safety net used for every unit's `src_path`, unrelated to this
+  specific pair) stays, since it is still useful against a future accidental collision. The x86_64
+  hardware requirement above is independent of this and still applies.
 - **`ulimit -n`.** `ngcld.exe` opens each of `main.elf`'s 674 inputs twice and Docker's default soft
   limit (1024) runs out: wibo logs `Unhandled errno 24`, ngcld exits 99 with no message. The entrypoint
   raises it to 65536.
@@ -72,7 +77,7 @@ Each phase ends with the original build still at 115/115 OK (Docker, clean `buil
 
 Exit: every push gets an automatic byte-identity check.
 
-### Phase 1 — a host build that compiles (2026-09-24, two slices)
+### Phase 1 — a host build that compiles (2026-09-24, three slices)
 
 - **Aurora**: cloned into `../aurora`, pinned at `9c0bf66f1ed3276b60ad1cd746e2fb48818a6298` (main,
   2026-09-23). `cmake -S . -B build -DAURORA_ENABLE_TESTS=OFF -DAURORA_ENABLE_EXAMPLES=OFF` then
@@ -83,27 +88,63 @@ Exit: every push gets an automatic byte-identity check.
   160 MB. Not yet wired into the game-code CMake build (that's Phase 4, GX/PAD/DVD/CARD).
 - **`CMakeLists.txt`** (top level, ignored by `configure.py`/`ninja`; build tree `build-pc/`,
   gitignored; `CMAKE_EXPORT_COMPILE_COMMANDS ON` for clangd, not committed — see the file's header
-  comment for how to point an editor at it): four targets, `re4_game_core` (8 representative
-  `src/game` units: `model.cpp` object chain, `light.cpp` manager consumer, `math_sub.cpp`/
-  `math_support.c` math, `dvd.cpp`/`read.cpp` loader, `cString.cpp` utility, `item.cpp` pool),
-  `re4_game_all` (every other `src/game/*.c(pp)` except the two whole-function-asm units),
-  `re4_rel_all` (every REL module unit — `em*`/`pl*`/`wep*`/`st*`/`Sscrn`/`Tools`/`t_*`, plus the
-  shared `st/`, `wep/` sources — from `cmake/gen_rel_sources.py`, which reads
-  `config/G4BE08/{config.yml,modules.py}` the same way `configure.py`'s own REL object loop does).
-  The last two are error-inventory-only (`-- -k 0`). Same include paths and version defines
-  `configure.py` uses for the ProDG game units, `-DTARGET_PC` added.
-- **The `Tools`/`tools` APFS fold, concretely**: three filenames exist in both `src/Tools/` (the
-  "Tools" REL module's own 3-line wrappers) and `src/tools/` (shared bodies compiled into the `t_*`
-  tool modules) — `t_prim.cpp`, `t_util.cpp`, `tools.cpp`. On a case-insensitive filesystem they are
-  the same directory entry, so reading `src/Tools/t_prim.cpp` on this host silently returns whichever
-  content last got checked out — currently the `src/tools/` (shared-body) bytes, which is *wrong* for
-  the `Tools` module and is exactly why `git status` always shows those 3 paths modified (pre-existing,
-  documented in section 1; never stage them). `cmake/gen_rel_sources.py` excludes the `Tools`-module
-  copies of these 3 units rather than guessing which content is on disk (see its docstring); every
-  other unit, including the correctly-resolving `src/tools/` shared copies used by `t_camera`/
-  `t_emlist`/..., is unaffected, since no other filename collides. One real edit was needed in the
-  shared `src/tools/t_prim.cpp` itself (a `.section` pragma, see below) — made and verified through
-  the lowercase path only, `git add src/tools/t_prim.cpp` explicitly, never the `Tools/` spelling.
+  comment for how to point an editor at it): four targets, `re4_game_core` (7 representative
+  `src/game` units: `model.cpp` object chain, `light.cpp` manager consumer, `math_sub.cpp` math,
+  `dvd.cpp`/`read.cpp` loader, `cString.cpp` utility, `item.cpp` pool — no `src/game/*.c` unit, see
+  the libc point below), `re4_game_all` (every other `src/game/*.cpp` except the two
+  whole-function-asm units), `re4_rel_all` (every REL module unit — `em*`/`pl*`/`wep*`/`st*`/
+  `Sscrn`/`Tools`/`t_*`, plus the shared `st/`, `wep/`, `tools/` sources — from
+  `cmake/gen_rel_sources.py`, which reads `config/G4BE08/{config.yml,modules.py}` the same way
+  `configure.py`'s own REL object loop does). The last two are error-inventory-only (`-- -k 0`).
+  Same include paths and version defines `configure.py` uses for the ProDG game units, `-DTARGET_PC`
+  added.
+- **The `Tools`/`tools` APFS fold — fixed by renaming `src/Tools` to `src/tools_mod` (`git mv`)**.
+  Three filenames used to exist in both `src/Tools/` (the "Tools" REL module's own 3-line wrappers)
+  and `src/tools/` (shared bodies compiled into the `t_*` tool modules) — `t_prim.cpp`, `t_util.cpp`,
+  `tools.cpp`. On a case-insensitive filesystem those were the same directory entry, so reading
+  `src/Tools/t_prim.cpp` returned whichever content last got checked out.
+  - **Byte-impact check, before renaming anything**: every path string that reaches output bytes
+    (`#line N "D:/Bio4/Prog/<file>.cpp"`, ~700 of them repo-wide) uses the vendor's original
+    `D:/Bio4/Prog/` tree, never the git repo's directory name — `grep -rn '"[^"]*[Tt]ools/[^"]*"'
+    src/ include/` turned up nothing but one `#include "tools/t_prim.cpp"` (a compile-time directive,
+    not embedded text) and one comment. So a directory rename changes zero output bytes, as long as
+    the `#include`s that reference the moved directory are updated and no `#line`/assert string is
+    itself edited.
+  - **Which directory, and why**: `config/G4BE08/modules.py`'s REL unit tuples are
+    `(unit_name, first_function, source_override, [data_starts])`; `splits.txt`/`sym_map.tsv`/
+    `symbols.txt` (generated, config/G4BE08/modules/<mod>/) key everything off `unit_name`, a label
+    independent of the actual file on disk. Renaming `src/tools` (shared, referenced by ~30
+    already-explicit `source_override` strings across nine module blocks) would mean editing existing
+    string values scattered through the whole file. Renaming `src/Tools` (the "Tools" module's own
+    17 files, all but 3 defaulting `source_override` to `None` i.e. "same as unit_name") means adding
+    one explicit override per entry, but every edit lives in one contiguous 24-line block — smaller,
+    more easily verified blast radius. Picked `src/Tools` → `src/tools_mod`; `unit_name` strings
+    (`"Tools/t_prim.cpp"`, ...) are untouched, so `splits.txt`/`sym_map.tsv`/`symbols.txt` needed no
+    regeneration (`tools/gen_rel_config.py` was not run — nothing they store changed).
+  - **The move itself**: the 14 non-colliding filenames (`db_toolbase.cpp`, `t_atari.cpp`, ...) took
+    a plain `git mv`. The 3 colliding filenames could not: `git mv src/Tools/t_prim.cpp
+    src/tools_mod/t_prim.cpp` would `rename(2)` the one physical inode both `src/Tools/t_prim.cpp`
+    and `src/tools/t_prim.cpp` pointed to, deleting `src/tools/t_prim.cpp` out from under its own
+    git path. Instead: `git rm --cached` the old `src/Tools/` path (index only, working tree
+    untouched), `git show HEAD:src/Tools/<f> > src/tools_mod/<f>`, `git add` the new path — writes
+    the correct bytes to the new location from git's object store, never touches the shared inode.
+    Verified after: `git ls-files src/Tools/` empty, `git diff --stat src/tools/` empty, all 17
+    `src/tools_mod/*.cpp` byte-identical to their pre-rename `git show HEAD:src/Tools/*.cpp` blobs,
+    `git status` clean except `.claude/` — the three phantom-modified paths are gone (there is no
+    `src/Tools/` left to be phantom-modified). One accidental near-miss during this work (an earlier,
+    now-reverted pass had globbed the folded `src/Tools/t_prim.cpp` path before this rename existed,
+    which would have written a wrongly-labeled edit; caught by the diff size and reverted before
+    anything was staged — see `docs/port-phase1-errors.md` for the detail) is why this rename went
+    through the untracked-then-rewrite path above instead of a plain `mv`.
+  - `config/G4BE08/modules.py`: the "Tools" module's 17 units, plus the one other cross-reference
+    (`t_event/db_toolbase.cpp`'s override), now point their `source_override` at `tools_mod/<f>.cpp`.
+  - `cmake/gen_rel_sources.py`: the `Tools`-unit skip list is gone, nothing is excluded from
+    `re4_rel_all` any more.
+  - `tools/project.py`'s `check_path_case` comment (the function itself, a generic case-insensitive-
+    filesystem safety net for every unit's `src_path`, is unrelated and stays) no longer cites this
+    specific pair.
+  - `git ls-files | tr A-Z a-z | sort | uniq -d` is empty (repo-wide, not just this pair) — see
+    docs/port.md section 1 for what that means for the original Docker build.
 - **Headers/sources fixed this round**, all behind `TARGET_PC`, chosen the same way as before (each
   either unblocks many units or is a one-line mechanical pattern):
   - `cManager.h`/`esp.h`/`card.h`/`cam_extra.h`/`main_mem.cpp`/`esp.cpp`: placement/member/replacement
@@ -134,30 +175,52 @@ Exit: every push gets an automatic byte-identity check.
     compound-literal-address idiom (GNU C, several `em*`/`wep*` units) is legal for GCC 2.95 and alive
     for the enclosing full expression; clang's default diagnostic for it is a hard error, not a
     warning, hence the flag rather than a source change.
+  - `st1/r113.cpp`/`st1/r11d.cpp`: their `asm("" : "+f"(spd)); // COMPILER-DIFF: candidate #9` (an
+    empty-template asm — no instruction, a pure GameCube scheduling barrier) is now
+    `ASM_BARRIER_F(spd)`, a macro defined once near the top of each file (before that file's single
+    `#line` directive, so nothing after it shifts) that expands to the same `asm(...)` normally and
+    to nothing under `TARGET_PC`; the `COMPILER-DIFF` comment stays on the same, unmoved line. Verified
+    by keeping the physical-line gap between each file's `#line` directive and the `ASM_BARRIER_F`
+    call site identical before/after (62 and 325 lines respectively) and rechecked with `bytecmp.py`
+    on the remote host. A third, superficially similar site (`st2/r203.cpp`) was left alone: its two
+    `asm("" : "=r"(pin))`/`asm("" : "=f"(fpin))` lines are tied to `register int pin asm("r29")` /
+    `register f32 fpin asm("fr31")` immediately above them — real PPC register pinning, Phase 5
+    material, not a standalone scheduling barrier; wrapping just the barrier lines would not have
+    fixed the unit anyway.
+- **libc: `src/game`'s newlib reimplementation is excluded from every CMake target, not attempted.**
+  Every `src/game/*.c` file (58 of them: `printf.c`, `fprintf.c`, `sprintf.c`, `sscanf.c`, `memcpy.c`,
+  `strlen.c`, `math_support.c` built for `vfprintf`'s float conversion, ...) opens with a
+  `newlib 1.8.2 libc/...` provenance comment — the game's own C runtime, built against a custom
+  `newlib_stdio.h`/`_reent`/`FILE` layout that conflicts with the host's `<stdio.h>`/`<string.h>`.
+  The port uses the host's system libc instead of building any of it (no REL module references a
+  `src/game/*.c` file either, confirmed against `modules.py`). `re4_game_core` accordingly has no C
+  representative unit any more — `src/game/*.c` is entirely newlib, so there is no non-libc `.c` file
+  left to pick one from.
 - **Result**: `re4_game_core` compiles clean except `math_sub.cpp` (paired-single asm) and
   `model.cpp` (pointer-to-int casts) — both genuine Phase 2/5 material, not header bugs.
-  `re4_game_all`: **312 / 351 units (~89%) compile clean**, 39 fail. `re4_rel_all`: **264 / 302 units
-  (~87%) compile clean**, 38 fail (out of 305 REL units total; 3 skipped, see the Tools/tools point
-  above). Full categorized inventory of both remainders, with every deferral's reasoning:
-  `docs/port-phase1-errors.md`.
+  `re4_game_all`: **258 / 293 `.cpp` units (~88%) compile clean**, 35 fail (down from 351 units
+  counted before the newlib `.c` exclusion — not a regression, a narrower and more honest count).
+  `re4_rel_all`: **268 / 305 units (~88%) compile clean**, 37 fail — all 305 REL units are now
+  attempted (the Tools/tools rename removed the 3-unit exclusion). Full categorized inventory of both
+  remainders, with every deferral's reasoning: `docs/port-phase1-errors.md`.
 
-**Phase 1 exit** (all four conditions now hold):
-1. `src/game` compiles (not links) on macOS arm64 for a representative slice (`re4_game_core`, 6/8
-   units clean) and the wide sweep (`re4_game_all`, 312/351).
-2. Every REL module compiles for at least its own unit boundaries where the source is host-clean
-   (`re4_rel_all`, 264/302; the `Tools`-module APFS-fold exclusion is the only unit skipped outright,
-   not attempted and failed).
+**Phase 1 exit** (all four conditions hold):
+1. `src/game` compiles (not links) on macOS arm64 for a representative slice (`re4_game_core`, 5/7
+   units clean) and the wide sweep (`re4_game_all`, 258/293 `.cpp` units; newlib `.c` units excluded
+   by design, see the libc point above).
+2. Every REL module compiles for its own unit boundaries where the source is host-clean
+   (`re4_rel_all`, 268/305 — every unit is attempted, none skipped).
 3. Every remaining failure is categorized in `docs/port-phase1-errors.md` with a named cause and an
    explicit phase: **Phase 2** (pointer-to-int/int-to-pointer casts and struct-size assumptions in
-   loaded/relocated data — `model.cpp`, `sce_at.cpp`, `sce_sys.cpp`, `st/em_wrap.cpp`, the
-   `0x320 - sizeof(cModel)` padding units, ...), **Phase 5** (real PPC paired-single/GQR asm —
-   `math_sub.cpp`'s `SQRTF`/`SINF`/`COSF`, `dbmodule.cpp`'s `PSQ_L_S16`/`PSQ_L_U8_TO` family,
-   `em2d.cpp`'s `register ... asm("fr0")`, ...), or **later, unscoped** (the four newlib libc
-   reimplementations `printf.c`/`fprintf.c`/`sprintf.c`/`sscanf.c`, which need a real libc-shim
-   decision, and the two SDK-shaped call sites `AddOtWorldPos`/`VISetPostRetraceCallback` that are
-   Aurora's/Phase 4's job).
-4. Nothing in this slice hacked around a Phase 2/3/5 problem to make a unit compile: every asm/cast
-   left failing is left failing, with its reasoning on record instead.
+   loaded/relocated data — `model.cpp`, `sce_at.cpp`, `sce_sys.cpp`, `st/em_wrap.cpp`, most `rNNN.cpp`
+   rooms, the `0x320 - sizeof(cModel)` padding units, ...), **Phase 5** (real PPC paired-single/GQR
+   asm — `math_sub.cpp`'s `SQRTF`/`SINF`/`COSF`, `dbmodule.cpp`'s `PSQ_L_S16`/`PSQ_L_U8_TO` family,
+   `em2d.cpp`'s `register ... asm("fr0")`, `st2/r203.cpp`'s register-pinned barrier pair, ...), or
+   **Phase 4** (the two SDK-shaped call sites `AddOtWorldPos`/`VISetPostRetraceCallback`).
+4. Nothing in this slice hacked around a Phase 2/5 problem to make a unit compile: every asm/cast left
+   failing is left failing, with its reasoning on record instead. The one asm rewrite this round
+   (`ASM_BARRIER_F`) is a no-op scheduling barrier with zero semantic content, not a stand-in for real
+   hardware behaviour.
 
 Exit (original wording, still true): `src/game` compiles (not links) on macOS arm64; the error
 inventory for phases 2-3 is written down. Now additionally true for the REL modules.
