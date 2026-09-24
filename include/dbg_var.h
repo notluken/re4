@@ -3,6 +3,16 @@
 
 #include "types.h"
 
+// cVarLoop's out-of-class members below call cVarRange<T>'s members unqualified. GCC 2.95 resolves
+// those into the dependent base at first-phase lookup (non-conformant, but that is what the
+// original text relies on); ISO two-phase lookup (clang) requires an explicit `this->`. This macro
+// is empty for the original target (textually unchanged) and `this->` under TARGET_PC.
+#ifdef TARGET_PC
+#define DBG_VAR_BASE this->
+#else
+#define DBG_VAR_BASE
+#endif
+
 // Range-limited variable of the debug tools (db_light.cpp instantiates cVarLoop<u8>). The value and
 // its bounds come first, the vptr after them (GCC 2.95 layout). The members are defined out of class:
 // the original calls init/limitUpper/limitLower out of line from the constructor (implicitly inline
@@ -72,10 +82,10 @@ public:
 template <class T>
 cVarLoop<T>::cVarLoop(const T& lo, const T& hi, const T& v)
 {
-    init(lo, hi);
-    val = v;
-    val = limitUpper(0);
-    val = limitLower(0);
+    DBG_VAR_BASE init(lo, hi);
+    DBG_VAR_BASE val = v;
+    DBG_VAR_BASE val = DBG_VAR_BASE limitUpper(0);
+    DBG_VAR_BASE val = DBG_VAR_BASE limitLower(0);
 }
 
 template <class T>
@@ -83,9 +93,9 @@ int cVarLoop<T>::limitUpper(int d)
 {
     // `range` before `v` (limitLower declares them the other way round): the declaration order
     // decides the load / compare schedule of the entry block.
-    int range = upper - lower + 1;
-    int v = val + d;
-    while (v > upper) {
+    int range = DBG_VAR_BASE upper - DBG_VAR_BASE lower + 1;
+    int v = DBG_VAR_BASE val + d;
+    while (v > DBG_VAR_BASE upper) {
         v -= range;
     }
     return v;
@@ -94,12 +104,14 @@ int cVarLoop<T>::limitUpper(int d)
 template <class T>
 int cVarLoop<T>::limitLower(int d)
 {
-    int v = val + d;
-    int range = upper - lower + 1;
-    while (v < lower) {
+    int v = DBG_VAR_BASE val + d;
+    int range = DBG_VAR_BASE upper - DBG_VAR_BASE lower + 1;
+    while (v < DBG_VAR_BASE lower) {
         v += range;
     }
     return v;
 }
+
+#undef DBG_VAR_BASE
 
 #endif

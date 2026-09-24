@@ -247,8 +247,14 @@ inline void cDbgOkCancelWindow::Init(int wx, int wy, const char* name)
     m_nBut = 0;
     do { } while (0); // COMPILER-DIFF: #13 (sched region split)
     {
+#ifdef TARGET_PC
+        // Not hardware: the PPC `li %0,0` below only exists to force GCC 2.95 to schedule the zero
+        // as a real register write instead of folding it away; a plain store is host-equivalent.
+        cDbgButton* z = 0;
+#else
         cDbgButton* z;
         asm("li %0,0" : "=r"(z) : "m"(m_wx)); // COMPILER-DIFF: #13 (asm-emitted zero, reload-placed li)
+#endif
         m_pEndBut = m_pStartBut = m_pCurrentBut = z;
     }
     AddButton(1, 2, " [OK] ", 0, 0, 0, 0);

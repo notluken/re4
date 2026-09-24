@@ -12,7 +12,11 @@
 // t_esp/db_window.cpp (DB_MOUSE/DB_KEYBORD/DB_PRIM_ARRAY). The drawing/input bridge (DB_DrawBox,
 // DB_DrawString, DB_GetKeybordData...) is t_esp/db_port.cpp. Field names are ours.
 
+#ifndef TARGET_PC
 extern "C" unsigned int strlen(const char* s);
+#else
+#include <cstring>
+#endif
 extern "C" char* strcpy(char* dst, const char* src);
 extern "C" void exit(int) __attribute__((noreturn));
 

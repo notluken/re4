@@ -4,7 +4,11 @@
 #include "types.h"
 #include "db_log.h"
 
+#ifndef TARGET_PC
 extern "C" unsigned int strlen(const char* s);
+#else
+#include <cstring>
+#endif
 extern "C" char* strcpy(char* dst, const char* src);
 
 // Debug tool window/button base (D:/Bio4/Prog/db_toolbase.h; bodies in Tools/db_toolbase.cpp, the same
