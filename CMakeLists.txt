@@ -63,13 +63,14 @@ set(RE4_GAME_OPTIONS
 )
 
 # --- re4_game_core: a small representative slice of src/game (Phase 1 goal: compiles, not links) ---
-# One from the object chain (cCoord/cModel), one cManager<T> consumer, math (C++ and C), the DVD
-# loader and its higher-level reader, and a plain utility class.
+# One from the object chain (cCoord/cModel), one cManager<T> consumer, math (C++), the DVD loader
+# and its higher-level reader, and a plain utility class. No src/game/*.c file: every single one is
+# a newlib libc reimplementation (see RE4_LIBC_UNITS below) and the port uses the system libc, not a
+# C representative from this tree.
 set(RE4_GAME_CORE_SOURCES
   src/game/model.cpp        # object chain: cCoord, cModel, cModelInfo, PartsMgr/ModInfoMgr
   src/game/light.cpp        # cManager<T> consumer (light pool)
   src/game/math_sub.cpp     # math (C++)
-  src/game/math_support.c   # math (C, wraps lib/fdlibm/*.c)
   src/game/dvd.cpp          # DVD loader
   src/game/read.cpp         # higher-level file reader built on dvd.cpp
   src/game/cString.cpp      # plain utility class
@@ -81,15 +82,20 @@ target_include_directories(re4_game_core PRIVATE ${RE4_GAME_INCLUDES})
 target_compile_definitions(re4_game_core PRIVATE ${RE4_GAME_DEFINES})
 target_compile_options(re4_game_core PRIVATE ${RE4_GAME_OPTIONS})
 
-# --- re4_game_all: every src/game/*.c(pp) as its own OBJECT library ---
+# --- re4_game_all: every src/game/*.cpp as its own OBJECT library ---
 # Not meant to succeed yet: build with `-- -k 0` (Ninja) so one unit's errors don't stop the rest,
 # and read the diagnostics to write docs/port-phase1-errors.md. `game/memset_2.cpp` and
 # `game/yz2asm.cpp` are the two Capcom whole-function-asm units (tools/asmcheck.py ASM_BODIED);
 # they are real vendor assembly and not expected to translate, so they are skipped here too.
+#
+# Every src/game/*.c file (not *.cpp) is excluded outright, not attempted: each one opens with a
+# "newlib 1.8.2 libc/..." provenance comment (printf.c, fprintf.c, sprintf.c, sscanf.c, memcpy.c,
+# strlen.c, math_support.c built for vfprintf's float conversion, ...) -- the game's own reimplementation
+# of the C runtime against a custom newlib_stdio.h/_reent/FILE layout. The port uses the host's
+# system libc instead of building any of this; see docs/port.md.
 if (RE4_PC_BUILD_ALL_GAME)
   file(GLOB RE4_GAME_ALL_SOURCES CONFIGURE_DEPENDS
     ${RE4_ROOT}/src/game/*.cpp
-    ${RE4_ROOT}/src/game/*.c
   )
   list(FILTER RE4_GAME_ALL_SOURCES EXCLUDE REGEX ".*/(memset_2|yz2asm)\\.cpp$")
 
@@ -107,12 +113,12 @@ endif()
 # source, the first module that owns it, so a shared source (st/em_wrap.cpp, wep/pl_handgun.cpp,
 # ...) gets a real -DREL_MODULE=<mod> instead of a placeholder (it is only compiled once here,
 # where configure.py compiles it once per owning module -- fine for an error inventory, not for
-# matching). Three "Tools" module units (Tools/t_prim.cpp, Tools/t_util.cpp, Tools/tools.cpp) are
-# skipped: on a case-insensitive filesystem (APFS) src/Tools/ and src/tools/ are the same directory,
-# and those three filenames also exist under src/tools/ with different (shared-body) content: this
-# host cannot tell the two apart by path, so rather than silently compile the wrong one under the
-# right name, gen_rel_sources.py leaves them out (see its docstring) and this comment is the
-# "excluded with a note" the port rules ask for instead of a rename/workaround.
+# matching). Every REL unit is included: the "Tools" module's own units (Tools/t_prim.cpp,
+# Tools/t_util.cpp, Tools/tools.cpp) used to collide on a case-insensitive filesystem with three
+# same-named, differently-bodied files under src/tools/ (the shared debug-editor sources); the
+# Tools-module files now live in src/tools_mod/ (git mv + a matching config/G4BE08/modules.py
+# source-override update, unit names unchanged), so there is no longer a collision -- see
+# docs/port.md, "the Tools/tools APFS fold".
 option(RE4_PC_BUILD_ALL_REL "Add re4_rel_all: every REL module unit as its own OBJECT library, -k-style, error inventory only" ON)
 if (RE4_PC_BUILD_ALL_REL)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
