@@ -1,0 +1,19 @@
+# The repo is bind-mounted at run time, not copied into the image -- this only trims the
+# build context (Dockerfile + docker-entrypoint.sh need none of this), and guards against
+# ever accidentally COPYing game assets into an image.
+.git
+orig/
+build/
+*.iso
+*.gcm
+__pycache__/
+*.pyc
+.ninja_deps
+.ninja_log
+build.ninja
+objdiff.json
+compile_commands.json
+tools/sn-gcc/src/
+tools/sn-gcc/obj/
+tools/sn-gcc/cc1
+tools/sn-gcc/cc1plus
