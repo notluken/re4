@@ -32,13 +32,35 @@
 
 #include <pthread.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
 namespace re4_port {
 
 std::uintptr_t g_base = 0;
+
+// See include/port/ptr32.h's RE4_PORT_CHECK -- out-of-line so ptr32.h itself (force-included into
+// every re4_boot_game TU) doesn't need <thread>/<chrono>.
+void PortCheckFail(const char* what, const void* addr, std::uintptr_t base)
+{
+    std::fprintf(stderr,
+                 "re4_port: %s (%p) is outside the compressed-handle window (g_base=0x%llx) -- "
+                 "aborting instead of returning a corrupt GC handle (docs/port-boot.md section 28)\n",
+                 what, addr, static_cast<unsigned long long>(base));
+    // RE4_PORT_PAUSE_ON_ABORT (docs/port-boot.md section 29): instead of aborting, park this thread
+    // forever so the process (and its window, if one is open) stays alive long enough for an
+    // external `screencapture` to catch it -- a debugging aid only, never set by default.
+    if (std::getenv("RE4_PORT_PAUSE_ON_ABORT") != nullptr) {
+        std::fprintf(stderr, "re4_port: RE4_PORT_PAUSE_ON_ABORT set -- pausing instead of aborting\n");
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::seconds(3600));
+        }
+    }
+    std::abort();
+}
 
 namespace {
 
@@ -131,6 +153,11 @@ void InitArena()
 void* GetArenaBase()
 {
     return s_arena;
+}
+
+void* GetTaskStackPoolBase()
+{
+    return s_arena + kArenaSize - kTaskStackPoolSize;
 }
 
 std::size_t GetArenaSize()

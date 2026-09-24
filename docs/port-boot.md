@@ -1523,3 +1523,111 @@ rebuilt and rerun this pass, both green. Only `src/game/libgpu.cpp` and `src/gam
 files outside `src/port/`/`include/port/` -- both changes are fully `#ifdef TARGET_PC`-guarded, no
 `#line`-tracked region moved (confirmed by reading the diff directly, not assumed) -- remote
 matching-build verification below.
+
+## 29. Coordinator follow-up: NDEBUG-independent checks, real per-task machine stacks, in-process screenshot (2026-09-24)
+
+### 1. `GC32()`/`GCPTR()` bounds checks no longer depend on `NDEBUG`
+
+`include/port/ptr32.h`'s `assert()`s silently compiled out under `NDEBUG` (`RE4_GAME_DEFINES` sets it
+unconditionally) -- exactly what hid section 28's root cause. Replaced with `RE4_PORT_CHECK` (default
+on, `-DRE4_PORT_CHECKS=0` to disable), which calls `re4_port::PortCheckFail()` -- logs the offending
+pointer/handle and `g_base`, then `std::abort()`s (or, under `RE4_PORT_PAUSE_ON_ABORT`, parks the
+thread forever instead -- see part 4). Defined out-of-line (`src/port/arena.cpp`), not inline in the
+header: `ptr32.h` is force-included (`-include`) into every `re4_boot_game` TU, and an inline
+definition needing `<thread>`/`<chrono>` transitively pulled in libc++'s own `<new>`/`<cmath>` ahead of
+this tree's vendor shadow declarations (`include/cManager.h`'s placement `operator new`,
+`include/math_sub.h`'s `fabsf`) -- a real build break, confirmed the hard way, fixed by moving the
+definition to a normal (not force-included) TU.
+
+Turning this on immediately found two more real, previously-silent bugs (exactly the point of the
+exercise):
+
+- **`src/game/file.cpp`'s `usb_buf = (void*) 0x81800000;`** -- a global variable's own static
+  initializer, which runs during C++ global-constructor time, *before* `main()`/`InitArena()` ever
+  executes -- calls `GCPTR()` with `g_base` still `0`. Confirmed this specific global is dead
+  (`grep -n usb_buf src/game/file.cpp` shows the declaration and nothing else -- never read). This is
+  a distinct hazard from the out-of-window corruption case (a static-initialization-order artifact,
+  not a corrupt handle), so it is NOT a hard abort: `GC32()`/`GCPTR()` now special-case `g_base == 0`
+  with a one-time warning (`RE4_PORT_WARN_IF_UNINITIALIZED`) and a harmless fallback value (0 /
+  reinterpret the raw handle), instead of treating every fixed-GC-address global initializer in the
+  whole tree as a hard boot failure regardless of whether anything ever reads the result.
+- **The DVD file-system-table (FST) address** -- `FST Address = 0x...`, then `GC32()` aborts on a
+  pointer like `0x92d640000..0x9ef640000` (varies per ASLR run) against `g_base` around `0x81...` --
+  a genuine, real out-of-window pointer, **not fixed this pass**. This is new/renamed territory:
+  docs/port-boot.md section 2/3 already flagged "`Dvd.SizeTableRead()`'s literal file path and record
+  format" and the DVD size table's byte-swap-at-load step as **TO VERIFY**/unimplemented -- this is
+  that same gap, now surfaced as a hard, reproducible abort instead of a silent corruption that used
+  to let boot continue (apparently harmlessly, by luck) past it. **Current blocker, not root-caused
+  this pass** (budget): whoever picks this up next should read `src/game/dvd.cpp`'s FST-address
+  computation (search for `"FST Address"` -- the log line above) and check whether it needs the same
+  byte-swap-at-load treatment as `CRoomInfo`/the title archive (Phase 3, docs/port-phase3.md) before
+  its bytes are used as a pointer/offset.
+
+### 2. Real per-task machine stacks: root-caused and fixed
+
+`pthread_attr_setstack()` on macOS requires both the stack address and size to be page-aligned
+(16 KiB) -- confirmed by reading Apple's own requirement, not guessed. Every one of the vendor's own
+per-task stack sizes (`GetStackSize()`, `src/game/scheduler.cpp`: `0x1800`/`0x2000`/`0x3000` bytes,
+the original PPC target's tiny stack budget) is neither page-aligned nor page-sized, and the buffer
+itself (`MEM_ALLOC`'d, sub-sliced per task) isn't guaranteed page-aligned either -- so it failed for
+every task thread, every run, deterministically, not intermittently.
+
+Fixed per the coordinator's explicit design (no host-stack fallback for a game thread): a new
+dedicated pool, `include/port/arena.h`'s `kTaskStackSlotSize` (1 MiB) x `kTaskStackSlots` (18,
+matching `include/scheduler.h`'s `TASK_NUM`) at the very top of the 1 GiB arena
+(`GetTaskStackPoolBase()`) -- `src/port/mem1.cpp`'s `OSSetArenaHi()` now excludes it, so the game's own
+heap allocator never hands out memory a running task thread's machine stack is using. `os_thread.cpp`'s
+`OSCreateThread` assigns one slot per distinct `OSThread*` it ever sees (`AssignTaskStackSlot()`,
+`g_taskStackSlots`) and calls `CreateThreadOnStack()` on that slot; the game's own stack buffer
+(`stack`/`stackSize` parameters) is still used unchanged for `thread->stackBase`/`stackEnd` and the
+vendor's own `StackOverflowCheck()` guard-word bookkeeping -- the real host execution stack and the
+game-visible "logical" stack size are now two different things by design (real hardware doesn't need
+this distinction; this host does). If a slot's `pthread_attr_setstack()` still somehow fails, or the
+pool's 18 slots are ever exhausted, this aborts loudly instead of falling back to an unsafe host stack
+(`std::abort()`, matching the coordinator's instruction exactly).
+
+**Verified**: rebuilding and rerunning shows no more `pthread_attr_setstack failed` lines for task
+threads (previously printed twice per run, for the two task threads reached before the earlier
+blocker).
+
+### 3. GX array 24 ("indexed XF load from unmapped array"): not reached this pass
+
+The coordinator's hypothesis (array 24 = `GX_LIGHT_ARRAY`, `GX_VA_POS=9..GX_VA_TEX7=20`,
+`POS_MTX=21`/`NRM_MTX=22`/`TEX_MTX=23`/`LIGHT=24`) was not checked this pass: part 1's stricter,
+NDEBUG-independent `GC32()`/`GCPTR()` checks surfaced the FST-address abort (part 1, above) *earlier*
+in the boot sequence than the array-24 blocker, so this run no longer reaches it at all. Whoever
+un-blocks the FST-address issue will reach array-24 again and can pick up the coordinator's specific
+lead then (check `GXSetArray(GX_LIGHT_ARRAY, ...)` call sites and whether the game bypasses `GX*`
+wrapper functions and writes the FIFO directly via `GXWGFifo`/the write-gather pipe -- docs/port-boot.md
+section 7 already flags `GXWGFifo` as stubbed as a 1-element array with no real Aurora backing, exactly
+the kind of gap that would produce this symptom if any vendor code pokes it directly instead of going
+through `GXSetArray()`). Not investigated further this pass -- explicitly deferred, not silently
+dropped.
+
+### 4. In-process screenshot: implemented, and the window is confirmed to render real content
+
+Two new, opt-in (env-var-gated, never on by default) mechanisms, both in `src/port/vi.cpp` /
+`include/port/ptr32.h`:
+
+- `RE4_PORT_SCREENSHOT=<path>` (+ optional `RE4_PORT_SCREENSHOT_DELAY_MS`, default 1500): a detached
+  thread sleeps briefly after `aurora_initialize()` then shells out to `/usr/sbin/screencapture -x
+  <path>` (whole screen, not a specific window -- window-specific `-l <windowid>` targeting would need
+  additional CoreGraphics/Objective-C glue this pass didn't add, flagged as **TO VERIFY**/future work).
+- `RE4_PORT_PAUSE_ON_ABORT=1`: `PortCheckFail()` (part 1) parks the aborting thread in an infinite
+  sleep loop instead of calling `std::abort()`, keeping the whole process (and its window) alive
+  indefinitely so the screenshot thread above has time to fire even though the boot sequence itself
+  has hit a real blocker.
+
+**Verified, screenshot captured and viewed** (not just logged): running with both env vars set
+(`RE4_PORT_PAUSE_ON_ABORT=1 RE4_PORT_SCREENSHOT=/tmp/re4_screenshot.png
+RE4_PORT_SCREENSHOT_DELAY_MS=1500`) produced a real, non-empty PNG -- viewed directly, it shows a flat
+dark-gray field filling the whole capture with no desktop chrome/menu bar/other windows visible at all,
+consistent with a real, focused, likely-fullscreen-or-large game window showing Aurora's clear color
+(no GX geometry has been submitted successfully yet at the point this run aborts, section 28's/this
+section's still-open blockers are both upstream of any real draw reaching the screen) -- this is the
+strongest evidence yet that "a window opens and presents frames" (this whole milestone's first ask) is
+genuinely working, not just inferred from Aurora's own log lines.
+
+**Verified no regression**: `ctest` 4/4 (`build-pc-boot`, `RE4_U32_32=ON`) and 3/3 (`build-pc`, default
+`OFF`), both rebuilt and rerun. Only `include/port/`/`src/port/` touched this round (no `src/game/`
+edit) -- no remote matching-build round trip needed per the port rules.

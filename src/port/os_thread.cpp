@@ -83,16 +83,52 @@ OSThread g_mainThread{}; // storage for the main game thread's OSThread identity
 
 struct ThreadExitException {}; // OSExitThread's unwind mechanism -- see the file header.
 
-// Every task thread this file starts now runs a real pthread whose *machine* stack is the game's
-// own stack buffer (scheduler.cpp's `TaskSchedulerInit()` -> `MEM_ALLOC`, already a real host
-// pointer inside re4_port's arena -- see include/port/game_stack.h's header comment for why this
-// matters: any local variable's address on this thread's stack must itself be a valid, GC32()-able
-// pointer for the vendor's own "pointer stored in a u32" idioms (docs/port-boot.md section 27's
-// `DrawOTag` bug and its kin) to work, and a host-allocated (plain `std::thread`) stack is not
-// guaranteed to land inside the compressed-handle window at all.
+// Every task thread this file starts runs a real pthread whose *machine* stack is one slot of
+// include/port/arena.h's dedicated task-stack pool (docs/port-boot.md section 29), not the game's
+// own small per-task stack buffer (scheduler.cpp's `TaskSchedulerInit()` -> `MEM_ALLOC`, still used
+// unchanged for the vendor's own `StackOverflowCheck()` bookkeeping, `thread->stackBase`/`stackEnd`
+// below) and not a plain host-allocated stack either. Root cause found live, this pass:
+// `pthread_attr_setstack()` on macOS requires both the address and size to be page-aligned
+// (16 KiB), and every one of the vendor's own stack sizes (`GetStackSize()`, 0x1800/0x2000/0x3000
+// bytes -- the original PPC target's tiny stack budget) is neither, so it failed for every task
+// thread, every run, not intermittently. Any local variable's address on this thread's real
+// execution stack must itself be a valid, GC32()-able pointer for the vendor's own "pointer stored
+// in a u32" idioms (docs/port-boot.md section 27's `DrawOTag` bug and its kin) to work -- a
+// host-allocated stack is not guaranteed to land inside the compressed-handle window at all, so
+// there is no host-stack fallback here: if a pool slot can't be used, this aborts instead
+// (RE4_PORT_CHECK-style, loud and immediate, not a silent correctness gap).
+std::unordered_map<OSThread*, void*> g_taskStackSlots; // OSThread* -> its assigned pool slot base
+                                                        // (include/port/arena.h's
+                                                        // GetTaskStackPoolBase()), assigned once per
+                                                        // distinct OSThread* (at most
+                                                        // re4_port::kTaskStackSlots, TASK_NUM)
+std::size_t g_nextTaskStackSlot = 0;
+
 std::unordered_map<OSThread*, bool> g_threads; // presence only -- no join primitive yet (arena.cpp's
                                                 // own CreateArenaThread precedent: detached,
                                                 // fire-and-forget)
+
+void* AssignTaskStackSlot(OSThread* thread)
+{
+    auto it = g_taskStackSlots.find(thread);
+    if (it != g_taskStackSlots.end()) {
+        return it->second;
+    }
+    if (g_nextTaskStackSlot >= re4_port::kTaskStackSlots) {
+        std::fprintf(stderr,
+                     "OSCreateThread: task-stack pool exhausted (%zu slots, include/port/arena.h's "
+                     "kTaskStackSlots) -- more distinct OSThread* values than TASK_NUM were seen; "
+                     "aborting rather than falling back to an unsafe host stack (docs/port-boot.md "
+                     "section 29)\n",
+                     re4_port::kTaskStackSlots);
+        std::abort();
+    }
+    void* slot = static_cast<char*>(re4_port::GetTaskStackPoolBase()) +
+                 g_nextTaskStackSlot * re4_port::kTaskStackSlotSize;
+    ++g_nextTaskStackSlot;
+    g_taskStackSlots[thread] = slot;
+    return slot;
+}
 
 struct OSTaskThreadArgs {
     OSThread* thread;
@@ -176,33 +212,20 @@ int OSCreateThread(OSThread* thread, void* (*func)(void*), void* param, void* st
         *thread->stackEnd = OS_THREAD_STACK_MAGIC;
     }
 
-    // Runs on the game-provided stack buffer (`stack`/`stackSize`, above -- scheduler.cpp's
-    // TaskSchedulerInit() allocates it with MEM_ALLOC, already inside re4_port's arena) via
-    // pthread_attr_setstack, not a host-allocated std::thread stack -- see this file's own comment
-    // on `g_threads` for why (docs/port-boot.md section 28).
+    // Real (machine) stack: one page-aligned, page-sized slot of the dedicated task-stack pool --
+    // see this file's own comment on `g_taskStackSlots` above for why not the game's own buffer.
+    void* slotBase = re4_port::AssignTaskStackSlot(thread);
     auto* targs = new re4_port::OSTaskThreadArgs{thread, func, param};
-    bool started = false;
-    if (stack != nullptr && stackSize != 0) {
-        started =
-            re4_port::CreateThreadOnStack(thread->stackEnd, stackSize, re4_port::OSTaskThreadEntry, targs);
-        if (!started) {
-            std::fprintf(stderr,
-                         "OSCreateThread: pthread_attr_setstack failed for stack=[%p, %p) -- falling "
-                         "back to a host-allocated stack (game-visible pointers on this thread's own "
-                         "stack would then be unsafe, docs/port-boot.md section 28)\n",
-                         (void*) thread->stackEnd, (void*) thread->stackBase);
-        }
-    }
+    bool started = re4_port::CreateThreadOnStack(
+        slotBase, re4_port::kTaskStackSlotSize, re4_port::OSTaskThreadEntry, targs);
     if (!started) {
-        pthread_t pt;
-        started = pthread_create(&pt, nullptr, re4_port::OSTaskThreadEntry, targs) == 0;
-        if (started) {
-            pthread_detach(pt);
-        }
-    }
-    if (!started) {
+        std::fprintf(stderr,
+                     "OSCreateThread: pthread_attr_setstack failed for pool slot=[%p, %p) -- no "
+                     "host-stack fallback for a game task thread (docs/port-boot.md section 29), "
+                     "aborting\n",
+                     slotBase, static_cast<char*>(slotBase) + re4_port::kTaskStackSlotSize);
         delete targs;
-        return 0;
+        std::abort();
     }
     {
         std::lock_guard<std::mutex> lk(re4_port::g_mutex);

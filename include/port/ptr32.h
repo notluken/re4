@@ -23,6 +23,8 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <type_traits>
 
 #include "types.h"
@@ -39,20 +41,76 @@ extern std::uintptr_t g_base;
 // [g_base, g_base + kWindowSize).
 inline constexpr std::uint64_t kWindowSize = std::uint64_t(1) << 32;
 
+// Real, non-NDEBUG-gated bounds checks (docs/port-boot.md section 28's postmortem: `assert()`
+// silently compiles out under `NDEBUG` -- which `RE4_GAME_DEFINES` sets unconditionally for every
+// `re4_boot_game` TU, matching the vendor's own `-O2` build -- and a failing GC32()/GCPTR() bounds
+// check is exactly the kind of failure that must never silently underflow into a garbage handle
+// instead of aborting; that silent underflow was section 28's actual root cause). Default ON;
+// override with `-DRE4_PORT_CHECKS=0` (not done anywhere in this tree) to compile them out for a
+// release build once this scheme is fully trusted.
+#ifndef RE4_PORT_CHECKS
+#define RE4_PORT_CHECKS 1
+#endif
+
+#if RE4_PORT_CHECKS
+// Defined out-of-line (src/port/arena.cpp), NOT inline here: this header is force-included
+// (`-include`) into every re4_boot_game translation unit, and pulling `<thread>`/`<chrono>` in here
+// transitively drags in libc++'s own `<new>`/`<cmath>` ahead of this tree's vendor shadow
+// declarations (`include/cManager.h`'s placement `operator new`, `include/math_sub.h`'s `fabsf`),
+// which then conflict with the real ones -- confirmed the hard way (a real build break) before
+// moving this out of the header.
+[[noreturn]] void PortCheckFail(const char* what, const void* addr, std::uintptr_t base);
+#define RE4_PORT_CHECK(cond, what, addr) \
+    do { \
+        if (!(cond)) { \
+            re4_port::PortCheckFail(what, addr, re4_port::g_base); \
+        } \
+    } while (0)
+// g_base==0 specifically means "called before InitArena() ran" -- a C++ static-initialization-order
+// hazard (a global variable's own initializer, e.g. src/game/file.cpp's `usb_buf = (void*)
+// 0x81800000;`, runs before main()/InitArena() by construction; found live, docs/port-boot.md
+// section 29), not the out-of-window corruption case above -- downgraded to a one-time warning
+// (still visible, not silently swallowed) rather than an abort, since aborting here would make
+// *every* fixed-GC-address global initializer a hard boot failure regardless of whether the value
+// is ever actually read afterward (confirmed dead for this specific case: `usb_buf` has no other
+// use in its file). Real corruption (a pointer genuinely outside the window once g_base IS set)
+// still aborts via RE4_PORT_CHECK above.
+#define RE4_PORT_WARN_IF_UNINITIALIZED(what, addr) \
+    do { \
+        if (re4_port::g_base == 0) { \
+            static bool warned = false; \
+            if (!warned) { \
+                std::fprintf(stderr, \
+                             "re4_port: %s (%p) called before InitArena() (g_base==0) -- likely a " \
+                             "global variable's own static initializer running before main(); " \
+                             "docs/port-boot.md section 29\n", \
+                             what, addr); \
+                warned = true; \
+            } \
+        } \
+    } while (0)
+#else
+#define RE4_PORT_CHECK(cond, what, addr) ((void) 0)
+#define RE4_PORT_WARN_IF_UNINITIALIZED(what, addr) ((void) 0)
+#endif
+
 // Host pointer -> GameCube-looking 32-bit handle. nullptr -> 0 (so GCPTR(GC32(p)) == p holds for
-// p == nullptr too, without g_base needing to be 0). Debug builds assert the pointer is inside the
-// reserved window; a pointer outside it would silently alias a different handle, corrupting the
-// on-disc format it is being written into.
+// p == nullptr too, without g_base needing to be 0). Aborts (RE4_PORT_CHECK, not assert()) if the
+// pointer is outside the reserved window; a pointer outside it would otherwise silently alias a
+// different handle, corrupting the on-disc format it is being written into.
 template <class T>
 inline std::uint32_t GC32(T* p)
 {
     if (p == nullptr) {
         return 0;
     }
-    assert(g_base != 0 && "GC32: g_base not set (InitArena() not called yet)");
+    RE4_PORT_WARN_IF_UNINITIALIZED("GC32", p);
+    if (g_base == 0) {
+        return 0; // no window to compute an offset into yet; see RE4_PORT_WARN_IF_UNINITIALIZED
+    }
     std::uintptr_t addr = reinterpret_cast<std::uintptr_t>(p);
-    assert(addr >= g_base && (addr - g_base) < kWindowSize &&
-           "GC32: pointer outside the compressed-handle window (see include/port/ptr32.h)");
+    RE4_PORT_CHECK(addr >= g_base && (addr - g_base) < kWindowSize,
+                   "GC32: pointer outside the compressed-handle window", p);
     return static_cast<std::uint32_t>(addr - g_base);
 }
 
@@ -63,7 +121,10 @@ inline T* GCPTR(std::uint32_t h)
     if (h == 0) {
         return nullptr;
     }
-    assert(g_base != 0 && "GCPTR: g_base not set (InitArena() not called yet)");
+    RE4_PORT_WARN_IF_UNINITIALIZED("GCPTR", nullptr);
+    if (g_base == 0) {
+        return reinterpret_cast<T*>(static_cast<std::uintptr_t>(h)); // see GC32's own comment above
+    }
     return reinterpret_cast<T*>(g_base + h);
 }
 
