@@ -1108,3 +1108,51 @@ directly against `Heap[CurrentHeap]`'s actual bounds. Verified no regression: `c
 
 No window renders this session -- no screenshot. Render/VI/GX SDK-parity work and the
 `CRoomInfo`/DVD-size-table BE audit were not reached this pass.
+
+## 25. Root cause of section 24's "Task[1] corrupted" blocker: `re4_port` missing `RE4_U32_32` (2026-09-24)
+
+lldb watchpoints (`watchpoint set expression -w write -s 1 -- &Task[1].Status`, `bt`) instead of
+guessing: the write that sets `Task[1].Status = TASK_EXEC` with `hook`/`pFunc` still `NULL` happens
+inside **`OSCreateThread(&Task[0].Thread, ...)`**, at `thread->state = OS_THREAD_STATE_READY;`
+(`src/port/os_thread.cpp`) -- a write to a field of *Task[0]'s own* embedded `OSThread`, landing on
+`Task[1]` instead. `cItemMgr::init()` (section 24's original suspect) never touched it; it just
+happened to be the first place a subsequent frame's state got read back wrong, since the write
+itself happens on task-slot dispatch, not during item init.
+
+Cause: `sizeof(OSThread)` disagreed between translation units. `include/scheduler.h` pre-defines
+`_DOLPHIN_TYPES_H_` before `#include <dolphin/os/OSThread.h>` specifically so that header's own
+`#include <dolphin/types.h>` is a no-op (the guard is already "seen") and `u32`/`s32` keep whatever
+`scheduler.cpp` already defined them as (the project's own `include/types.h`, 4-byte `int` under
+`RE4_U32_32`). `src/port/os_thread.cpp` does not have that pre-guard, and this repo's own
+`CMakeLists.txt` built its translation unit (`re4_port` library) with **only** `TARGET_PC`, never
+`RE4_U32_32` -- so `dolphin/types.h`'s `#if defined(TARGET_PC) && defined(RE4_U32_32)` branch was
+false there, and `u32`/`s32` fell back to the `#else` branch, plain `long`/`unsigned long` (8 bytes
+on this LP64 host). Every `u32` field inside `OSContext`/`OSThread` (the `gpr`/`gqr` arrays, `cr`/
+`lr`/`ctr`/`xer`, `suspend`, `error`, ...) was silently twice as wide in `os_thread.cpp`'s view of
+the struct as in `scheduler.cpp`'s (`sizeof(OSThread)` measured 1072 there vs. 856 everywhere else,
+confirmed live via `p sizeof(*thread)` at both call sites) -- an ODR violation. `OSCreateThread`'s
+member stores, computed against the wrong (larger) layout, walked past the real, smaller `OSThread`
+embedded inline in `TASK::Thread` and wrote into whatever followed in `Task[]` -- the next slot.
+
+**Fix**: `CMakeLists.txt`'s `re4_port` target now also gets `RE4_U32_32` when the top-level option
+is on (mirrors `RE4_GAME_DEFINES`'s own `if (RE4_U32_32) list(APPEND ...)` pattern used by every
+other TARGET_PC target). Build-config only (`CMakeLists.txt` is outside `src/`, `include/`, and is
+explicitly "not read by configure.py/ninja" per its own header) -- no remote matching-build
+verification round trip needed.
+
+**Verified**: `re4_boot` now runs `Title_task`'s full turn with no corruption (`Task[1]` stays
+`TASK_NONE` until something legitimately execs it); the frame loop reaches `main_game()`'s
+`DrawOTag()` call (`main.cpp:140`) exactly as docs/port-phase3.md section 8 previously described,
+this time via a healthy scheduler instead of by accident before the corruption fired -- confirms
+section 24's blocker is fully gone, not just moved. `ctest`: 4/4 (`build-pc-boot`, `RE4_U32_32=ON`)
+and 3/3 (`build-pc`, default `OFF`) both green. `re4_game_all -k 0`'s failing-file count unaffected
+by inspection (the diff only touches the `re4_port` target block, not `RE4_GAME_DEFINES` or any
+game target).
+
+**Not reached this pass** (budget spent on root-causing section 24): the render path itself
+(`InitOt`/`Render`/`Render_before`/`Trans`/GX submission) is still every stub docs/port-boot.md
+section 7 already catalogued -- `DrawOTag` walks a 2D ordering table nothing real ever populates, so
+it is expected to spin/hang there, not progress to a frame. No window render, no screenshot. Bringing
+the real render units into the boot link, the GX/VI SDK parity table, and wiring VI/GX frame
+presentation through Aurora are still open (docs/port-phase3.md section 9's list, coordinator's
+Phase 4 ask).

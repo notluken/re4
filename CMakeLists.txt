@@ -272,6 +272,20 @@ add_library(re4_port STATIC
 )
 target_include_directories(re4_port PUBLIC ${RE4_GAME_INCLUDES})
 target_compile_definitions(re4_port PUBLIC TARGET_PC)
+if (RE4_U32_32)
+  # Without this, os_thread.cpp's #include <dolphin/os/OSThread.h> picks up dolphin/types.h's
+  # #else branch (s32/u32 = host `long`, 8 bytes on this LP64 host) instead of the 4-byte int
+  # every other RE4_U32_32=ON TU uses (scheduler.h pre-defines _DOLPHIN_TYPES_H_ before including
+  # the same OS headers precisely to dodge dolphin/types.h's typedefs, so scheduler.cpp always
+  # got the correct 4-byte width regardless of this target's own defines) -- an ODR-violating
+  # OSContext/OSThread whose sizeof() disagrees with every other TU that embeds one (TASK::Thread,
+  # include/scheduler.h). OSCreateThread's writes through that oversized view walk past the real,
+  # smaller OSThread embedded in TASK and corrupt whatever TASK slot follows in Task[] (root cause
+  # of docs/port-boot.md section 24's "Task[1] corrupted" blocker -- lldb watchpoint on
+  # &Task[1].Status caught OSCreateThread(&Task[0].Thread, ...)'s `thread->state = ...` store
+  # landing on Task[1].Status instead).
+  target_compile_definitions(re4_port PUBLIC RE4_U32_32)
+endif()
 find_package(Threads REQUIRED)
 target_link_libraries(re4_port PUBLIC Threads::Threads)
 
