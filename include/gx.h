@@ -63,6 +63,45 @@ typedef union {
     f32 f32;
     f64 f64;
 } WGPipe;
+
+#ifdef TARGET_PC
+// Aurora (../aurora/lib/dolphin/gx/GXVert.cpp) provides real, external-linkage implementations of
+// every one of these functions -- same names/signatures, dolphin-SDK-compatible -- that write into
+// its own software GX FIFO. This repo's own `static inline` copies below wrote straight to
+// `GXWGFifo`, a real hardware MMIO absolute address (harmlessly meaningless as a plain global on
+// host, `src/port/stubs/manual_stubs.cpp`'s `GXWGFifo[1]`) -- but `static inline` gives them
+// internal linkage, so every TU that includes this header got its OWN copy that silently discarded
+// the write, shadowing Aurora's real, external symbol entirely. Meanwhile any OTHER GX vertex-write
+// call not covered by this header's small subset (declared further down, e.g. GXBegin) resolved to
+// Aurora's real definition normally -- so a single draw call could have SOME of its vertex fields
+// vanish into the dummy array while others genuinely reached Aurora's FIFO, desyncing the vertex
+// byte stream (docs/port-boot.md's "indexed XF load from unmapped array 24" investigation). Fixed
+// by declaring these here instead of defining them, so the real symbols in libaurora_gx.a satisfy
+// them for every TU, the same way GXBegin/GXEnd/GXSetArray/... already do below.
+extern "C" {
+void GXPosition3f32(f32 x, f32 y, f32 z);
+void GXPosition3s16(s16 x, s16 y, s16 z);
+void GXColor4u8(u8 r, u8 g, u8 b, u8 a);
+void GXNormal3f32(f32 x, f32 y, f32 z);
+void GXNormal3s8(s8 x, s8 y, s8 z);
+void GXTexCoord2f32(f32 s, f32 t);
+void GXPosition2u16(u16 x, u16 y);
+void GXTexCoord2s16(s16 s, s16 t);
+}
+
+// GXMatrixIndex1u8 is this repo's own name for a raw one-byte FIFO write (the real SDK has no
+// dedicated GX*() entry point for a per-vertex matrix-index attribute -- games write it straight to
+// GXWGFifo); Aurora accordingly has no same-named symbol to redirect to. Not on the boot/title-
+// screen render path (only src/game/id_sys.cpp, dbmodule.cpp, esp01.cpp call it, none reached by
+// this port yet) -- left as a discarding stub for now. **TO VERIFY** once one of those call sites
+// is actually reached: needs a real route into Aurora's FIFO (no public API for that exists yet,
+// only the private lib/gx/fifo.hpp this repo cannot include without an Aurora patch).
+extern volatile WGPipe GXWGFifo[];
+static inline void GXMatrixIndex1u8(u8 idx)
+{
+    GXWGFifo->u8 = idx;
+}
+#else
 // The FIFO is a linker-provided absolute symbol (`GXWGFifo = 0xCC008000` in
 // config/G4BE08/ldscript.ld), the way the SDK's GXVert.h declares it for non-CodeWarrior
 // compilers. The address must be a SYMBOL_REF, not a constant: the scheduler then issues
@@ -131,6 +170,7 @@ static inline void GXTexCoord2s16(s16 s, s16 t)
     GXWGFifo->s16 = s;
     GXWGFifo->s16 = t;
 }
+#endif
 #endif
 
 // GX API entry points used by game code. Enum parameters are declared as plain ints: the
