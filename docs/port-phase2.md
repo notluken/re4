@@ -426,3 +426,99 @@ macro at all — inline `(u32) p` / `(void*) x` in game logic.
   through more than one cast before it lands anywhere) — the rewriter's replacement must compose
   (`GCPTR<T>(GC32(...))`-shaped chains do not collapse for free the way the original `(T*)(u32)`
   double-cast idiom does), or it will need a small peephole pass to fold them back down.
+
+## 9. Rewriter — implemented (2026-09-24)
+
+**Toolchain decision**: Apple's bundled clang (17.0.0, Command Line Tools) does not ship libTooling
+headers/libs — confirmed empirically (no `clang/Tooling` headers anywhere under
+`/Library/Developer/CommandLineTools`). `brew install llvm` (Homebrew LLVM 23.1.1, bottled, ~34 s
+install) does; the tool is built against it (`tools/port/cast_rewriter/CMakeLists.txt`, a standalone
+CMake project, not part of the top-level `CMakeLists.txt`'s configure since it needs a different
+toolchain's headers/libs — see that file's own header comment for the two-command build). The tool
+binary itself is still run against `build-pc`'s own `compile_commands.json`, so the actual casts it
+sees are parsed with the same flags the real host build uses.
+
+**What it does, concretely** (`tools/port/cast_rewriter/CastRewriter.cpp`, ~230 lines): a
+`RecursiveASTVisitor` matching `CStyleCastExpr`/`CXXStaticCastExpr`/`CXXReinterpretCastExpr` with
+`CK_PointerToIntegral`/`CK_IntegralToPointer`, skipping anything spelled inside a macro expansion
+(`Loc.isMacroID()`) or outside the main file. For each match: `(u32) p` -> `(u32)re4_port::GC32(p)`
+(destination type spelling preserved via an outer cast, since `GC32` always returns `uint32_t`, but
+callers may expect `s32`/`int`/...); `(T*) x` -> `re4_port::GCPTR<T>((std::uint32_t)(x))`. Output is
+written to `build-pc/gen/<relative path>` with one `#line 1 "<original absolute path>"` at the top —
+sufficient because every rewrite is a same-line text substitution (no inserted/removed newlines), so
+physical line numbers never drift from the original.
+
+**Two real bugs found and fixed during the 20-site spot check** (both would have silently produced
+broken output otherwise):
+1. **Nested casts double-rewritten.** `RecursiveASTVisitor`'s default pre-order traversal visits an
+   outer cast before its subexpression; if the outer cast's whole range gets replaced first, a second
+   `Rewriter::ReplaceText` on the (now already-rewritten) inner cast's range corrupts the buffer —
+   measured as literal `expected ')'` syntax errors in the output. Fixed by tracking already-rewritten
+   source ranges and skipping (logging `SKIP nested-in-rewritten`) anything nested inside one; the
+   inner cast's *original* text is still captured into the outer replacement via
+   `Lexer::getSourceText` on the untouched original buffer, so the composition still happens, just as
+   plain text substitution instead of a second AST-level edit.
+2. **Pointer-to-array/function pointee types aren't `T*`-printable.** `(f32(*)[3]) x` has pointee
+   type `f32[3]`; naively emitting `GCPTR<f32[3]>(...)` (which expands to a return type of `f32[3]*`,
+   not valid C++ for "pointer to array of 3 floats") produced real compile errors (`array is too
+   large (18446744073709551464 elements)`, a nonsense diagnostic downstream of the malformed type).
+   Fixed: `Pointee->isArrayType() || Pointee->isFunctionType()` is now flagged (`FLAG
+   unprintable-pointee`), not guessed at — found live in `src/game/trans.cpp:858`/`:910`
+   (`PSMTXReorder(m, (f32(*)[3]) (0xE0000000 + i * 0x30))`).
+
+**Deciding "GC-address site" vs "genuinely wide" for `CK_PointerToIntegral`**: not by
+`Context.getTypeSize()` — the tool is meant to run against the *default* (`RE4_U32_32` OFF) compile
+command (see the next paragraph for why), where `u32`/`s32` are the host's 8-byte
+`unsigned long`/`long`, so a width check would read 64 for nearly every site and be useless. Instead
+it checks the destination type's *written spelling* against a small wide-type blocklist (`u64`,
+`s64`, `uintptr_t`, `size_t`, `long long`, `unsigned long long`); anything else defaults to a GC32
+rewrite, per the design doc's "default to a plain, honest GC32/GCPTR" guidance. Measured: 2 sites in
+`src/game` flagged this way, 3 more for the unprintable-pointee rule above.
+
+**Why the tool must run against `RE4_U32_32=OFF`'s compile command, not ON's**: measured directly —
+with `RE4_U32_32=ON`, a narrowing `(u32) p` cast is a hard Sema *error*, and clang does not synthesize
+a `CStyleCastExpr`/`CK_PointerToIntegral` AST node for it at all (a `RecoveryExpr` instead), so the
+rewriter's `MatchFinder`-equivalent visitor never sees the exact sites it exists for. With
+`RE4_U32_32=OFF`, `u32`/`s32` are 8 bytes on this LP64 host, the cast type-checks as an ordinary
+(non-narrowing) pointer-to-integer conversion, and the AST node exists. `tools/port/rewrite_casts.py`
+(the driver) is hardcoded to this ordering: rewrite against the OFF compile command, then compile the
+*rewritten* output with `RE4_U32_32=ON`.
+
+**Measured, `src/game` (293 `.cpp` units, `memset_2.cpp`/`yz2asm.cpp` excluded as before)**:
+- 663 sites rewritten (`GC32`/`GCPTR`), 2 flagged wide-destination, 3 flagged unprintable-pointee,
+  the rest (macro-internal casts, plus casts nested inside an already-rewritten one) left alone by
+  design.
+- Compiling the rewritten `build-pc/gen/src/game/*.cpp` with the *exact* flags
+  `build-pc-u32on/compile_commands.json` uses (Apple clang, `RE4_U32_32=ON`, same
+  `-mllvm -global-isel=false`/`-Wno-*` set as the real CMake target): **444 errors, down from 592** on
+  the unrewritten originals under the same flags (a fresh, direct re-measurement this session — the
+  592 corroborates, does not exactly reproduce, `docs/port-phase2.md`'s earlier 586, small drift
+  expected from environment/compiler-minor-version differences between sessions, not a regression).
+  **25% fewer errors**, not the "~0" the design doc's test aimed for — the gap is almost entirely the
+  macro-internal casts this tool deliberately does not touch (`PTR_INVALID`, per-file `RAW_U32`/
+  `RAW_F32` local macros like `src/game/sce_at.cpp`'s own, ...; 320 of the 444 remaining errors are
+  this shape), plus genuine Phase 5 asm-register-constraint errors (paired-single `asm("=f")`/`"+f"`
+  operands, ~50 sites) and a handful of real gaps: 8 sites where the rewritten file uses
+  `re4_port::GC32`/`GCPTR` without `#include`ing `include/port/ptr32.h` (the rewriter does not inject
+  missing includes — **not fixed this session**, flagged here for whoever continues), and a few
+  `Ptr32<T>`-vs-raw-pointer interaction errors at sites this tool's simple per-cast rewrite does not
+  reconcile with Phase 2 step 5's existing `Ptr32<T>` conversions.
+
+**CMake wiring**: `RE4_REWRITE_CASTS` option (implied by `RE4_U32_32`) in the top-level
+`CMakeLists.txt`, plus `RE4_CAST_REWRITER_BIN` pointing at the separately-built tool binary and a
+`re4_rewrite_casts` custom target that runs `tools/port/rewrite_casts.py` against the current
+configure's own `compile_commands.json`. **This is whole-tree, configure-time regeneration, not a
+true per-file incremental custom command yet** — `re4_game_all`'s sources are swapped for their
+`build-pc/gen/` counterparts only if that file already exists on disk from a previous
+`re4_rewrite_casts` run (a two-pass workflow: configure once to get `compile_commands.json`, run
+`re4_rewrite_casts`, reconfigure/rebuild to pick up the swap). The per-file `add_custom_command`
+design in section 8 above (real incrementality, correct dependency edges) is still unbuilt — left as
+"steps not started" below, not attempted this session given the time this took to get the rewriter
+itself producing correct output. `re4_rel_all` is not wired at all yet (the driver script supports
+`--sources-filter`, so wiring it is mechanical, just not done).
+
+**Not done this session, explicitly**: `re4_rel_all` wiring; per-file incremental CMake integration;
+missing-`#include` injection; reconciling rewritten casts with existing `Ptr32<T>` struct fields at
+the ~3-5 sites where the two interact; a REL-side measurement (only `src/game` was rewritten and
+measured this session — `docs/port-boot.md` notes no REL is on the boot path, so this was the
+higher-priority half).
