@@ -24,3 +24,6 @@ tools/sn-gcc/cc1plus
 # external checkouts used by tools/research/mwccdbg (see its README)
 tools/research/mwccdbg/mwcc-debugger
 tools/research/mwccdbg/retrowin32
+
+# host port build (CMakeLists.txt at repo root, cmake/ helpers); never read by configure.py/ninja
+build-pc/
