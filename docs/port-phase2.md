@@ -62,24 +62,58 @@ reason strategy D's compressed handles are built to look like real GameCube addr
     far away around `0x300000000`+) **once per process**, applying to every such call in that
     process — a retry loop inside one process keeps hitting the same mode (measured 50/50 across 100
     fresh-process runs, 8 retries each, not the ~99.6% independent retries would predict).
-  - `mach_vm_allocate(..., VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE)` — Mach's equivalent of `mmap()`'s
-    unconditionally-claiming `MAP_FIXED` — measured **100/100** across fresh-process runs at
-    `0x120000000`, size 1 GiB, including a read/write touch of the freshly mapped page and the
-    exe-image/main-stack window checks. This is what `src/port/arena.cpp` uses. **TO VERIFY**: this
-    is a single-host (this machine, this macOS build) empirical result, not a documented kernel
-    guarantee; it should be re-measured on other macOS versions/hardware before being trusted long
-    term, and `tests/port/run_arena_stress.sh` exists specifically to keep re-checking it.
+- **`VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE` was tried, measured 100/100, and rejected anyway — it does
+  not check the range is free, it unconditionally unmaps whatever is already there.** This is the
+  Mach equivalent of `mmap()`'s unconditionally-claiming `MAP_FIXED`, and 100/100 is the *wrong*
+  signal: in exactly the runs where plain `VM_FLAGS_FIXED` had correctly refused (the 37/50 above),
+  `OVERWRITE` was silently unmapping the live malloc guard page/metadata region that was blocking it
+  — corrupting the host allocator's own bookkeeping, to surface as a crash later, nondeterministically,
+  in code that never touches the arena. The first version of `src/port/arena.cpp` shipped this for
+  one round-trip of this document before it was caught; **never repeat this approach.** No amount of
+  passing tests on the arena itself would have caught it (the bug is in what it clobbers, not in the
+  arena), which is why `tests/port/test_arena.cpp` now includes a `malloc()`'d canary buffer, written
+  before `InitArena()` and checked for corruption after every arena byte is touched (section 5, step
+  3) — a real, if narrow, regression test for exactly this mistake.
+- **The arena instead lives inside the executable's own image: a zerofill BSS-like section, not a
+  runtime reservation at all.** `static char s_arena[1<<30]` with
+  `__attribute__((aligned(16384), section("__DATA,__re4arena,zerofill")))` — the `,zerofill` suffix
+  matters: naming the section without it compiles and links, but the linker then treats it as
+  ordinary initialized data and the binary balloons to a full 1 GiB on disk (measured, rejected); with
+  it, `size -m` reports `__re4arena (zerofill)` and the binary stays a few tens of KiB, exactly like a
+  plain unnamed `static char[1<<30]` (which lands in the default `__DATA,__bss` zerofill section
+  automatically — also measured, works, just without a distinguishing name). dyld places this section
+  as part of loading the exe, before any of this code runs, at wherever ASLR slides the image to; it
+  cannot overlap malloc's or any other later allocation because it was never a separate allocation to
+  begin with. Measured **100/100** fresh-process runs: the whole exe image (a `.bss` probe and a code
+  probe) and the whole arena (both ends) inside the resulting window, a thread whose stack is carved
+  from the arena (`pthread_attr_setstack`, `CreateArenaThread` in `src/port/arena.h`) also inside it,
+  and — the check the `OVERWRITE` design would have failed — a `malloc()`'d canary buffer intact after
+  every arena page is written to. A direct `vmmap` before/after comparison of a process that touches
+  every arena page (same region count, zero diff, both outside the arena region) corroborates this
+  for the general "did anything else change" question, not just the canary's specific bytes.
+  **TO VERIFY**: still a single-host (this machine, this macOS build) empirical result for the exact
+  addresses/ranges measured; `tests/port/run_arena_stress.sh` exists to keep re-checking the 100/100
+  claim, but the zerofill-section mechanism itself (not a specific address) is what makes this design
+  safe by construction rather than by measurement, unlike the rejected one.
+- **Rule, going forward (`include/port/arena.h`)**: no game-visible pointer may ever point at host
+  `malloc()`'d memory or at the host main thread's stack — neither is guaranteed to be inside the
+  window, and (see above) trying to force a fixed VM reservation near them is how the `OVERWRITE`
+  mistake happened in the first place. Game code (Phase 4's main loop, and anything before it that
+  needs to be a real, dereferenceable pointer, e.g. `GCPTR` results) must run on a thread created with
+  `CreateArenaThread`, whose stack is carved from the arena, never the process's own main thread.
 
 ## 3. Strategy D: compressed 32-bit handles relative to a host base
 
-**Design**: reserve a fixed 4 GiB-capable arena once at startup at host address `A`
-(`src/port/arena.cpp`), and set `g_base = A - 0x80000000`. Every on-disc pointer field becomes a
-`Ptr32<T>` (`include/port/ptr32.h`): a 4-byte handle `h = host_addr - g_base`. As long as everything
-the game can ever point at — the exe image, the main stack, the arena — lives in the 4 GiB window
-`[g_base, g_base + 0x100000000)`, `h` looks exactly like the GameCube address the field would have
-held: same sign bit (so `(int) d->pClr < 0` keeps meaning "already relocated"), same
-`0x80000000-0x817FFFFF` `SysMem`/`VALID_PTR` range for anything actually inside the arena (which is
-where `SysMem`'s addresses live). `GCPTR(h)` recovers a real, dereferenceable host pointer via
+**Design**: a fixed 4 GiB-window arena embedded in the executable's own image at host address `A`
+(`src/port/arena.cpp`; see section 2 for why it is embedded rather than reserved at runtime), and
+`g_base = A - 0x80000000`. Every on-disc pointer field becomes a `Ptr32<T>`
+(`include/port/ptr32.h`): a 4-byte handle `h = host_addr - g_base`. As long as everything the game
+can ever point at — the exe image and the arena (**not** the host main stack or host `malloc()`
+memory — section 2's rule) — lives in the 4 GiB window `[g_base, g_base + 0x100000000)`, `h` looks
+exactly like the GameCube address the field would have held: same sign bit (so
+`(int) d->pClr < 0` keeps meaning "already relocated"), same `0x80000000-0x817FFFFF`
+`SysMem`/`VALID_PTR` range for anything actually inside the arena (which is where `SysMem`'s
+addresses live). `GCPTR(h)` recovers a real, dereferenceable host pointer via
 `g_base + h`. Typed `T*` members of runtime-only structs (never read from or written to disc) stay
 native 8-byte pointers — only on-disc/relocated fields change type.
 
@@ -181,22 +215,34 @@ test, 0.01 s).
 
 ### Step 3 — the host arena
 
-`src/port/arena.cpp` (new `re4_port` static library target). `InitArena()`:
-`mach_vm_allocate(mach_task_self(), 0x120000000, size, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE)`
-(`VM_FLAGS_OVERWRITE` added after measurement — section 2 has the full story of why the plan's literal
-`VM_FLAGS_FIXED` alone is unreliable here), size from `RE4_ARENA_SIZE` env var or a 1 GiB default; on
-failure, aborts loudly (`fprintf` + `abort()`, not a silent fallback) rather than continuing with a
-broken `g_base`. Sets `g_base = allocated_address - 0x80000000`, then asserts (abort if not) that the
-exe image (a `.bss` probe in this TU today; Phase 4's linked `main.cpp` `Global` once it exists) and
-the current stack are inside the resulting window. `ShutdownArena()` releases it (mainly for tests
-that call `InitArena()` more than once per process).
+`src/port/arena.cpp` (new `re4_port` static library target), revised after the `VM_FLAGS_OVERWRITE`
+mistake (section 2): no runtime reservation. `static char s_arena[1<<30]` lives in a `,zerofill`
+Mach-O section (`__DATA,__re4arena`) that is part of the executable image itself. `InitArena()` just
+computes `g_base = (uintptr_t) s_arena - 0x80000000` and asserts (abort if not) that the exe image
+(a `.bss` probe and a code probe in this TU today; Phase 4's linked `main.cpp` `Global` once it
+exists) and both ends of the arena are inside the resulting window — it allocates nothing and can
+fail nothing except those assertions. `GetArenaBase()`/`GetArenaSize()` expose the arena's bounds for
+carving out sub-allocations; `CreateArenaThread(offset, size, start, arg)` starts a detached pthread
+whose stack is carved from the arena via `pthread_attr_setstack`, the only supported way to run game
+code (section 2's rule) since the process's own main thread stack is not guaranteed inside the
+window. Because the arena's address now comes from wherever ASLR slid the exe image (not a fixed
+request), `g_base` varies run to run — it was a constant `0xA0000000` under the old (rejected)
+design; under this one a fresh run measured `g_base = 0x8243c000` instead, and that is expected, not
+a regression (the resulting window still needs to cover exe+arena either way, and `InitArena()`'s own
+assertions are what guarantee that per-run, not a fixed constant).
 
 **Acceptance**: `tests/port/test_arena.cpp` (ctest `test_arena`) — single-run `InitArena()` succeeds,
-`g_base` non-zero, and (measured this run) `g_base == 0xA0000000` matching the design's prediction
-(`0x120000000 - 0x80000000`); a 5-cycle `Shutdown`/`Init` re-entry check. **Passed**.
-`tests/port/run_arena_stress.sh` (not a ctest — a 100x-slower stress run, run by hand/CI
-periodically): runs the built `test_arena --once` binary as 100 independent fresh processes and
-tallies exit codes. **Run now: 100/100 ok, 0 failed.**
+`g_base` non-zero; a `malloc()`'d canary buffer written before `InitArena()`, checked byte-for-byte
+after every page of the arena is written to (the direct rebuttal to the `OVERWRITE` mistake: this
+check would have failed under the old design, in the ~74% of runs where it silently clobbered live
+malloc bookkeeping); an arena-backed thread (`CreateArenaThread`) whose stack address is confirmed
+inside the window; an idempotency check (`InitArena()` called twice leaves `g_base` unchanged).
+**Passed.** `tests/port/run_arena_stress.sh` (not a ctest — a 100x-slower stress run, run by
+hand/CI periodically): runs the built `test_arena --once` binary as 100 independent fresh processes
+and tallies exit codes. **Run now: 100/100 ok, 0 failed.** A separate, manual `vmmap` before/after
+comparison of a process that writes every arena page (not part of the automated tests: exploratory,
+recorded here for the record) showed zero difference in every other mapping — same region count
+(334), no address/size changes outside the arena's own region.
 
 Remote (both steps): pushed to `port/wip-phase1`(see report for the actual verification branch),
 Docker rebuild clean, `dtk shasum` 115/115 OK, `asmcheck.py --all` TOTAL 231 unchanged (`src/port/`,

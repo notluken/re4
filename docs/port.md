@@ -229,13 +229,17 @@ inventory for phases 2-3 is written down. Now additionally true for the REL modu
 
 Full inventory, strategy, macOS-specific findings, decisions, and the step-by-step plan with
 acceptance criteria: **`docs/port-phase2.md`**. Summary: strategy D (compressed 32-bit handles
-relative to a fixed host arena, `include/port/ptr32.h`'s `Ptr32<T>`), a build-time cast rewriter
-(design only so far) for the ~1,693 direct pointer<->integer casts outside the header macros, and a
+relative to a host arena, `include/port/ptr32.h`'s `Ptr32<T>`), a build-time cast rewriter (design
+only so far) for the ~1,693 direct pointer<->integer casts outside the header macros, and a
 GameCube-compatible on-disc save format (no disc-format/memory-format split). Steps 1
 (`s32`/`u32` as 4-byte `int`/`unsigned int`, `RE4_U32_32` CMake option, off by default),
-2 (`include/port/ptr32.h` + `tests/port/test_ptr32.cpp`) and 3 (`src/port/arena.cpp`'s fixed host
-arena + `tests/port/test_arena.cpp`) are done and verified (115/115, `asmcheck` TOTAL 231, both
-`ctest`s passing, 100/100 on `tests/port/run_arena_stress.sh`).
+2 (`include/port/ptr32.h` + `tests/port/test_ptr32.cpp`) and 3 (`src/port/arena.cpp`: the arena is a
+zerofill section embedded in the exe image, not a runtime VM reservation — a first version that
+reserved memory with `VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE` measured 100/100 but was silently
+clobbering live malloc bookkeeping in the process, caught before it shipped, see
+`docs/port-phase2.md` "the host arena") are done and verified (115/115, `asmcheck` TOTAL 231, both
+`ctest`s passing, 100/100 on `tests/port/run_arena_stress.sh`, a `malloc()` canary check that would
+have caught the rejected design).
 
 ### Phase 3 — endianness
 
