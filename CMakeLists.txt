@@ -176,9 +176,8 @@ add_library(re4_port STATIC
 )
 target_include_directories(re4_port PUBLIC ${RE4_GAME_INCLUDES})
 target_compile_definitions(re4_port PUBLIC TARGET_PC)
-if (APPLE)
-  target_link_libraries(re4_port PUBLIC "-framework CoreFoundation")
-endif()
+find_package(Threads REQUIRED)
+target_link_libraries(re4_port PUBLIC Threads::Threads)
 
 # --- tests/port: host unit tests for re4_port (Phase 2 step 2/3, docs/port-phase2.md) ---
 option(RE4_PC_BUILD_TESTS "Add the tests/port/ host unit tests (ctest)" ON)

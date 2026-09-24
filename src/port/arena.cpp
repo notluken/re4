@@ -1,32 +1,26 @@
-// Phase 2 step 3 (docs/port-phase2.md): reserve the fixed 4 GiB host arena strategy D's compressed
-// handles (include/port/ptr32.h) depend on, and set re4_port::g_base from it.
+// Phase 2 step 3 (docs/port-phase2.md): the fixed host arena strategy D's compressed handles
+// (include/port/ptr32.h) depend on, and re4_port::g_base from it. See include/port/arena.h for the
+// "never point at host malloc/main-stack memory" rule this file exists to make possible to follow.
 //
-// macOS arm64 facts this is built on (docs/port-phase2.md, "macOS facts"): any __PAGEZERO smaller
-// than 4 GiB is killed outright (rc=137), plain mmap()/malloc() never return an address below 4 GiB,
-// and there is no MAP_32BIT. The observed free window is ~2.5 GiB-6.5 GiB (above the 4 GiB
-// __PAGEZERO, below the dyld shared cache at ~6.5 GiB); the exe image and main stack land inside it
-// reliably.
+// History (full details in docs/port-phase2.md, "the host arena"): the first version of this file
+// used mach_vm_allocate(VM_FLAGS_FIXED) to reserve a 1 GiB region at a fixed address, matching the
+// original plan. Plain VM_FLAGS_FIXED turned out unreliable (measured 37/50 single-shot failures --
+// small ASLR-placed malloc bookkeeping regions land in the requested range often enough). Adding
+// VM_FLAGS_OVERWRITE "fixed" the reliability number (100/100) but for the wrong reason: it does not
+// check that the range is free, it unconditionally unmaps whatever was already there. In the 37/50
+// runs where plain FIXED had refused, OVERWRITE was silently clobbering live malloc guard
+// pages/metadata -- corrupting the allocator, to fail later, nondeterministically, in code that has
+// nothing to do with the arena. That was never shippable and this file never ships that version
+// again.
 //
-// VM_FLAGS_FIXED *without* VM_FLAGS_OVERWRITE (what step 3 first tried, following the plan literally)
-// turned out unreliable on this host: mach_vm_allocate refuses if *any* byte of the range is already
-// backed, and small ASLR-jittered allocator bookkeeping regions (MALLOC guard pages/metadata a few
-// KiB to a few MiB in size, `vmmap` on a live process confirms) land inside [0x120000000,
-// 0x160000000) often enough that a bare VM_FLAGS_FIXED request there failed 37/50 single-shot process
-// runs, and even trying 12 candidate addresses 128 MiB apart across ~2.5 GiB of the window still
-// failed 37/50 (their 1 GiB spans overlap too much to actually diversify away from one obstacle).
-// VM_FLAGS_ANYWHERE doesn't help either: this host's generic allocator (both mach_vm_allocate
-// ANYWHERE and plain mmap with a hint but no MAP_FIXED) picks between two placement modes that are
-// decided once per process and apply to every such call in it, not per call, so a retry loop inside
-// one process keeps hitting the same mode (measured 50/50 across 100 runs, 8 retries each, not the
-// ~99.6% independent-retries would predict). VM_FLAGS_FIXED **with** VM_FLAGS_OVERWRITE (Mach's
-// equivalent of mmap's MAP_FIXED, which unconditionally claims the range) measured 100/100 across
-// process runs, including a read/write touch of the freshly mapped page and the exe-image/stack
-// window checks below; nothing meaningful is ever observed at this address this early in a fresh
-// process (the only occupants found by `vmmap` were the odd small allocator metadata region or,
-// once, an unused stack-guard placeholder), so overwriting it is safe in practice. TO VERIFY: whether
-// this holds on other macOS versions/hardware -- these are single-host (this machine, this macOS
-// build) measurements, not a documented kernel guarantee.
-
+// This version reserves nothing at runtime. The arena is a static array placed in the executable's
+// own image (an explicit zerofill Mach-O section, `__DATA,__re4arena`, `,zerofill` in the `section`
+// attribute below -- costs no file size, like ordinary BSS, confirmed with `size -m`: a plain
+// `static char[1<<30]` with no explicit section name also lands in zerofill `__DATA,__bss`
+// automatically, but naming it without the `,zerofill` suffix does *not* stay zerofill, ballooning
+// the binary to a full 1 GiB on disk -- tried, rejected, worth remembering). dyld places it as part
+// of loading the exe, before any of this code runs, at whatever address ASLR slides the image to; it
+// can never overlap malloc's or anything else's later allocations because it is not one.
 #ifndef TARGET_PC
 #error "src/port/arena.cpp is host-only (TARGET_PC)"
 #endif
@@ -34,8 +28,7 @@
 #include "port/arena.h"
 #include "port/ptr32.h"
 
-#include <mach/mach.h>
-#include <mach/mach_vm.h>
+#include <pthread.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -47,100 +40,74 @@ std::uintptr_t g_base = 0;
 
 namespace {
 
-// Default fixed address and size: mid-window (docs/port-phase2.md, "macOS facts") so both a 4 GiB
-// compressed-handle span below it (unused today; g_base is set to this address itself, so the
-// window starts here) and headroom above it for the exe image / stack stay inside
-// [~0x0A0000000, ~0x1A0000000). RE4_ARENA_BASE / RE4_ARENA_SIZE let a test override either without
-// touching source (the size default is 1 GiB, not the full 4 GiB window, since nothing needs more
-// than that yet and a smaller reservation is less likely to collide with something else).
-constexpr mach_vm_address_t kDefaultArenaBase = 0x120000000ULL;
-constexpr mach_vm_size_t kDefaultArenaSize = 0x40000000ULL; // 1 GiB
+__attribute__((aligned(16384), section("__DATA,__re4arena,zerofill"))) char s_arena[kArenaSize];
 
-mach_vm_address_t ArenaBaseFromEnv()
+void CheckInWindow(const char* what, const void* addr)
 {
-    if (const char* s = std::getenv("RE4_ARENA_BASE")) {
-        return static_cast<mach_vm_address_t>(std::strtoull(s, nullptr, 0));
-    }
-    return kDefaultArenaBase;
-}
-
-mach_vm_size_t ArenaSizeFromEnv()
-{
-    if (const char* s = std::getenv("RE4_ARENA_SIZE")) {
-        return static_cast<mach_vm_size_t>(std::strtoull(s, nullptr, 0));
-    }
-    return kDefaultArenaSize;
-}
-
-// A local variable's address as a coarse "is this in the window" proxy for the main stack; a
-// function-static variable's address as the same for the exe image (.bss, in this TU). Once Phase 4
-// links the actual game (main.cpp's Global etc.) into a host executable, the real thing can be
-// checked the same way instead.
-static int s_bssProbe;
-
-void CheckInWindow(const char* what, const void* addr, std::uintptr_t base, mach_vm_size_t size)
-{
-    (void) size; // the window checked is the full 4 GiB compressed-handle range, not just the arena
     std::uintptr_t a = reinterpret_cast<std::uintptr_t>(addr);
-    if (a < base) {
-        std::fprintf(stderr, "InitArena: %s (%p) is below the arena base (0x%llx)\n", what, addr,
-                     static_cast<unsigned long long>(base));
+    if (a < g_base) {
+        std::fprintf(stderr, "InitArena: %s (%p) is below g_base (0x%llx)\n", what, addr,
+                     static_cast<unsigned long long>(g_base));
         std::abort();
     }
-    if (a - base >= kWindowSize) {
+    if (a - g_base >= kWindowSize) {
         std::fprintf(stderr,
                      "InitArena: %s (%p) is outside the 4 GiB compressed-handle window starting at "
                      "0x%llx\n",
-                     what, addr, static_cast<unsigned long long>(base));
+                     what, addr, static_cast<unsigned long long>(g_base));
         std::abort();
     }
 }
+
+// A .bss variable and a function, in this TU, as stand-ins for "the exe image has data/code here"
+// until Phase 4 links the real game (main.cpp's Global etc.) and can check that directly instead.
+int s_bssProbe;
+void SomeFunctionProbe() {}
 
 } // namespace
 
-// Reserves the fixed arena and sets g_base. Aborts loudly (not a silent fallback) if the address is
-// already taken or if the exe image / current stack turn out to be outside the resulting window,
-// since either means every Ptr32<T> in the process would be silently wrong.
 void InitArena()
 {
-    mach_vm_address_t base = ArenaBaseFromEnv();
-    mach_vm_size_t size = ArenaSizeFromEnv();
+    g_base = reinterpret_cast<std::uintptr_t>(s_arena) - 0x80000000u;
 
-    mach_vm_address_t addr = base;
-    kern_return_t kr =
-        mach_vm_allocate(mach_task_self(), &addr, size, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE);
-    if (kr != KERN_SUCCESS) {
-        std::fprintf(stderr,
-                     "InitArena: mach_vm_allocate(0x%llx, 0x%llx, VM_FLAGS_FIXED|VM_FLAGS_OVERWRITE) "
-                     "failed: %s (%d); see docs/port-phase2.md \"macOS facts\"\n",
-                     static_cast<unsigned long long>(base), static_cast<unsigned long long>(size),
-                     mach_error_string(kr), kr);
-        std::abort();
-    }
-    if (addr != base) {
-        // VM_FLAGS_FIXED should never relocate the request; if it did, something is wrong enough
-        // that continuing is worse than aborting.
-        std::fprintf(stderr, "InitArena: VM_FLAGS_FIXED returned 0x%llx, asked for 0x%llx\n",
-                     static_cast<unsigned long long>(addr), static_cast<unsigned long long>(base));
-        std::abort();
-    }
-
-    g_base = static_cast<std::uintptr_t>(addr) - 0x80000000u;
-
-    CheckInWindow("arena", reinterpret_cast<void*>(addr), g_base, size);
-    CheckInWindow("exe image (.bss probe)", &s_bssProbe, g_base, size);
-    int stackProbe;
-    CheckInWindow("main stack", &stackProbe, g_base, size);
+    CheckInWindow("arena start", s_arena);
+    CheckInWindow("arena end", s_arena + kArenaSize - 1);
+    CheckInWindow("exe .bss probe", &s_bssProbe);
+    CheckInWindow("exe code probe", reinterpret_cast<void*>(&SomeFunctionProbe));
 }
 
-void ShutdownArena()
+void* GetArenaBase()
 {
-    if (g_base == 0) {
-        return;
+    return s_arena;
+}
+
+std::size_t GetArenaSize()
+{
+    return kArenaSize;
+}
+
+bool CreateArenaThread(std::size_t stack_offset, std::size_t stack_size, void* (*start)(void*),
+                       void* arg)
+{
+    if (stack_offset + stack_size > kArenaSize) {
+        std::fprintf(stderr, "CreateArenaThread: [0x%zx, 0x%zx) does not fit the %zu-byte arena\n",
+                     stack_offset, stack_offset + stack_size, kArenaSize);
+        return false;
     }
-    mach_vm_address_t addr = static_cast<mach_vm_address_t>(g_base) + 0x80000000u;
-    mach_vm_deallocate(mach_task_self(), addr, ArenaSizeFromEnv());
-    g_base = 0;
+    pthread_attr_t attr;
+    if (pthread_attr_init(&attr) != 0) {
+        return false;
+    }
+    bool ok = pthread_attr_setstack(&attr, s_arena + stack_offset, stack_size) == 0;
+    if (ok) {
+        ok = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) == 0;
+    }
+    pthread_t thread;
+    if (ok) {
+        ok = pthread_create(&thread, &attr, start, arg) == 0;
+    }
+    pthread_attr_destroy(&attr);
+    return ok;
 }
 
 } // namespace re4_port

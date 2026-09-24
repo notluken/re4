@@ -1,5 +1,16 @@
 // Phase 2 step 3 (docs/port-phase2.md): the fixed host arena that gives include/port/ptr32.h's
 // compressed handles a window to live in. Implementation: src/port/arena.cpp.
+//
+// Rule (docs/port-phase2.md, "the host arena"): no game-visible pointer may ever point at host
+// malloc()'d memory or at the host main thread's stack. Both are placed by the OS wherever it wants,
+// with no guarantee of staying inside the compressed-handle window (and, before this file's second
+// revision, a naive "reserve a fixed VM range" approach that assumed a stable address near them
+// ended up silently clobbering live malloc bookkeeping instead -- see the "why VM_FLAGS_OVERWRITE
+// was rejected" note in docs/port-phase2.md, never repeat that approach). The arena instead lives
+// inside the executable's own image (a zerofill BSS-like section, ASLR-slides with the rest of the
+// image, never overlaps anything else because dyld places it as part of loading the exe, before any
+// of this code runs), so *only* memory carved from GetArena()/CreateArenaThread() below is ever
+// legal to expose to the game as a Ptr32<T> or push onto a stack the game can see.
 #ifndef TARGET_PC
 #error "include/port/arena.h is host-only (TARGET_PC)"
 #endif
@@ -7,17 +18,35 @@
 #ifndef RE4_PORT_ARENA_H
 #define RE4_PORT_ARENA_H
 
+#include <cstddef>
+
 namespace re4_port {
 
-// Reserves the fixed 4 GiB-window arena and sets g_base (include/port/ptr32.h). Aborts (does not
-// return) if the address is taken or if the current exe image / stack turn out to be outside the
-// resulting window. RE4_ARENA_BASE / RE4_ARENA_SIZE environment variables override the defaults
-// (hex or decimal, strtoull base 0) for testing.
+// Total size of the embedded arena (1 GiB). A compile-time constant, not a runtime option: the
+// arena is a static array in the exe image, not a dynamic reservation, so its size is fixed at link
+// time.
+inline constexpr std::size_t kArenaSize = std::size_t(1) << 30;
+
+// Sets g_base (include/port/ptr32.h) from the embedded arena's own address, then asserts (aborts if
+// not) that the whole exe image and the whole arena are inside the resulting 4 GiB window. Never
+// allocates or maps anything -- the arena already exists as part of the exe image before main()
+// runs; this only computes g_base and checks it. Idempotent: safe to call more than once.
 void InitArena();
 
-// Releases the arena and resets g_base to 0. Mainly for tests that call InitArena() more than once
-// in the same process.
-void ShutdownArena();
+// The arena's bounds, for carving out sub-allocations (thread stacks, the eventual host heap
+// backing Ptr32<T>-visible allocations). [GetArenaBase(), GetArenaBase() + GetArenaSize()).
+void* GetArenaBase();
+std::size_t GetArenaSize();
+
+// Starts a detached pthread whose stack is carved from the arena (pthread_attr_setstack), not from
+// the host's normal thread-stack allocator (which, like malloc, is not guaranteed to land inside the
+// window). This is the only supported way to run game code: the real game main loop (Phase 4) must
+// run this way, never on the process's own main thread. `stack_size` bytes are taken from the arena
+// starting at `stack_offset`; the caller is responsible for not overlapping two stacks (no allocator
+// here yet -- Phase 4's heap design decides that). Returns false (does not abort) if pthread creation
+// itself fails; the arena/window invariants this file exists for are unaffected by that failure.
+bool CreateArenaThread(std::size_t stack_offset, std::size_t stack_size, void* (*start)(void*),
+                       void* arg);
 
 } // namespace re4_port
 
