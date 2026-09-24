@@ -441,35 +441,153 @@ to `<repo>/../aurora` -- pass it explicitly if Aurora lives somewhere else. The 
 
 ### 3. Run it
 
+**Must be run with the repo root as the current working directory** -- both the DVD root
+(`argv[1]`) and the disc image path (`argv[2]`) default to paths relative to `cwd`, not to the
+binary's location:
+
 ```sh
-./build-pc-boot/re4_boot orig/G4BE08/files
-# or: RE4_DVD_ROOT=orig/G4BE08/files ./build-pc-boot/re4_boot
-# or, with no argument/env var, it defaults to "orig/G4BE08/files" relative to the cwd
+cd <repo root>   # important -- see above
+./build-pc-boot/re4_boot orig/G4BE08/files orig/G4BE08/re4_debug_disc1.iso
+# argv[1] (DVD root, informational only as of section 13 -- see below) defaults to
+#   orig/G4BE08/files, or $RE4_DVD_ROOT
+# argv[2] (the real disc image Aurora's nod-based DVD backend opens) defaults to
+#   orig/G4BE08/re4_debug_disc1.iso, or $RE4_DISC
 ```
 
-Expected output as of this session (section 11's blocker -- the process aborts, this is not yet a
-successful boot):
+Expected output as of section 13 (the process still aborts, this is not yet a successful boot --
+see section 13's current blocker):
 
 ```
 STUB: PSMTXIdentity() called
 re4_boot: DVD root=orig/G4BE08/files
+re4_boot: disc image=orig/G4BE08/re4_debug_disc1.iso
 re4_boot: arena base=0x<some address> size=1073741824
 STUB: memclr_asm() called
 ... more "STUB: ... called" lines (expected -- docs/port-boot.md section 7's stub survey) ...
 [info] [aurora::card] CARD API Initialized BUILT <build timestamp>
-Assertion failed: (newLo <= MEM1End && newLo >= MEM1Start), function OSSetArenaLo, file OSArena.cpp, line 27.
+STUB: OSSetSaveRegion() called
+STUB: memset_asm() called
+STUB: OSInitThreadQueue() called
+STUB: OSInitSemaphore() called
+STUB: Render_init() called
+[debug] [aurora::ar] Initialized 0x1000000 bytes of ARAM!
 ```
 
-then the process aborts (`SIGABRT`). This is the current, known stopping point (section 11) --
-not a sign the build is broken.
+then the process crashes (`EXC_BAD_ACCESS`, on Aurora's own background DVD I/O thread -- section
+13's current blocker, not a sign the build is broken).
 
 ### 4. Get a backtrace
 
 ```sh
-lldb --batch -o run -o "bt" -k "bt" -k "quit" -- ./build-pc-boot/re4_boot orig/G4BE08/files
+cd <repo root>
+lldb --batch -o run -o "bt" -k "bt" -k "quit" -- ./build-pc-boot/re4_boot orig/G4BE08/files orig/G4BE08/re4_debug_disc1.iso
 ```
 
-`-o run` starts it, `-k bt`/`-o bt` print the backtrace whether it stops on the assert (the
-current case) or any other signal, `-k quit` exits lldb afterward instead of leaving it at an
-interactive prompt. Expect to land on `OSSetArenaLo` (section 11) unless something upstream of
-that has changed since this was written.
+`-o run` starts it, `-k bt`/`-o bt` print the backtrace whether it stops on a crash (the current
+case) or any other signal, `-k quit` exits lldb afterward instead of leaving it at an interactive
+prompt. Expect to land on `(anonymous namespace)::readFromHandle` in Aurora's `dvd.cpp` (section
+13) unless something upstream of that has changed since this was written.
+
+## 13. Boot progress (2026-09-24, continued -- MEM1 unification + real DVD)
+
+User decisions this round: (1) re4_port's embedded arena is the single owner of the GameCube
+address space; (2) use Aurora's real `nod`-based DVD backend against the real disc image
+(`orig/G4BE08/re4_debug_disc1.iso`), not the extracted-files tree.
+
+### Mechanism chosen for (1): point Aurora's globals at our arena, no source patch
+
+Aurora's `OSArena`/`OSAlloc`/`OSInitAlloc` (`lib/dolphin/os/OSArena.cpp`, `OSAlloc.cpp`) are real
+implementations this repo already links (not stubs). They gate their own bounds checks on two
+plain-linkage globals, `MEM1Start`/`MEM1End` (`lib/dolphin/os/OSMemory.cpp`), only ever set by
+Aurora's own `AuroraOSInitMemory()`, and only when `aurora::g_config.mem1Size > 0` (never true in
+this repo, hence section 11's blocker). Neither `MEM1Start`/`MEM1End` nor `aurora::g_config` are
+declared in a public Aurora header, but both are ordinary external-linkage symbols (not `static`)
+-- `include/port/mem1.h`/`src/port/mem1.cpp` redeclares them (`extern void* MEM1Start;` etc.) and
+sets `MEM1Start = re4_port::GetArenaBase()`, `MEM1End = base + arena size`,
+`OSBaseAddress = base` (this one *is* public, `<dolphin/os.h>`), and `aurora::g_config.mem1Size`/
+`mem2Size` (ARAM, unrelated to MEM1 but gated the same way, section on `ARAlloc` below) to match.
+**Picked over "replace Aurora's OSArena/OSAlloc with our own"**: simpler (zero new files
+duplicating heap-management logic Aurora already has working) and more robust (Aurora's own
+`OSAllocFromHeap`/`OSFreeToHeap`/`OSCreateHeap` already operate correctly on real host pointers --
+confirmed by reading them, section below); the only actual bug was on this repo's side (next
+paragraph). No `tools/port/aurora-patches/` needed -- this is the "hook already exists" branch.
+
+**Ordering gotcha**: `InitMem1()` must run *after* `OSInit()` has executed once (with
+`mem1Size` still 0, a no-op on Aurora's side) -- calling it any earlier (tried first, from
+`boot_main.cpp` before `CreateArenaThread`) means `OSInit()`'s own call to
+`AuroraOSInitMemory()` sees `mem1Size > 0` and reallocates its own MEM1 block via a plain
+`calloc()`, silently clobbering what `InitMem1()` had just set up. Fixed by calling it from
+`src/game/main.cpp`'s `systemStartInit()`, immediately after the `OSInit();` call (`TARGET_PC`
+branch, `#ifdef`-gated, remote-verified byte-identical for the original build).
+
+### A second, related bug found along the way: `main_mem.cpp`'s u32<->pointer boundary
+
+`SystemMemInit()`/`MemCreateHeap()` store `OSGetArenaLo/Hi()`/`OSInitAlloc()`/`OSCreateHeap()`'s
+results in plain `u32` fields (`arenaLo`, `arenaHi`, `HeapHead`, ...) via bare `(u32)`/`(void*)`
+casts -- correct on the original 32-bit target (every pointer *is* 32 bits there), silently
+truncating on this 64-bit host now that Aurora's real `OSArena`/`OSAlloc` hand back real 64-bit
+host pointers. Fixed the same way this repo already handles on-disc pointer fields: wrapped each
+site in `re4_port::GC32()`/`GCPTR()` (`include/port/ptr32.h`) under `TARGET_PC`, so the u32 value
+these fields hold is the compressed, GameCube-looking handle, not a truncated raw pointer.
+`mem_alloc`/`mem_calloc`/`Mem_free`/`OSAllocFromHeap`/`OSFreeToHeap` themselves were **already**
+correct (they pass real pointers throughout, never narrow them) -- only the arena-bootstrap
+functions needed this.
+
+### Milestones reached this round (each with its fix, one line)
+
+1. **Past `OSSetArenaLo`'s assert** (section 11's blocker) -- `InitMem1()` (above).
+2. **Past `SystemMemInit()` entirely, into `TaskSchedulerInit`/`Render_init`** -- the GC32/GCPTR
+   fix (above) for the truncated arena pointers (previously crashed with the `HALT()` poison
+   address `0x11111111` from a corrupted heap pointer feeding an ELF-size-overflow check).
+3. **Past `ARInit`/`ARAlloc` (SndInit's ARAM setup)** -- `aurora::g_config.mem2Size` set to 16 MiB
+   (real GameCube ARAM size) in the same `InitMem1()` call; unrelated to MEM1/GC32 (Aurora's ARAM
+   emulation is its own independently `malloc`'d buffer, addressed by ARAM-relative offsets, never
+   by a real host or GC pointer), just needed to be nonzero before `SndInit()`'s `ARInit()` call.
+4. **Past the disc-open step** -- `include/port/dvd.h`/`src/port/dvd.cpp`'s `re4_port::InitDvd()`,
+   called from `boot_main.cpp` before `InitArena()`: resolves `argv[2]` / `$RE4_DISC` /
+   `orig/G4BE08/re4_debug_disc1.iso`, calls `aurora_dvd_open()` on it. **Must run with the repo
+   root as the current working directory** -- the path is resolved relative to `cwd`, and the
+   default is a relative path (see section 12's updated run command). Never copies the ISO.
+5. **Past `CardInit()`/`CARDInit`**, into `Render_init`, ARAM init, and a real DVD read reaching
+   Aurora's own background DVD-I/O thread -- **Aurora dolphin-API mismatch** found and fixed:
+   `include/dolphin/card.h` (this repo's own copy) declares the real-hardware
+   `CARDInit(void)` signature and this repo calls it that way; Aurora's own `<dolphin/card.h>`
+   (gated by its *own*, same-named `TARGET_PC` macro) only ever defines a two-argument
+   `CARDInit(const char* game, const char* maker)` -- both `extern "C"`, so the argument-count
+   mismatch is invisible at compile time and left `game`/`maker` reading whatever garbage was in
+   the argument registers, which `CardGciFolder::setCurrentGame` then dereferenced and crashed on.
+   Fixed by calling the real two-argument symbol directly (`asm("_CARDInit")`-aliased, file-scope
+   -- a *local* `extern "C"` redeclaration with a different signature does not parse in clang,
+   confirmed with a minimal repro before landing on the file-scope alias instead) with
+   `(nullptr, nullptr)` (both setters no-op on null).
+
+### Current blocker: Aurora's own DVD worker thread crashes on `handle->seek`
+
+```
+* thread #3 (Aurora's internal DVD I/O thread, not the game thread), EXC_BAD_ACCESS, address=0x20142010039
+  frame #0: (anonymous namespace)::readFromHandle(handle=0x100ce39c8, ...) at dvd.cpp:233
+      -> handle->seek(offset, 0)
+  frame #1: DvdWorker::perform_command(...) at dvd.cpp:530
+  frame #2: DvdWorker::process_command(...) at dvd.cpp:537
+  frame #3: DvdWorker::run(...) at dvd.cpp:510
+  frame #4: DvdWorker::start()::'lambda'()::operator()(...) at dvd.cpp:354
+  frame #5..#7: std::thread plumbing
+```
+
+**Diagnosis (not root-caused this pass, budget-limited)**: this is entirely inside Aurora's own
+`lib/dolphin/dvd/dvd.cpp`, on a background `std::thread` Aurora spawns for DVD I/O, not in game
+code or this repo's port code. `handle` is a `CommandDataBase*` (a small polymorphic wrapper
+around either a `nod`-backed disc reader or an overlay-file reader); `handle->seek` is a virtual
+call landing on a wildly invalid address (`0x20142010039`), consistent with either (a) a corrupt
+vtable pointer (the `CommandDataNod`/`CommandDataBase` object was never properly constructed, or
+was destroyed/reused before this async command ran), or (b) `readFromHandle` receiving a stale
+`handle` for a command queued before `aurora_dvd_open()`'s partition (`s_partition`) was actually
+ready -- both point at an ordering/lifetime issue between this repo's `InitDvd()` call and the
+first `DvdRead()` reaching Aurora's async worker, not an obviously local one-line fix. Given this
+is a real bug inside Aurora's own async DVD path rather than a call-site or config mismatch this
+repo controls, and the session's time budget, this is where this pass stops -- next steps would be
+attaching a debugger to Aurora's DVD worker thread specifically to inspect `handle`'s actual
+contents/vtable, or checking whether `aurora_dvd_open()` needs to fully settle (a background
+thread of its own?) before the first read can safely be queued.
+
+No window ever opens this session (crash predates any GX/VI frame submission) -- no screenshot.
