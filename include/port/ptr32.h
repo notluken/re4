@@ -95,6 +95,22 @@ public:
     }
     std::uint32_t raw_handle() const { return m_handle; }
 
+    // Phase 3 (docs/port-phase3.md, include/port/be.h's design note): a pointer field's raw,
+    // *pre-relocation* value is a big-endian file-relative byte offset straight off disc -- the
+    // buffer holding it is never swapped (only the header's plain integer fields get BE<T>'d), so
+    // reading those 4 bytes with raw_handle()/the explicit u32 cast gives the wrong number on this
+    // little-endian host. Relocation code (cTexSys::CalcTplAddr, MessageFont::create, and similar
+    // "addr + rawOffset" call sites) must read the raw offset through this accessor instead, until
+    // that offset has been turned into a real pointer and assigned back (that assignment computes
+    // a runtime handle via GC32(), already host-native -- no further swap, which is why this is a
+    // read-only helper, not a change to how m_handle is stored or to operator T*()/raw_handle()
+    // themselves).
+    std::uint32_t raw_handle_be() const
+    {
+        return ((m_handle & 0x000000FFu) << 24) | ((m_handle & 0x0000FF00u) << 8) |
+               ((m_handle & 0x00FF0000u) >> 8) | ((m_handle & 0xFF000000u) >> 24);
+    }
+
     operator T*() const { return GCPTR<T>(m_handle); }
     // A C-style/explicit cast only looks for a conversion function whose return type matches the
     // target exactly (or is reached by a *further* user-defined conversion, which overload
