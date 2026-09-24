@@ -1105,12 +1105,8 @@ s32 OSEnableScheduler(void)
     if (!warned) { std::fprintf(stderr, "STUB: OSEnableScheduler() called\n"); warned = true; }
     return 0;
 }
-// OSExitThread: `void OSExitThread(void* val)`
-void OSExitThread(void* val)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSExitThread() called\n"); warned = true; }
-}
+// OSExitThread: real semantics now in src/port/os_thread.cpp (docs/port-phase3.md's continuation --
+// the scheduler.cpp task-thread rework).
 // OSGetConsoleSimulatedMemSize: `u32 OSGetConsoleSimulatedMemSize(void)`
 u32 OSGetConsoleSimulatedMemSize(void)
 {
@@ -1125,13 +1121,7 @@ u32 OSGetConsoleType(void)
     if (!warned) { std::fprintf(stderr, "STUB: OSGetConsoleType() called\n"); warned = true; }
     return 0;
 }
-// OSGetCurrentThread: `OSThread* OSGetCurrentThread(void)`
-OSThread* OSGetCurrentThread(void)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSGetCurrentThread() called\n"); warned = true; }
-    return (OSThread*) 0;
-}
+// OSGetCurrentThread: real semantics now in src/port/os_thread.cpp.
 // OSGetFontEncode: `u16 OSGetFontEncode(void)`
 u16 OSGetFontEncode(void)
 {
@@ -1195,22 +1185,23 @@ void OSInitSemaphore(OSSemaphore* sem, s32 count)
         sem->queue.tail = nullptr;
     }
 }
-// OSInitThreadQueue: `void OSInitThreadQueue(OSThreadQueue* queue)`
-// Same class of bug as OSInitSemaphore above: real semantics (empty the queue), not just a marker.
-void OSInitThreadQueue(OSThreadQueue* queue)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSInitThreadQueue() called\n"); warned = true; }
-    if (queue) {
-        queue->head = nullptr;
-        queue->tail = nullptr;
-    }
-}
+// OSInitThreadQueue: real semantics now in src/port/os_thread.cpp.
 // OSPanic: `void OSPanic(const char* file, int line, const char* msg, ...)`
+// NOT a logging-only stub: a real OSPanic() call means the game itself detected a fatal condition
+// (a failed ASSERTMSGLINE, scheduler.cpp's stack-overflow guard, ...) and never returns on real
+// hardware -- letting it fall through to a no-op here means the caller's own code keeps running
+// past a state the vendor explicitly decided was unrecoverable, which is worse than crashing
+// (docs/port-phase3.md's stub-audit rule: a stub must have the real contract, not just log).
 void OSPanic(const char* file, int line, const char* msg, ...)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSPanic() called\n"); warned = true; }
+    va_list ap;
+    va_start(ap, msg);
+    std::fprintf(stderr, "OSPanic: %s:%d: ", file, line);
+    std::vfprintf(stderr, msg, ap);
+    std::fprintf(stderr, "\n");
+    va_end(ap);
+    std::fflush(stderr);
+    std::abort();
 }
 // OSReport: `void OSReport(const char* fmt, ...)`
 // NOT a logging-only stub: a real vfprintf pass-through, not just a one-time call-site marker --
@@ -1239,13 +1230,7 @@ BOOL OSRestoreInterrupts(BOOL level)
     if (!warned) { std::fprintf(stderr, "STUB: OSRestoreInterrupts() called\n"); warned = true; }
     return 0;
 }
-// OSResumeThread: `s32 OSResumeThread(OSThread* thread)`
-s32 OSResumeThread(OSThread* thread)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSResumeThread() called\n"); warned = true; }
-    return 0;
-}
+// OSResumeThread: real semantics now in src/port/os_thread.cpp.
 // OSSetErrorHandler: `OSErrorHandler OSSetErrorHandler(OSError error, OSErrorHandler handler)`
 OSErrorHandler OSSetErrorHandler(OSError error, OSErrorHandler handler)
 {
@@ -1278,19 +1263,8 @@ s32 OSSignalSemaphore(OSSemaphore* sem)
     if (!warned) { std::fprintf(stderr, "STUB: OSSignalSemaphore() called\n"); warned = true; }
     return 0;
 }
-// OSSleepThread: `void OSSleepThread(OSThreadQueue* queue)`
-void OSSleepThread(OSThreadQueue* queue)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSSleepThread() called\n"); warned = true; }
-}
-// OSSuspendThread: `s32 OSSuspendThread(OSThread* thread)`
-s32 OSSuspendThread(OSThread* thread)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSSuspendThread() called\n"); warned = true; }
-    return 0;
-}
+// OSSleepThread: real semantics now in src/port/os_thread.cpp.
+// OSSuspendThread: real semantics now in src/port/os_thread.cpp.
 // OSWaitSemaphore: `s32 OSWaitSemaphore(OSSemaphore* sem)`
 s32 OSWaitSemaphore(OSSemaphore* sem)
 {
@@ -1298,12 +1272,7 @@ s32 OSWaitSemaphore(OSSemaphore* sem)
     if (!warned) { std::fprintf(stderr, "STUB: OSWaitSemaphore() called\n"); warned = true; }
     return 0;
 }
-// OSWakeupThread: `void OSWakeupThread(OSThreadQueue* queue)`
-void OSWakeupThread(OSThreadQueue* queue)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSWakeupThread() called\n"); warned = true; }
-}
+// OSWakeupThread: real semantics now in src/port/os_thread.cpp.
 // PCclose: `int PCclose(int fd)`
 int PCclose(int fd)
 {
