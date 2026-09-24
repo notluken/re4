@@ -99,8 +99,19 @@ void SndInit()
     // what crashes is the deeper sound-file-format parsing this reads into, real ARAM/DSP-format
     // work with no host equivalent yet, not a missed pointer conversion. Stub to "sound off" for
     // first boot, same as SofdecInit()/init_dbmodule() just below it are already deferred.
+    // Sound-off audit (docs/port-phase3.md): SndMem stays all-zero (never populated below), and
+    // most of this file already treats an all-zero SndMem/pSnd defensively (sndExistCheck/
+    // GetSeAtPtr/etc. gate on pSnd->blk_flag or a null header, which a zeroed struct naturally
+    // fails, matching a real "nothing loaded" state). str_flag is one such existing vendor-provided
+    // gate (SndStrReq's "SND: No STR Header." branch) that defaults to 1 (its file-scope
+    // initializer) -- set it to 0 here so that gate does what it was built for instead of being
+    // silently bypassed. The handful of call sites with NO such existing gate (they unconditionally
+    // dereference a SndMem table this stub never populates) are stubbed individually where they are
+    // defined, not patched around here: SndBgmTblInit, SndDoorSeLoad, SndBgmTblSet, SndBlkInit,
+    // SndBgmLoad, SndDriverInit, SndSystemReset.
     pSnd = &Snd;
     memclr_asm(pSnd, sizeof(SndWork));
+    str_flag = 0;
     return;
 #endif
     int len;
@@ -188,6 +199,12 @@ void SndInit2()
 // room's save record (SndRoomSave), so scripts can change them per save.
 void SndBgmTblInit()
 {
+#ifdef TARGET_PC
+    // Sound off (docs/port-phase3.md): unlike most of this file, this reads SndMem.bgm_tbl with no
+    // "is it loaded" guard at all (real hardware never had to check -- SndInit() always populated
+    // it) -- SndInit()'s TARGET_PC stub never does, so this would dereference a null pointer.
+    return;
+#endif
     SndBgmTbl* t = SndMem.bgm_tbl;
     u16* rl = (u16*) ((u8*) t + t->list_ofs);
     int i = 0;
@@ -212,6 +229,12 @@ void SndBgmTblInit()
 // 0x7F, the four stream ARAM addresses and MRAM buffers.
 void SndDriverInit()
 {
+#ifdef TARGET_PC
+    // Sound off (docs/port-phase3.md): every call below is real AX/CRI driver setup with no
+    // Aurora/host backend (Phase 5) -- nothing here is guarded by SndMem/pSnd state the way most
+    // of this file is, so skip it outright rather than let it run against undefined driver state.
+    return;
+#endif
     int i;
 
     Snd_system_init();
@@ -231,6 +254,11 @@ void SndDriverInit()
 // Full driver restart (AX / mixer / sequencer down and up again) — used on a soft reset.
 void SndSystemReset()
 {
+#ifdef TARGET_PC
+    // Sound off (docs/port-phase3.md): same reasoning as SndDriverInit() above, which this also
+    // calls at the end.
+    return;
+#endif
     SEQQuit();
     SYNQuit();
     AXARTQuit();
@@ -1700,6 +1728,12 @@ struct SndDoorSe {
 // its file (0x69 entry) into block 7 unless already loaded. Returns the read request, -1 when none.
 int SndDoorSeLoad()
 {
+#ifdef TARGET_PC
+    // Sound off (docs/port-phase3.md): unconditionally dereferences SndMem.door_tbl with no
+    // "is it loaded" guard, like SndBgmTblInit() above. -1 matches this function's own documented
+    // "no read request" return.
+    return -1;
+#endif
     u32 i;
     u16 cnt = *(u16*) ((u8*) SndMem.door_tbl + SndMem.door_tbl->num_ofs);
     u32 no = 0xFFFF;
@@ -2320,6 +2354,12 @@ void SndSoftReset()
 // current room). Returns 1 when found.
 int SndBgmTblSet(u16 room_no, int tbl_no)
 {
+#ifdef TARGET_PC
+    // Sound off (docs/port-phase3.md): dereferences SndMem.bgm_tbl with no "is it loaded" guard
+    // once rs != NULL, like SndBgmTblInit() above. 0 matches this function's own documented
+    // "not found" return.
+    return 0;
+#endif
     SndRoomSave* rs = (SndRoomSave*) RoomData.getRoomSavePtr(room_no);
     SndBgmRoom* r = NULL;
     int ret = 0;
@@ -2529,6 +2569,14 @@ int SndEmDataReadCheck(int em_id)
 // 8 + no), 3 = BGM slot `no` (block 3 + no), else block `type`; ARAM / MRAM addresses from SndMem.
 void SndBlkInit(int type, int id, int no)
 {
+#ifdef TARGET_PC
+    // Sound off (docs/port-phase3.md): dereferences SndMem.blk_mram[blk] (`*(u32*) adr`) with no
+    // "is it loaded" guard, unlike most of this file -- this is in fact the function that would
+    // set pSnd->blk_flag afterward, so it cannot itself be gated by that flag. Skipping it
+    // entirely means the block's flag never gets set either, which is the correct "still not
+    // loaded" state for every caller that does check the flag.
+    return;
+#endif
     int blk = type;
     u32 adr;
 
@@ -2555,6 +2603,13 @@ void SndBlkInit(int type, int id, int no)
 // Reads BGM `no`'s data (file 0x61 entry) unless already resident.
 void SndBgmLoad(int bgm_no)
 {
+#ifdef TARGET_PC
+    // Sound off (docs/port-phase3.md): SndBgmDataReadCheck()'s guard below returns "free slot i"
+    // (not -1) precisely when nothing is loaded yet (SND_BIT_CK on a zeroed blk_flag) -- it exists
+    // to gate *duplicate* loads, not a missing table, so it does not stop this from reaching
+    // SndMem.bgm_file[bgm_no], a null pointer this stub never populates.
+    return;
+#endif
     int r;
 
     if (SndBgmDataReadCheck(bgm_no) == -1) {
