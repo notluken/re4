@@ -11,11 +11,16 @@
 
 #include <cstdio>
 
-extern "C" int main_game(); // src/game/main.cpp's `main()`, renamed at link time (see CMakeLists.txt:
-                             // re4_boot can't have two `main`s, and the vendor's own main() has the
-                             // real boot sequence in it unchanged -- renaming the *symbol*, not the
-                             // source, is done via `-Dmain=main_game` on this one translation unit's
-                             // compile of src/game/main.cpp, not a source edit).
+int main_game(); // src/game/main.cpp's `main()`, renamed at link time (see CMakeLists.txt:
+                  // re4_boot can't have two `main`s, and the vendor's own main() has the
+                  // real boot sequence in it unchanged -- renaming the *symbol*, not the
+                  // source, is done via `-Dmain=main_game` on this one translation unit's
+                  // compile of src/game/main.cpp, not a source edit). NOT `extern "C"`: the
+                  // special "no mangling" treatment C++ gives a function literally spelled
+                  // `main` does not carry over once the preprocessor has already renamed it
+                  // to `main_game` before Sema ever sees it -- it mangles as an ordinary C++
+                  // global function (`_Z9main_gamev`, verified with `nm` on the .o), so this
+                  // declaration must use plain C++ linkage to match, not `extern "C"`.
 
 #include <atomic>
 #include <chrono>
