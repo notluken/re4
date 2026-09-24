@@ -605,15 +605,132 @@ any pointer/integer cast). Whoever continues should treat 168-169 as the better 
 one-line (`#include "main_mem.h"` in `cManager.h`, not attempted this session — a `src/`/`include/`
 edit needing the same remote-verification treatment as `PG_OFS` got) fix.
 
-**Boot-path file spot-check** (task 4 prep, not the stub/exclude-list work itself — not reached this
-session): of `docs/port-boot.md`'s asm-flagged boot files, `exception.cpp`, `eprintf.cpp`, and
-`db_log.cpp` **already compile clean** under `RE4_U32_32=ON` with the current rewriter + `PG_OFS`
-fix — no stub needed for them beyond what already exists. `main.cpp` has one remaining error (a
-`mes.h` header-macro cast, transitively included — Phase 2 step 4 territory, not this session).
-`scheduler.cpp` and `sofdec.cpp` each have exactly one remaining error, both the `(int)`-literal-cast
-gap above. `dbmodule.cpp` has real Phase 5 paired-single asm (`invalid output constraint '=f'`,
-confirming docs/port-phase1-errors.md's existing flag) plus one `Ptr32<T>`-vs-raw-pointer cast
-mismatch. **Tasks 4 (boot-path asm stubs/exclude list) and 5 (re-measure + `re4_boot` link attempt)
-were not reached this session** — the rewriter-correctness work above (which the coordinator's task 1
-uncovered was needed) took the full session. Explicitly not started: any `src/port/stubs/` work, any
-`re4_boot` CMake target, any Aurora `add_subdirectory`, any link attempt.
+**Boot-path file spot-check**: of `docs/port-boot.md`'s asm-flagged boot files, `exception.cpp`,
+`eprintf.cpp`, and `db_log.cpp` compile clean under `RE4_U32_32=ON`. `main.cpp`, `scheduler.cpp`,
+`sofdec.cpp`, `title.cpp`, `dvd.cpp` were also gotten to compile clean this round (section 11) — see
+that section for what each needed. `dbmodule.cpp` has real Phase 5 paired-single asm (confirmed) plus
+one `Ptr32<T>`-vs-raw-pointer cast mismatch; excluded (`cmake/boot_exclude.txt`), not fixed.
+
+## 11. Follow-up session 2 (2026-09-24, continued again): -fms-extensions, Debug_alloc's real cause,
+5 more boot-path fixes, and the first re4_boot link attempt
+
+**A. The `(int)`-cast gap, fixed**: per the coordinator's diagnosis, clang only makes a narrowing
+pointer-to-smaller-int C-style cast a *hard error* in strict mode; `-fms-extensions` (the same flag
+the original tree-wide 1,693-site measurement used) downgrades it to a warning, so the
+`CStyleCastExpr`/`CK_PointerToIntegral` node gets built and the rewriter's existing logic handles it
+with no other changes needed. Added `--extra-arg=-fms-extensions --extra-arg=-Wno-error` to every
+rewrite rule (`CMakeLists.txt` and `tools/port/rewrite_casts.py`). Verified: `scheduler.cpp:205`'s
+`pCTask->pFunc((int) value)` and `sofdec.cpp:810`'s `(int) this` both now rewrite and compile clean.
+Tree-wide this round: rewritten-site count rose from 663 to 741 (net; some of the increase is offset
+by the nested-cast/dedup logic below also changing what counts as "one site"), 37 of the new sites
+specifically `(int)`-destination casts. 20-site spot check (of the new `(int)` sites specifically,
+`build-pc/gen/cast_rewrite_report.txt`): all 19 sampled plus `scheduler.cpp`'s own manually-checked
+site compose correctly (`(int)re4_port::GC32(expr)`, `expr` in every case a plausible pointer value —
+`info`, `dst`, `ret`, `r`, `addr`, `hdr`, `pObj`, `pEmWindow`, `em`, `w`, `d`, `pP->param`, `c->arg`,
+`this`, ...).
+
+**B. `Debug_alloc`'s real root cause, found and fixed**: preprocessed `model.cpp` (`clang -E`) and
+compared token order directly — `cManager<T>::arrayPush`'s *use* of `Debug_alloc` (from `atari.h`'s
+transitive include of `cManager.h`) appears **before** `main_mem.h`'s own declaration of it in the
+token stream for any TU that includes something-that-includes-`cManager.h` ahead of `main_mem.h`
+(`model.cpp`: `"atari.h"` at line 7, `"main_mem.h"` at line 13). GCC 2.95 resolves an unqualified,
+non-dependent name inside a template body at *instantiation* time (the same permissive single-phase
+lookup CLAUDE.md's `cVarLoop`/`cVarRange` note already documents for a different symbol), so the
+original target never notices; clang's two-phase lookup needs the declaration visible at template
+*definition* time. Fix: `include/cManager.h` now `#include`s `main_mem.h` directly (no circular
+include: checked `main_mem.h`'s own include list first) — unconditional, no `TARGET_PC` guard needed,
+since it only adds a declaration already reachable from every affected TU, changing no emitted code.
+Confirmed via a real CMake `re4_game_all -k 0` build (not the ad hoc single-file reproduction that
+had been giving a misleadingly low number): **199 errors, 0 "too many errors emitted" truncations**
+— a genuinely complete, trustworthy count (`RE4_U32_32=ON`, real Apple-clang flags, all 293 units),
+`Debug_alloc` gone from the list entirely.
+
+**Five more boot-path fixes**, found by compiling `docs/port-boot.md`'s call chain unit-by-unit and
+chasing what remained:
+- `main.cpp`/`scheduler.cpp`: the GQR (`mtspr`) setup asm block (real PPC hardware, no arm64
+  equivalent) is now `#ifndef TARGET_PC`-skipped in both places it appears (`scheduler.cpp` has its
+  own copy, per-task-thread — not previously noticed as a duplicate of `main.cpp`'s). Verified safe
+  to insert lines at that point in both files (no `__LINE__`/`HALT()`/`ASSERTMSGLINE` call between
+  the insertion and the next `#line` reset — `main.cpp` has one soon after; `scheduler.cpp` has none
+  at all after its single, early `#line` directive, and its one `OSPanic` call uses a hardcoded line
+  literal, not `__LINE__`, so unaffected either way).
+- `include/mes.h`'s `getMes()`: an inline member function (not a macro) doing the same same-object
+  pointer arithmetic the `FlagChk` family already has a `TARGET_PC` branch for — invisible to the
+  rewriter, which only ever touches casts physically written in the `.cpp`/`.c` file being compiled,
+  never a header's own inline function bodies. Hand-fixed the same way as the macro family.
+  Unblocked `main.cpp` (`mes.h` is transitively included there).
+- `main.cpp`: `VISetPostRetraceCallback(postVSyncCallback)` — a real signature mismatch
+  (`VIRetraceCallback` takes a retrace-count argument, `postVSyncCallback` takes none; GCC 2.95's C++
+  tolerated the implicit incompatible-function-pointer conversion, clang's does not). This is exactly
+  the "two SDK-shaped call sites" docs/port-phase1-errors.md already flagged as Phase 4 material; a
+  `TARGET_PC`-only explicit cast gets it to compile against whatever host/Aurora signature ends up
+  being real, without claiming the cast is semantically meaningful yet.
+- `include/global.h`'s `FlagXor`: missed from the original step-4 `FlagOn`/`FlagOff` pass entirely
+  (same macro family, same fix) — found blocking `title.cpp`'s `DbgFlagXor` calls. `title.cpp` is
+  boot-critical (`Title_task`, `main.cpp`'s only call into it) and is now fully clean.
+- `tools/port/cast_rewriter/CastRewriter.cpp`: a real, second rewriter bug, found compiling
+  `dvd.cpp` — a non-macro-body cast whose *argument* is itself another object-like macro (`(u32)
+  DVD_BUFF2`, `#define DVD_BUFF2 ((void*) 0x80360000)`) produced **corrupted, duplicated output**
+  (composed replacement text followed by the original, untouched text, both present) the first time
+  this was hit. Root cause, found by tracing `EditRange`'s actual offsets: for a cast whose end token
+  is a macro ID belonging to a *different* macro's body, using `getSpellingLoc` on it (as the
+  existing macro-body-rewrite code path already correctly does for casts *inside* the macro being
+  rewritten) jumps to that *other* macro's own `#define` text location, not the call site — `Rewriter
+  ::ReplaceText` then edits the wrong place. Fixed with `getExpansionLoc` instead of `getSpellingLoc`
+  for this specific case (a cast that is not itself macro-bodied, but has a macro-ID end location) —
+  keeps the edit at the real call site. A second, related bug in the same area:
+  `getSourceText`'s non-spelling mode unconditionally gave up (`return {}`) on any macro-ID range,
+  which meant a subexpression's tokens sitting purely inside *another* macro's definition (like
+  `DVD_BUFF2`'s own `0x80360000` literal) could never be composed into a parent replacement at all;
+  now falls back to spelling-based extraction whenever the plain-file-location fast path isn't
+  available. Verified: `dvd.cpp` (previously 2 errors from this exact pattern) compiles clean, output
+  text inspected directly (`re4_port::GCPTR<void>((std::uint32_t)(0x80360000))`, no duplication), and
+  the whole-tree re-measurement (below) shows no new corruption anywhere else.
+
+**Final measured count this session, `src/game`, real `re4_game_all -k 0` build**: **161 errors**
+(after A+B+the five fixes, before the getSourceText/DVD_BUFF2 fix) → **175 errors** after that fix
+(the count *rose* because the fix makes previously-silently-skipped sites get attempted and
+individually reported, not because anything regressed — the *file-level* pass/fail set only improved,
+`dvd.cpp` moved from failing to clean and nothing else changed; confirmed by diffing the exclude
+list before/after, one line different). **36 files still fail to compile** out of 293 — listed and
+categorized (Phase 5 asm / `Ptr32<T>` interaction bugs / not-yet-hand-fixed casts) in
+`cmake/boot_exclude.txt`.
+
+**`re4_boot` (task 5), first link attempt**: `CMakeLists.txt`'s `RE4_BUILD_BOOT` option, opt-in
+(pulls in Aurora's own dependency tree). `add_subdirectory(../aurora)` configures cleanly (~11 s,
+matching docs/port.md Phase 1's earlier standalone-build finding). `src/port/boot_main.cpp`: the real
+host entry point (not `src/game/main.cpp`'s own `main()`, which is compiled under `-Dmain=main_game`
+for this target only, a linker-level rename via `set_source_files_properties`, not a source edit) —
+calls `re4_port::InitArena()`, then `CreateArenaThread()` to run the game's real `main()` on an
+arena-backed thread (per `include/port/arena.h`'s rule), while the host main thread waits.
+`re4_boot_game` (an `OBJECT` library: `RE4_GAME_ALL_SOURCES` minus `cmake/boot_exclude.txt`) compiled
+and the link was attempted against `re4_port` + `aurora_os`/`aurora_vi`/`aurora_gx`/`aurora_pad`/
+`aurora_dvd`/`aurora_card`/`aurora_mtx`/`aurora_si`/`aurora_core` + a (still-empty) stub library.
+**Result: link failed, 486 undefined symbols** (`ld: symbol(s) not found for architecture arm64`) —
+the full list is in `/tmp/undef_syms.txt` this session (not committed; regenerate via `ninja re4_boot`
+in a `RE4_BUILD_BOOT=ON` configure). All 486 are plain (unmangled, single-underscore-prefixed) C++
+symbols — this codebase declares its game globals/functions in a way the linker sees as C linkage
+throughout (not confirmed exactly why; **TO VERIFY**), which in principle makes stub generation more
+tractable than chasing Itanium-mangled C++ names would be. Sampled the list by hand: the large
+majority are **not** missing SDK functionality — they are globals/functions *defined in the 36
+excluded `.cpp` files* (`ActBtn`, `DC`, `pSys`, `pSUB`, `min_lod`, `mercId`, `Espgen42_Move`, ...)
+that other, *included* files still reference. A smaller set is genuine missing SDK-level
+implementation (`AX*`/`ADX*`/`mwPly*` sound/FMV middleware, `memset_asm`, `COSF`, `primInit`/
+`primFree`) — Phase 5 material, expected.
+
+**`tools/port/gen_boot_stubs.py`**: a heuristic best-effort stub generator (regex-matches a header
+declaration for each undefined symbol, emits either a real default-constructed data definition or a
+logging function stub). **Tried, did not produce a usable result this session**: its regexes matched
+0 of the 486 symbols against real declarations in one run (too strict for this codebase's actual
+declaration formatting — multi-line signatures, `extern "C" {` blocks, etc.) — committed as a
+starting point for whoever continues, explicitly **not** validated, not wired into the build, and the
+generated output was not used. Given the 486-symbol list is dominated by the exclusion list's own
+ripple effect (not missing SDK surface), the more effective next step is very likely shrinking
+`cmake/boot_exclude.txt` (more of the same PG_OFS/FlagXor-shaped header fixes) rather than stubbing
+486 symbols individually — flagged here for whoever continues, not attempted further this session
+given the time already spent.
+
+**Not done this session**: a working stub library; a successful `re4_boot` link; running the
+executable; a backtrace. Stopped here — the link *attempt* itself (task 5's first half) is real and
+its failure is fully diagnosed (the 486-symbol list, categorized by cause), but getting to an actual
+link was not reached in the time available.
