@@ -284,6 +284,17 @@ private:
             EditEnd = SM.getSpellingLoc(EditEnd);
         } else if (!SM.isWrittenInMainFile(Loc)) {
             return true; // only rewrite casts physically in this TU's own file, not #included ones
+        } else {
+            // Not itself macro-bodied, but the cast's own end token can still be a macro ID -- its
+            // *argument* can be another object-like macro (`(u32) DVD_BUFF2`,
+            // `#define DVD_BUFF2 ((void*) 0x80360000)`): E->getSourceRange() then reports a macro-ID
+            // end location. Using getSpellingLoc there would jump to DVD_BUFF2's own #define text
+            // (wrong file position entirely -- measured, produced a corrupted double-text edit);
+            // getExpansionLoc keeps it at the actual call site, which Rewriter::ReplaceText needs.
+            if (EditBegin.isMacroID())
+                EditBegin = SM.getExpansionLoc(EditBegin);
+            if (EditEnd.isMacroID())
+                EditEnd = SM.getExpansionLoc(EditEnd);
         }
 
         SourceRange EditRange(EditBegin, EditEnd);
@@ -319,17 +330,25 @@ private:
     // location is what is actually written in the macro's definition text (including a literal
     // parameter name like `p`, not whatever argument a particular call site substituted), which is
     // exactly what belongs in the rewritten #define.
+    //
+    // Falls back to spelling-based text whenever the requested mode's range is a macro ID, rather
+    // than giving up: a non-macro-body call site whose *argument* is itself another object-like
+    // macro (e.g. `(u32) DVD_BUFF2` where `#define DVD_BUFF2 ((void*) 0x80360000)`) has a
+    // subexpression whose *tokens* are spelled inside DVD_BUFF2's own definition even though the
+    // call site itself is ordinary code -- found live in src/game/dvd.cpp, composing through
+    // buildSubexprText's recursive cast handling failed silently before this fallback existed
+    // (docs/port-phase2.md section 9's boot-path work).
     std::string getSourceText(Expr *E, bool useSpelling = false)
     {
         SourceManager &SM = Context.getSourceManager();
         const LangOptions &LO = Context.getLangOpts();
         SourceRange R = E->getSourceRange();
-        if (useSpelling) {
-            R = SourceRange(SM.getSpellingLoc(R.getBegin()), SM.getSpellingLoc(R.getEnd()));
-        } else if (R.getBegin().isMacroID() || R.getEnd().isMacroID()) {
-            return {}; // sub-expression itself macro-spelled: too risky to splice, flag via caller
+        if (!useSpelling && !R.getBegin().isMacroID() && !R.getEnd().isMacroID()) {
+            CharSourceRange CR = CharSourceRange::getTokenRange(R);
+            return Lexer::getSourceText(CR, SM, LO).str();
         }
-        CharSourceRange CR = CharSourceRange::getTokenRange(R);
+        SourceRange SpellR(SM.getSpellingLoc(R.getBegin()), SM.getSpellingLoc(R.getEnd()));
+        CharSourceRange CR = CharSourceRange::getTokenRange(SpellR);
         return Lexer::getSourceText(CR, SM, LO).str();
     }
 };
