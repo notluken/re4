@@ -1019,3 +1019,37 @@ Phase 2's TPL/`TEXDescriptor`-family structs already have (or need) a `Swap32`-s
 right after the raw disc read, before any relocation arithmetic touches the same bytes.
 
 No window renders this session (crash still predates GX/VI frame submission) -- no screenshot.
+
+## 22. Phase 3 (endianness): past `MessageControl::init()` entirely, into `systemRestartInit()` (2026-09-24)
+
+Full design and survey: docs/port-phase3.md. Summary of what changed and what it fixed, in order:
+
+1. `include/tpl.h`'s `CLUTHeader`/`TEXHeader`/`TEXDescriptor`/`TEXPalette` plain integer/float
+   fields converted to `BE<T>` (`include/port/be.h`, new this pass) -- fixes section 21's blocker
+   (`numDescriptors` reading as 0).
+2. `src/game/mes.cpp`'s local `MesFontFile::tplOfs`/`widthOfs` (missed by Phase 2's `Ptr32<T>`
+   inventory, not in a shared header) converted to `BE<u32>`.
+3. `include/port/ptr32.h` gained `Ptr32<T>::raw_handle_be()` (swapped) alongside the existing
+   `raw_handle()` (unswapped) -- `MessageFont::create()`'s pointer-arithmetic relocation code uses
+   the former for offset values, the sign-bit "already relocated?" guard stays on the latter (a real
+   wrinkle found live: `MessageControl::loadSystemFont()` calls `create()` a second time on the same,
+   already-relocated buffer; swapping the guard's read corrupts that second call -- docs/port-phase3.md
+   section 1).
+
+**Milestone**: `MessageControl::init()` (both `common_p.fnt` system-font slots) now completes; the
+process runs past `systemStartInit()` entirely and into `systemRestartInit()`, past `RoomDataInit`-
+adjacent setup (`cDataCtrl::init`, `EspWaterInit`, `ShadowInit`, `ClothInit`, all still logging
+stubs), reaching `SndInit2()`.
+
+**Current blocker**: `SndBgmTblInit()` (`src/game/snd.cpp:206`, called from `SndInit2()` ->
+`systemRestartInit()`) dereferences `SndMem.bgm_tbl` (a `Ptr32<SndBgmTbl>`), which is null --
+`SndInit()` itself is stubbed under `TARGET_PC` (section 15, Phase 5 deferral: no Aurora audio
+backend), so nothing ever populates it, and `SndBgmTblInit()` is a separate call site
+`systemRestartInit()` reaches directly, not gated behind the same stub. Not fixed this pass -- Phase
+5 (sound) scope, not an endianness bug (docs/port-phase3.md section 2's table); stopping here per
+the "stop at a design decision" instruction. Verified: `ctest` still green (`test_ptr32`,
+`test_arena`, `test_be` new, `re4_port_static_asserts` under `RE4_U32_32=ON`); default host build
+(`RE4_U32_32=OFF`) `re4_game_all -k 0` failing-file list unchanged (34 files, identical set,
+before/after diffed directly).
+
+No window opens this session (crash still predates any GX/VI frame submission) -- no screenshot.
