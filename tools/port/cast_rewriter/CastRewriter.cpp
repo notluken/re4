@@ -24,6 +24,7 @@
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
+#include "clang/Lex/Lexer.h"
 #include "clang/Rewrite/Core/Rewriter.h"
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
@@ -31,8 +32,10 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <fstream>
 #include <string>
+#include <vector>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -112,6 +115,145 @@ private:
         return std::string(P.getFilename()) + ":" + std::to_string(P.getLine());
     }
 
+    // Composes a qualifying cast's GC32()/GCPTR<T>() text without touching the Rewriter buffer --
+    // used both for a cast visited directly (handleCast, which then does the one real edit for the
+    // outermost cast in a chain) and, recursively, for a subexpression that is itself another
+    // qualifying cast (e.g. RAW_U32(p, ofs)'s `(u32*) ((u32) (p) + (ofs))`: the outer
+    // IntegralToPointer's subexpression contains a nested PointerToIntegral on `p`). Composing here
+    // -- instead of relying on a second, separate Rewriter edit for the inner cast -- sidesteps
+    // traversal-order/buffer-corruption entirely (docs/port-phase2.md section 8's "cast result feeds
+    // ... more than one cast" case) and keeps `on error, leave the original text` correct: if the
+    // inner cast is ambiguous (wide dest / unprintable pointee), this returns empty and the caller
+    // falls back to the inner cast's own original source text, verbatim, inside the outer's
+    // replacement -- exactly what independent-site rewriting would have left behind anyway.
+    // `Reason`, if non-null, is filled with a FLAG/SKIP category string on failure so the top-level
+    // caller (handleCast) can log it; recursive (composing) calls pass nullptr to stay silent, since
+    // the RecursiveASTVisitor will visit that inner node on its own later and log for itself there.
+    std::string tryBuildCastReplacement(ExplicitCastExpr *E, bool UseSpelling, std::string *Reason)
+    {
+        CastKind CK = E->getCastKind();
+        if (CK != CK_PointerToIntegral && CK != CK_IntegralToPointer) {
+            if (Reason)
+                *Reason = "not-a-target-cast-kind";
+            return {};
+        }
+        std::string SubText = buildSubexprText(E->getSubExpr(), UseSpelling);
+        if (SubText.empty()) {
+            if (Reason)
+                *Reason = "unprintable-subexpr";
+            return {};
+        }
+        if (CK == CK_PointerToIntegral) {
+            std::string DestSpelling = E->getTypeAsWritten().getAsString();
+            static const char *WideSpellings[] = {"u64", "s64", "uintptr_t", "size_t",
+                                                    "long long", "unsigned long long"};
+            for (const char *W : WideSpellings) {
+                if (DestSpelling.find(W) != std::string::npos) {
+                    if (Reason)
+                        *Reason = "wide-dest(" + DestSpelling + ")";
+                    return {};
+                }
+            }
+            std::string Replacement = "re4_port::GC32(" + SubText + ")";
+            if (!DestSpelling.empty())
+                Replacement = "(" + DestSpelling + ")" + Replacement;
+            return Replacement;
+        }
+        // CK_IntegralToPointer
+        QualType DestTy = E->getType();
+        if (!DestTy->isPointerType()) {
+            if (Reason)
+                *Reason = "non-pointer-dest";
+            return {};
+        }
+        QualType Pointee = DestTy->getPointeeType();
+        std::string PointeeStr = Pointee.getAsString();
+        if (PointeeStr.empty() || PointeeStr.find("unnamed") != std::string::npos ||
+            Pointee->isArrayType() || Pointee->isFunctionType()) {
+            if (Reason)
+                *Reason = "unprintable-pointee";
+            return {};
+        }
+        return "re4_port::GCPTR<" + PointeeStr + ">((std::uint32_t)(" + SubText + "))";
+    }
+
+    struct CastSite {
+        unsigned Begin, End; // file offsets (spelling-resolved when UseSpelling)
+        std::string Replacement;
+    };
+
+    // Finds every *topmost* qualifying pointer<->integer cast under S (not just a direct child --
+    // e.g. RAW_U32's `(u32*) ((u32) (p) + (ofs))` has the inner `(u32) (p)` cast as an operand of a
+    // `+`, not the immediate subexpression of the outer cast). Does not recurse into a cast once
+    // found qualifying: tryBuildCastReplacement already recurses into *its* own subexpression via
+    // composeText, so any further nesting is handled there, not by double-visiting here.
+    void collectNestedCasts(Stmt *S, bool UseSpelling, std::vector<CastSite> &Out)
+    {
+        if (!S)
+            return;
+        if (auto *CE = dyn_cast<ExplicitCastExpr>(S)) {
+            std::string Repl = tryBuildCastReplacement(CE, UseSpelling, nullptr);
+            if (!Repl.empty()) {
+                SourceManager &SM = Context.getSourceManager();
+                SourceRange SR = CE->getSourceRange();
+                SourceLocation B = SR.getBegin();
+                SourceLocation En = SR.getEnd();
+                if (UseSpelling) {
+                    B = SM.getSpellingLoc(B);
+                    En = SM.getSpellingLoc(En);
+                }
+                unsigned Bo = SM.getFileOffset(B);
+                SourceLocation EndTok =
+                    Lexer::getLocForEndOfToken(En, 0, SM, Context.getLangOpts());
+                unsigned Eo = SM.getFileOffset(EndTok);
+                Out.push_back({Bo, Eo, Repl});
+                return; // do not look for further sites inside an already-composed cast
+            }
+        }
+        for (Stmt *Child : S->children())
+            collectNestedCasts(Child, UseSpelling, Out);
+    }
+
+    // getSourceText for a subexpression, except every qualifying pointer<->integer cast found
+    // anywhere inside it (not just at the top) is composed in place via text splicing, back to
+    // front by offset, instead of copied as raw (still-narrowing) text. See tryBuildCastReplacement
+    // and collectNestedCasts for the two halves of this.
+    std::string buildSubexprText(Expr *E, bool UseSpelling)
+    {
+        Expr *Stripped = E->IgnoreParens();
+        if (auto *CE = dyn_cast<ExplicitCastExpr>(Stripped)) {
+            std::string Composed = tryBuildCastReplacement(CE, UseSpelling, nullptr);
+            if (!Composed.empty())
+                return Composed;
+        }
+        std::string Base = getSourceText(E, UseSpelling);
+        if (Base.empty())
+            return Base;
+        std::vector<CastSite> Sites;
+        collectNestedCasts(E, UseSpelling, Sites);
+        if (Sites.empty())
+            return Base;
+
+        SourceManager &SM = Context.getSourceManager();
+        SourceLocation EBegin = E->getSourceRange().getBegin();
+        if (UseSpelling)
+            EBegin = SM.getSpellingLoc(EBegin);
+        unsigned BaseOffset = SM.getFileOffset(EBegin);
+
+        std::sort(Sites.begin(), Sites.end(),
+                  [](const CastSite &A, const CastSite &B) { return A.Begin > B.Begin; });
+        for (const CastSite &Site : Sites) {
+            if (Site.Begin < BaseOffset || Site.End < Site.Begin)
+                continue; // defensive: a malformed/absent offset, leave Base untouched at this site
+            unsigned RelB = Site.Begin - BaseOffset;
+            unsigned RelE = Site.End - BaseOffset;
+            if (RelE > Base.size() || RelB > RelE)
+                continue;
+            Base = Base.substr(0, RelB) + Site.Replacement + Base.substr(RelE);
+        }
+        return Base;
+    }
+
     bool handleCast(ExplicitCastExpr *E)
     {
         CastKind CK = E->getCastKind();
@@ -121,100 +263,72 @@ private:
         const SourceManager &SM = Context.getSourceManager();
         SourceLocation Loc = E->getExprLoc();
 
-        // Macro-expanded casts: left alone entirely (header-macro fix is separate, section 6).
+        // Macro-expanded casts. Two cases, per the coordinator's split:
+        //  - the macro is #define'd in THIS TU's own .cpp/.c file (its spelling location is in the
+        //    main file): rewrite the #define BODY once (not per expansion site) in the generated
+        //    copy -- the original tree's #define text is never touched, only build-pc/gen/'s.
+        //  - the macro is #define'd in a header (spelling location elsewhere): left alone entirely,
+        //    that is the hand-edited TARGET_PC-branch path (section 6), with real-file review and
+        //    remote verification, not this tool's job.
+        bool MacroBody = false;
+        SourceLocation EditBegin = E->getSourceRange().getBegin();
+        SourceLocation EditEnd = E->getSourceRange().getEnd();
         if (Loc.isMacroID()) {
-            SLog.log("SKIP macro " + siteLoc(SM, SM.getSpellingLoc(Loc)));
-            return true;
-        }
-        if (!SM.isWrittenInMainFile(Loc))
+            SourceLocation SpellLoc = SM.getSpellingLoc(Loc);
+            if (!SM.isWrittenInMainFile(SpellLoc)) {
+                SLog.log("SKIP macro-in-header " + siteLoc(SM, SpellLoc));
+                return true;
+            }
+            MacroBody = true;
+            EditBegin = SM.getSpellingLoc(EditBegin);
+            EditEnd = SM.getSpellingLoc(EditEnd);
+        } else if (!SM.isWrittenInMainFile(Loc)) {
             return true; // only rewrite casts physically in this TU's own file, not #included ones
+        }
 
-        if (isNestedInRewritten(E->getSourceRange())) {
-            SLog.log("SKIP nested-in-rewritten " + siteLoc(SM, Loc));
+        SourceRange EditRange(EditBegin, EditEnd);
+        if (isNestedInRewritten(EditRange)) {
+            SLog.log(std::string(MacroBody ? "SKIP macro-body-already-rewritten "
+                                            : "SKIP nested-in-rewritten ") +
+                      siteLoc(SM, Loc));
             return true;
         }
 
-        Expr *Sub = E->getSubExpr();
-        std::string SubText = getSourceText(Sub);
-        if (SubText.empty()) {
-            SLog.log("SKIP unprintable-subexpr " + siteLoc(SM, Loc));
+        std::string Reason;
+        std::string Replacement = tryBuildCastReplacement(E, MacroBody, &Reason);
+        if (Replacement.empty()) {
+            SLog.log("FLAG " + Reason + " " + siteLoc(SM, Loc));
             return true;
         }
 
-        std::string Replacement;
-        if (CK == CK_PointerToIntegral) {
-            // Decide "GC-address site" vs "genuinely wide/64-bit destination" from the *written*
-            // type spelling, not Context.getTypeSize(): this tool is meant to run against the
-            // default (RE4_U32_32 OFF) compile command, where the cast still type-checks (u32 is
-            // the host's 8-byte `unsigned long` there, so DestWidth would read 64 for nearly every
-            // site and make this check useless) -- see docs/port-phase2.md section 8. The
-            // vendor's own u32/s32 typedefs are always the GameCube's 4-byte types by design
-            // (include/types.h), so a spelling-based allowlist reflects the *original* semantics
-            // this rewrite is targeting, independent of the host typedef's actual width.
-            std::string DestSpelling = E->getTypeAsWritten().getAsString();
-            static const char *WideSpellings[] = {"u64", "s64", "uintptr_t", "size_t",
-                                                    "long long", "unsigned long long"};
-            bool IsWide = false;
-            for (const char *W : WideSpellings) {
-                if (DestSpelling.find(W) != std::string::npos) {
-                    IsWide = true;
-                    break;
-                }
-            }
-            if (IsWide) {
-                // Ambiguous per docs/port-phase2.md section 8 ("hardest parts"): a genuinely
-                // 64-bit-wide destination is more likely identity/hash use than a GC-address
-                // field. Flag, don't guess.
-                SLog.log("FLAG wide-dest(" + DestSpelling + ") " + siteLoc(SM, Loc));
-                return true;
-            }
-            Replacement = "re4_port::GC32(" + SubText + ")";
-            // Preserve the original cast's exact destination type spelling (s32 vs u32 vs int, ...)
-            // so callers that pass the result on to a field/parameter of that exact type keep
-            // compiling unchanged; GC32 always returns std::uint32_t.
-            if (!DestSpelling.empty())
-                Replacement = "(" + DestSpelling + ")" + Replacement;
-        } else { // CK_IntegralToPointer
-            QualType DestTy = E->getType();
-            if (!DestTy->isPointerType()) {
-                SLog.log("FLAG non-pointer-dest " + siteLoc(SM, Loc));
-                return true;
-            }
-            QualType Pointee = DestTy->getPointeeType();
-            std::string PointeeStr = Pointee.getAsString();
-            // Array/function pointee types (`f32(*)[3]`, function pointers, ...) can't be spelled
-            // as `GCPTR<T>`'s simple `T*` return (Pointee.getAsString() + "*" is not valid syntax
-            // for them, e.g. "f32[3]*" -- measured, caught in the 20-site spot check: this produced
-            // a real compile error). Flag instead of guessing at the declarator-around-identifier
-            // spelling those need.
-            if (PointeeStr.empty() || PointeeStr.find("unnamed") != std::string::npos ||
-                Pointee->isArrayType() || Pointee->isFunctionType()) {
-                SLog.log("FLAG unprintable-pointee " + siteLoc(SM, Loc));
-                return true;
-            }
-            Replacement = "re4_port::GCPTR<" + PointeeStr + ">((std::uint32_t)(" + SubText + "))";
-        }
-
-        SourceRange FullRange = E->getSourceRange();
-        bool Failed = TheRewriter.ReplaceText(FullRange, Replacement);
+        bool Failed = TheRewriter.ReplaceText(EditRange, Replacement);
         if (Failed) {
             SLog.log("FLAG rewrite-failed " + siteLoc(SM, Loc));
             return true;
         }
-        RewrittenOffsets.emplace_back(SM.getFileOffset(SM.getSpellingLoc(FullRange.getBegin())),
-                                       SM.getFileOffset(SM.getSpellingLoc(FullRange.getEnd())));
-        SLog.log(std::string("REWRITE ") + (CK == CK_PointerToIntegral ? "GC32 " : "GCPTR ") +
-                  siteLoc(SM, Loc) + " :: " + Replacement);
+        RewrittenOffsets.emplace_back(SM.getFileOffset(SM.getSpellingLoc(EditRange.getBegin())),
+                                       SM.getFileOffset(SM.getSpellingLoc(EditRange.getEnd())));
+        SLog.log(std::string("REWRITE") + (MacroBody ? "-MACRO-BODY " : " ") +
+                  (CK == CK_PointerToIntegral ? "GC32 " : "GCPTR ") + siteLoc(SM, Loc) +
+                  " :: " + Replacement);
         return true;
     }
 
-    std::string getSourceText(Expr *E)
+    // useSpelling: when rewriting a macro's #define BODY (not an expansion site), E's own
+    // getSourceRange() resolves to expansion locations that vary per call site; the *spelling*
+    // location is what is actually written in the macro's definition text (including a literal
+    // parameter name like `p`, not whatever argument a particular call site substituted), which is
+    // exactly what belongs in the rewritten #define.
+    std::string getSourceText(Expr *E, bool useSpelling = false)
     {
         SourceManager &SM = Context.getSourceManager();
         const LangOptions &LO = Context.getLangOpts();
         SourceRange R = E->getSourceRange();
-        if (R.getBegin().isMacroID() || R.getEnd().isMacroID())
+        if (useSpelling) {
+            R = SourceRange(SM.getSpellingLoc(R.getBegin()), SM.getSpellingLoc(R.getEnd()));
+        } else if (R.getBegin().isMacroID() || R.getEnd().isMacroID()) {
             return {}; // sub-expression itself macro-spelled: too risky to splice, flag via caller
+        }
         CharSourceRange CR = CharSourceRange::getTokenRange(R);
         return Lexer::getSourceText(CR, SM, LO).str();
     }
