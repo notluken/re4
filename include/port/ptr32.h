@@ -25,6 +25,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "types.h"
+
 namespace re4_port {
 
 // Set once by InitArena() (src/port/arena.cpp) before any GC32/GCPTR/Ptr32 use. 0 is not a valid
@@ -73,12 +75,43 @@ template <class T>
 class Ptr32 {
 public:
     Ptr32() = default;
-    Ptr32(std::nullptr_t) : m_handle(0) {}
+    // No separate Ptr32(std::nullptr_t) overload: the vendor's own code assigns a field its "empty"
+    // value with a plain `field = 0;` as often as `field = nullptr;` (both are null pointer
+    // constants), and a literal 0 converts to *both* nullptr_t and T* equally well, which is
+    // ambiguous between two constructors -- one is enough, since a literal 0 or nullptr both convert
+    // to T* directly (a null pointer constant), and GC32(nullptr) already returns 0 below.
     Ptr32(T* p) : m_handle(GC32(p)) {}
 
+    // Some on-disc formats reuse a pointer field to also hold a small plain integer (typically a
+    // file-relative byte offset, before the field is relocated into a real pointer -- e.g.
+    // cModelData::pClr before calcModelAddr runs). FromRaw/raw_handle give direct access to the
+    // 4-byte storage for exactly that case; nothing else should need them (ordinary pointer use goes
+    // through the constructor/conversion operators above, which route through GC32/GCPTR).
+    static Ptr32<T> FromRaw(std::uint32_t raw)
+    {
+        Ptr32<T> p;
+        p.m_handle = raw;
+        return p;
+    }
+    std::uint32_t raw_handle() const { return m_handle; }
+
     operator T*() const { return GCPTR<T>(m_handle); }
-    explicit operator std::uint32_t() const { return m_handle; }
+    // A C-style/explicit cast only looks for a conversion function whose return type matches the
+    // target exactly (or is reached by a *further* user-defined conversion, which overload
+    // resolution does not chain for explicit operators) -- so these have to be spelled `u32`/`s32`,
+    // the game's own typedefs, rather than fixed-width std:: types: existing code casts these fields
+    // with `(u32) field`/`(s32) field`/`(int) field` (calcModelAddr and friends, `(s32) descriptorArray
+    // < 0`), and u32/s32 are 4 or 8 bytes depending on RE4_U32_32 (include/types.h). Widening the
+    // stored 4-byte handle into an 8-byte u32/s32 when RE4_U32_32 is off loses nothing. `s32` and
+    // `int` are the same type when RE4_U32_32 is on (both 4-byte int), so only one of the two
+    // operators is declared then -- a duplicate declaration is otherwise an error.
+    explicit operator u32() const { return static_cast<u32>(m_handle); }
+#if defined(RE4_U32_32)
     explicit operator int() const { return static_cast<int>(m_handle); }
+#else
+    explicit operator int() const { return static_cast<int>(m_handle); }
+    explicit operator s32() const { return static_cast<s32>(m_handle); }
+#endif
 
     T* operator->() const { return GCPTR<T>(m_handle); }
     T& operator[](std::size_t i) const { return GCPTR<T>(m_handle)[i]; }
@@ -94,6 +127,17 @@ private:
 // actually called, but its declaration still needs a valid T&, and T = void has no such thing.
 static_assert(sizeof(Ptr32<int>) == 4, "Ptr32<T> must be exactly 4 bytes (an on-disc pointer field)");
 static_assert(std::is_trivially_copyable<Ptr32<int>>::value, "Ptr32<T> must be trivially copyable");
+
+// GC32(someField) where someField is already a Ptr32<T> (e.g. VALID_PTR(pBlock->m_pList),
+// include/main_mem.h): template argument deduction can't implicitly convert a class argument to
+// match `GC32(T* p)` above (deduction requires the argument to already look like a pointer), so this
+// overload is needed even though Ptr32<T> converts to T* implicitly everywhere else. Its raw_handle()
+// already *is* the GC32 value (that's what the constructor computed), so no recomputation needed.
+template <class T>
+inline std::uint32_t GC32(const Ptr32<T>& p)
+{
+    return p.raw_handle();
+}
 
 } // namespace re4_port
 
