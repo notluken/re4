@@ -34,9 +34,18 @@ if (NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Debug)
 endif()
 
+enable_testing()
+
 # Widen to every unit under src/game (used by the re4_game_all error-inventory target below);
 # the small re4_game_core target always stays as its own explicit list.
 option(RE4_PC_BUILD_ALL_GAME "Add re4_game_all: every src/game/*.c(pp) as its own OBJECT library, -k-style, error inventory only" ON)
+
+# Phase 2 step 1 (docs/port-phase2.md): s32/u32 as the host's 4-byte int/unsigned int instead of
+# GameCube `long` (8 bytes on this LP64 host, wrong struct layout everywhere, silently). Off by
+# default: most of the tree does not build yet with a 4-byte s32/u32 (~460 TUs, until Phase 2's
+# later steps land the Ptr32<T>/host-arena work this depends on). Turn on to see today's diagnostic
+# set for that switch; the error-inventory targets below are still expected to fail widely with it on.
+option(RE4_U32_32 "s32/u32 = 4-byte int/unsigned int under TARGET_PC (Phase 2 step 1, off by default)" OFF)
 
 set(RE4_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
@@ -53,6 +62,9 @@ set(RE4_GAME_DEFINES
   VERSION_G4BE08
   NDEBUG=1
 )
+if (RE4_U32_32)
+  list(APPEND RE4_GAME_DEFINES RE4_U32_32)
+endif()
 # -Wno-address-of-temporary: `&((Vec){...})` compound-literal-address idiom (GNU C, several em*/wep*
 # units), legal for the vendor's GCC 2.95 and alive for the length of the enclosing full expression;
 # clang's default diagnostic for it is an error, not a warning, so it needs the flag, not -Wno-error.
@@ -154,4 +166,28 @@ if (RE4_PC_BUILD_ALL_REL)
   target_include_directories(re4_rel_all PRIVATE ${RE4_GAME_INCLUDES})
   target_compile_definitions(re4_rel_all PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_rel_all PRIVATE ${RE4_GAME_OPTIONS})
+endif()
+
+# --- re4_port: the host-side Phase 2 support library (include/port/, src/port/) ---
+# Not part of re4_game_core/re4_game_all/re4_rel_all (those compile the vendor's own tree, unmodified
+# except by #ifdef TARGET_PC); this is new, port-only code with no original-target counterpart.
+add_library(re4_port STATIC
+  src/port/arena.cpp
+)
+target_include_directories(re4_port PUBLIC ${RE4_GAME_INCLUDES})
+target_compile_definitions(re4_port PUBLIC TARGET_PC)
+if (APPLE)
+  target_link_libraries(re4_port PUBLIC "-framework CoreFoundation")
+endif()
+
+# --- tests/port: host unit tests for re4_port (Phase 2 step 2/3, docs/port-phase2.md) ---
+option(RE4_PC_BUILD_TESTS "Add the tests/port/ host unit tests (ctest)" ON)
+if (RE4_PC_BUILD_TESTS)
+  add_executable(test_ptr32 tests/port/test_ptr32.cpp)
+  target_link_libraries(test_ptr32 PRIVATE re4_port)
+  add_test(NAME test_ptr32 COMMAND test_ptr32)
+
+  add_executable(test_arena tests/port/test_arena.cpp)
+  target_link_libraries(test_arena PRIVATE re4_port)
+  add_test(NAME test_arena COMMAND test_arena)
 endif()
