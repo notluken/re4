@@ -109,6 +109,9 @@ def main():
             "-o", out_path,
             "--report", report,
             f"--resource-dir={resource_dir}",
+            "--extra-arg=-URE4_U32_32",
+            "--extra-arg=-fms-extensions",
+            "--extra-arg=-Wno-error",
             "--extra-arg=-ferror-limit=0",
         ]
         if sysroot:

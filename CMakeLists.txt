@@ -181,7 +181,13 @@ if (RE4_PC_BUILD_ALL_GAME)
         # -U produced unrewritten-looking output and a 1535-error aggregate instead of ~170 --
         # docs/port-phase2.md section 9). A trailing -U after -D undefines it on the same command
         # line regardless of argument order in the base compile command.
-        COMMAND bash -c "${RE4_CAST_REWRITER_BIN} -p ${CMAKE_BINARY_DIR} ${_src} -o ${_gen} --report ${_gen}.report.txt --resource-dir=${RE4_CLANG_RESOURCE_DIR} --extra-arg=-isysroot --extra-arg=${RE4_SYSROOT} --extra-arg=-URE4_U32_32 --extra-arg=-ferror-limit=0 ; test -f ${_gen}"
+        # -fms-extensions, rewriter parse only, never the real compile: makes a narrowing
+        # pointer<->smaller-int C-style cast a warning instead of a hard error in clang (the same
+        # flag the original tree-wide 1,693-site cast measurement used), so a CStyleCastExpr node
+        # actually gets built for `(int) ptr`/`(short) ptr`-shaped casts (the literal-host-type gap:
+        # `int` is always 4 bytes regardless of RE4_U32_32, so -URE4_U32_32 alone does not help
+        # these). -Wno-error keeps it a warning even if some other flag upstream promotes warnings.
+        COMMAND bash -c "${RE4_CAST_REWRITER_BIN} -p ${CMAKE_BINARY_DIR} ${_src} -o ${_gen} --report ${_gen}.report.txt --resource-dir=${RE4_CLANG_RESOURCE_DIR} --extra-arg=-isysroot --extra-arg=${RE4_SYSROOT} --extra-arg=-URE4_U32_32 --extra-arg=-fms-extensions --extra-arg=-Wno-error --extra-arg=-ferror-limit=0 ; test -f ${_gen}"
         DEPENDS ${_src} ${RE4_CAST_REWRITER_BIN} ${CMAKE_BINARY_DIR}/compile_commands.json
         COMMENT "cast-rewrite ${_rel}"
         VERBATIM
