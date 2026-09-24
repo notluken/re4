@@ -8,6 +8,8 @@
 #include "types.h"
 #ifdef TARGET_PC
 #include <cstddef>
+#include <cstdlib>
+#include "port/alloc.h"
 #endif
 #include "global.h"
 #include "main_mem.h"
@@ -72,34 +74,76 @@ static u32 _epy;
 
 // Zeroed allocation from the current heap.
 #ifdef TARGET_PC
+// Split allocator (include/port/alloc.h, docs/port-boot.md section 8): only a game thread, once
+// the game's own heaps exist, may reach mem_calloc -- anything else (host libraries' static
+// initializers, Aurora, libc++ internals sharing this process) gets the host's malloc instead, so
+// it can never trip mem_calloc's logging/heap-bookkeeping path before those game globals exist.
 void* operator new(std::size_t size)
+{
+    if (re4_port::ShouldUseGameHeap()) {
+        return mem_calloc(size, "operator new", 0, 1, MEM_HEAP_CURRENT);
+    }
+    return std::malloc(size);
+}
 #else
 void* operator new(unsigned int size)
-#endif
 {
     return mem_calloc(size, "operator new", 0, 1, MEM_HEAP_CURRENT);
 }
+#endif
 
 // Zeroed array allocation from the current heap.
 #ifdef TARGET_PC
 void* operator new[](std::size_t size)
+{
+    if (re4_port::ShouldUseGameHeap()) {
+        return mem_calloc(size, "operator new", 0, 1, MEM_HEAP_CURRENT);
+    }
+    return std::malloc(size);
+}
 #else
 void* operator new[](unsigned int size)
-#endif
 {
     return mem_calloc(size, "operator new", 0, 1, MEM_HEAP_CURRENT);
 }
+#endif
 
 // Frees to the current heap.
 void operator delete(void* p)
 {
+#ifdef TARGET_PC
+    // Routed by *pointer identity*, not by thread or by how it was allocated (include/port/
+    // alloc.h): everything mem_calloc ever hands out lives inside the embedded arena, so that
+    // alone says which allocator owns `p`. A debug-only check catches the one real bug this
+    // split is supposed to make impossible: freeing an arena (game-heap) pointer from anything
+    // other than the game thread, which would touch the (not thread-safe) OSAlloc-based heap
+    // from two threads at once.
+    if (re4_port::IsArenaPointer(p)) {
+#ifndef NDEBUG
+        if (!re4_port::IsGameThread()) {
+            std::fprintf(stderr,
+                         "operator delete: freeing a game-heap pointer (%p) off the game thread\n",
+                         p);
+            std::abort();
+        }
+#endif
+        Mem_free(p);
+        return;
+    }
+    std::free(p);
+#else
     Mem_free(p);
+#endif
 }
 
 // Frees to the current heap.
 void operator delete[](void* p)
 {
+#ifdef TARGET_PC
+    operator delete(p);
+#else
     Mem_free(p);
+#endif
 }
 
 // Boot: fixes the memory map, inits OSAlloc over [weapon archive end, heap_end/arena hi), creates
@@ -139,6 +183,10 @@ void SystemMemInit()
     memInitHeapTbl();
     MemCreateHeap(0, arenaLo, SysMem.heap_end);
     MemSetCurrentHeap(0);
+#ifdef TARGET_PC
+    // Heap 0 exists and MEM_HEAP_CURRENT is valid from here on -- see include/port/alloc.h.
+    re4_port::MarkHeapsReady();
+#endif
     pMemTile = NULL;
 #line 145
     pRK = (RESET_KEEP_WORK*) MEM_ALLOC(0x40, 1, MEM_HEAP_CURRENT);
