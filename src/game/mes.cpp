@@ -199,31 +199,24 @@ void MessageFont::create(int char_w, int char_h, TEXPalette* addr, u8* size)
 
     m_tpl = addr;
 #ifdef TARGET_PC
-    // Phase 3 (docs/port-phase3.md): the raw pre-relocation offset in this field is big-endian on
-    // disc (the buffer is never swapped, only the header's plain integer fields are BE<T>'d) --
-    // ptr32.h's raw_handle_be() reads the *offset's numeric value* correctly on this little-endian
-    // host, needed for the pointer arithmetic below (docs/port-boot.md section 21's blocker). The
-    // sign-bit guard itself, however, must stay unswapped (raw_handle(), not raw_handle_be()): a
-    // small on-disc offset's top disc byte is always 0 regardless of byte order, and once this
-    // field has been relocated its Ptr32<T> holds a runtime-computed, already-host-native handle
-    // (top bit set for an arena address) -- swapping *that* value on a second call (create() is
-    // called again with the same already-relocated buffer for the non-Japanese system font,
-    // MessageControl::loadSystemFont()) would corrupt the "already relocated" check and re-run
-    // this block on live pointers. Both reads see the same raw storage; only the arithmetic one
-    // needs the disk-order swap, because it is only ever reached once (guarded by this check).
+    // Phase 2 (docs/port-phase2.md): raw_handle() gives the file-relative byte offset a Ptr32<T>
+    // field holds before relocation, as a plain host-native u32 (Phase 3, docs/port-phase3.md:
+    // Ptr32<T>'s storage is always big-endian internally, but load()/raw_handle() already undoes
+    // that swap -- this call site needs no special handling for it, same as every other
+    // raw_handle()-based relocator in this tree: cam_ctrl.cpp, card.cpp, game.cpp, model.cpp,
+    // room_jmp.cpp, texture.cpp, trans.cpp).
     if ((s32) addr->descriptorArray.raw_handle() >= 0) {
-        addr->descriptorArray =
-            (TEXDescriptor*) ((u8*) addr + addr->descriptorArray.raw_handle_be());
+        addr->descriptorArray = (TEXDescriptor*) ((u8*) addr + addr->descriptorArray.raw_handle());
         d = addr->descriptorArray;
         for (i = 0; i < addr->numDescriptors; i++, d++) {
-            d->textureHeader = (TEXHeader*) ((u8*) addr + d->textureHeader.raw_handle_be());
-            d->CLUTHeader = (CLUTHeader*) ((u8*) addr + d->CLUTHeader.raw_handle_be());
+            d->textureHeader = (TEXHeader*) ((u8*) addr + d->textureHeader.raw_handle());
+            d->CLUTHeader = (CLUTHeader*) ((u8*) addr + d->CLUTHeader.raw_handle());
             if (d->textureHeader->unpacked == 0) {
-                d->textureHeader->data = (u8*) addr + d->textureHeader->data.raw_handle_be();
+                d->textureHeader->data = (u8*) addr + d->textureHeader->data.raw_handle();
                 d->textureHeader->unpacked = 1;
             }
             if (d->CLUTHeader->unpacked == 0) {
-                d->CLUTHeader->data = (u8*) addr + d->CLUTHeader->data.raw_handle_be();
+                d->CLUTHeader->data = (u8*) addr + d->CLUTHeader->data.raw_handle();
                 d->CLUTHeader->unpacked = 1;
             }
         }
