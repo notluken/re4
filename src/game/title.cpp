@@ -45,7 +45,15 @@
 #define G_ROOM_ID_PREV (*(u16*) &pG->stage_prev)
 
 // Sub-file of the core archive (pG->pCore): `ofs + (u32) arc` (integer arithmetic, ofs first).
+// Same reasoning as global.h's ARC_PTR (a duplicate of it): pG->pCore is a live host buffer, `field`
+// a plain offset -- same-buffer pointer arithmetic under TARGET_PC, not GameCube-address compression.
+// This definition sits between two #line directives that do not bracket any __LINE__/HALT() call, so
+// the extra lines below do not shift any embedded line number.
+#ifdef TARGET_PC
+#define G_ARC_PTR(field) ((void*) ((u8*) pG->pCore + pG->pCore->field))
+#else
 #define G_ARC_PTR(field) ((void*) (pG->pCore->field + (u32) pG->pCore))
+#endif
 
 // Fade colours: word constants passed by address (see sscrn.cpp).
 union FadeColor {

@@ -2,6 +2,9 @@
 #define MAIN_MEM_H
 
 #include "types.h"
+#ifdef TARGET_PC
+#include "port/ptr32.h"
+#endif
 
 // game/main_mem.cpp heap. Callers pass their source location.
 void* mem_alloc(u32 size, const char* file, int line, int a, int b);
@@ -12,7 +15,15 @@ void* mem_calloc(u32 size, const char* file, int line, int a, int b);
 #define MEM_CALLOC(size, a, b) mem_calloc(size, __FILE__, __LINE__, a, b)
 
 // Address inside the console main memory (MEM1: 0x80000000 to 0x82FFFFFF).
+// `p` is a real host pointer (or, once Phase 2 step 5 lands, may already read back as a Ptr32<T>-
+// compressed value implicitly convertible to one) -- this genuinely is the "does this look like a
+// GameCube SysMem address" test, so it routes through GC32 (include/port/ptr32.h) under TARGET_PC:
+// GC32(p) reproduces exactly the sign-bit/SysMem-range value the original 32-bit `(u32) p` had.
+#ifdef TARGET_PC
+#define VALID_PTR(p) (re4_port::GC32(p) >= 0x80000000 && re4_port::GC32(p) <= 0x82FFFFFF)
+#else
 #define VALID_PTR(p) ((u32) (p) >= 0x80000000 && (u32) (p) <= 0x82FFFFFF)
+#endif
 // Size / address rounded up to the 32-byte DMA and cache-line unit.
 #define ALIGN32(x) (((x) + 0x1F) & ~0x1F)
 

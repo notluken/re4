@@ -3,6 +3,9 @@
 #include "vec.h"
 #include "gx.h"
 #include "libgpu.h"
+#ifdef TARGET_PC
+#include "port/ptr32.h"
+#endif
 
 // The primitive is handed over as the OT tag word and cast at every access: a pointer kept in an
 // integer variable has no REG_POINTER flag, so its loads may alias the stack stores of the make_f*
@@ -118,7 +121,11 @@ static inline void gpuSetup(int prim, int nverts)
 // Gouraud triangle (POLY_G3) as a GX triangle with per-vertex colour.
 void make_g3(u32 tag)
 {
+#ifdef TARGET_PC
+#define p ((POLY_G3*) re4_port::GCPTR(tag))
+#else
 #define p ((POLY_G3*) tag)
+#endif
     gpuSetup(0x90, 3);
     GXPosition3s16(p->x0, p->y0, p->z0);
     GXColor4u8(p->c0.r, p->c0.g, p->c0.b, 0xFF);
@@ -132,7 +139,11 @@ void make_g3(u32 tag)
 // Gouraud quad (POLY_G4).
 void make_g4(u32 tag)
 {
+#ifdef TARGET_PC
+#define p ((POLY_G4*) re4_port::GCPTR(tag))
+#else
 #define p ((POLY_G4*) tag)
+#endif
     gpuSetup(0x98, 4);
     GXPosition3s16(p->x0, p->y0, p->z0);
     GXColor4u8(p->c0.r, p->c0.g, p->c0.b, 0xFF);
@@ -148,7 +159,11 @@ void make_g4(u32 tag)
 // Flat triangle (POLY_F3): expanded to a gouraud triangle with one colour.
 void make_f3(u32 tag)
 {
+#ifdef TARGET_PC
+#define p ((POLY_F3*) re4_port::GCPTR(tag))
+#else
 #define p ((POLY_F3*) tag)
+#endif
     POLY_G3 g;
 
     g.x0 = p->x0;
@@ -164,14 +179,22 @@ void make_f3(u32 tag)
     g.c0.g = g.c1.g = g.c2.g = p->c0.g;
     g.c0.b = g.c1.b = g.c2.b = p->c0.b;
     g.c0.cd = g.c1.cd = g.c2.cd = p->c0.cd;
+#ifdef TARGET_PC
+    make_g3(re4_port::GC32(&g));
+#else
     make_g3((u32) &g);
+#endif
 }
 #undef p
 
 // Flat quad (POLY_F4): expanded to a gouraud quad with one colour.
 void make_f4(u32 tag)
 {
+#ifdef TARGET_PC
+#define p ((POLY_F4*) re4_port::GCPTR(tag))
+#else
 #define p ((POLY_F4*) tag)
+#endif
     POLY_G4 g;
 
     g.x0 = p->x0;
@@ -197,7 +220,11 @@ void make_f4(u32 tag)
 // Axis-aligned rectangle (TILE) at x0,y0 with w x h as a flat quad.
 void make_tile(u32 tag)
 {
+#ifdef TARGET_PC
+#define p ((TILE*) re4_port::GCPTR(tag))
+#else
 #define p ((TILE*) tag)
+#endif
     POLY_G4 g;
 
     g.x0 = g.x2 = p->x0;
@@ -216,7 +243,11 @@ void make_tile(u32 tag)
 // Gouraud line strip of 2 points (LINE_G2).
 void make_lg2(u32 tag)
 {
+#ifdef TARGET_PC
+#define p ((LINE_G2*) re4_port::GCPTR(tag))
+#else
 #define p ((LINE_G2*) tag)
+#endif
     gpuSetup(0xB0, 2);
     GXPosition3s16(p->x0, p->y0, p->z0);
     GXColor4u8(p->c0.r, p->c0.g, p->c0.b, 0xFF);
@@ -228,7 +259,11 @@ void make_lg2(u32 tag)
 // Gouraud line strip of 3 points.
 void make_lg3(u32 tag)
 {
+#ifdef TARGET_PC
+#define p ((LINE_G3*) re4_port::GCPTR(tag))
+#else
 #define p ((LINE_G3*) tag)
+#endif
     gpuSetup(0xB0, 3);
     GXPosition3s16(p->x0, p->y0, p->z0);
     GXColor4u8(p->c0.r, p->c0.g, p->c0.b, 0xFF);
@@ -242,7 +277,11 @@ void make_lg3(u32 tag)
 // Gouraud line strip of 4 points.
 void make_lg4(u32 tag)
 {
+#ifdef TARGET_PC
+#define p ((LINE_G4*) re4_port::GCPTR(tag))
+#else
 #define p ((LINE_G4*) tag)
+#endif
     gpuSetup(0xB0, 4);
     GXPosition3s16(p->x0, p->y0, p->z0);
     GXColor4u8(p->c0.r, p->c0.g, p->c0.b, 0xFF);
@@ -258,7 +297,11 @@ void make_lg4(u32 tag)
 // Flat 2-point line, expanded to LINE_G2.
 void make_lf2(u32 tag)
 {
+#ifdef TARGET_PC
+#define p ((LINE_F2*) re4_port::GCPTR(tag))
+#else
 #define p ((LINE_F2*) tag)
+#endif
     LINE_G2 g;
 
     g.x0 = p->x0;
@@ -278,7 +321,11 @@ void make_lf2(u32 tag)
 // Flat 3-point line strip, expanded to LINE_G3.
 void make_lf3(u32 tag)
 {
+#ifdef TARGET_PC
+#define p ((LINE_F3*) re4_port::GCPTR(tag))
+#else
 #define p ((LINE_F3*) tag)
+#endif
     LINE_G3 g;
 
     g.x0 = p->x0;
@@ -301,7 +348,11 @@ void make_lf3(u32 tag)
 // Flat 4-point line strip, expanded to LINE_G4.
 void make_lf4(u32 tag)
 {
+#ifdef TARGET_PC
+#define p ((LINE_F4*) re4_port::GCPTR(tag))
+#else
 #define p ((LINE_F4*) tag)
+#endif
     LINE_G4 g;
 
     g.x0 = p->x0;

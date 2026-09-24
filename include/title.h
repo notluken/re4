@@ -65,7 +65,12 @@ struct TitleWork {
 struct TitleArc {
     u32 ofs[0x10];
 };
+// Same reasoning as global.h's PL_ARC_PTR: `arc` is a live host buffer, `ofs[no]` a plain offset.
+#ifdef TARGET_PC
+#define TITLE_ARC_PTR(arc, no) ((void*) ((u8*) (arc) + (arc)->ofs[no]))
+#else
 #define TITLE_ARC_PTR(arc, no) ((void*) ((arc)->ofs[no] + (u32) (arc)))
+#endif
 
 extern "C" void Title_task();
 

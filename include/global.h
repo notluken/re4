@@ -47,14 +47,27 @@ struct ArcFile {
     u32 ofs_9C;   // 0x9C  sub-mission widget id data (stage)
 };
 // Sub-file `field` (an ofs_NN member) of the current archive.
+// pG->pCore is a live, already-loaded host buffer (never an on-disc/relocated field itself), and
+// `field` is a plain byte offset into it -- this is ordinary same-buffer pointer arithmetic, not a
+// GameCube-address compression (Ptr32<T>/GC32); under TARGET_PC it stays real pointer arithmetic
+// instead of a truncating-through-u32 round trip.
+#ifdef TARGET_PC
+#define ARC_PTR(field) ((void*) ((u8*) pG->pCore + pG->pCore->field))
+#else
 #define ARC_PTR(field) ((void*) (pG->pCore->field + (u32) pG->pCore))
+#endif
 
 // Player archive at pG->pPlArc: a table of byte offsets to the player's sub-files (models, textures,
 // motions, faces...). The pl_* units index it directly; the pointer is `ofs + (u32) arc`.
 struct PlArc {
     u32 ofs[0x100];   // pl_knife indexes up to 0x87
 };
+// Same reasoning as ARC_PTR: `arc` is always a live host buffer, `ofs[no]` a plain offset into it.
+#ifdef TARGET_PC
+#define PL_ARC_PTR(arc, no) ((void*) ((u8*) (arc) + (arc)->ofs[no]))
+#else
 #define PL_ARC_PTR(arc, no) ((void*) ((arc)->ofs[no] + (u32) (arc)))
+#endif
 // Model / motion data `no` of the player archive.
 #define PL_ARC(no) PL_ARC_PTR(pG->pPlayer, no)
 // Weapon archive (read: ReadWepData) at pG->pWepArc, indexed like the player archive.
@@ -68,7 +81,12 @@ struct PlArc {
 struct RoomArc {
     u32 ofs[0x10];
 };
+// Same reasoning as ARC_PTR/PL_ARC_PTR.
+#ifdef TARGET_PC
+#define ROOM_ARC_PTR(arc, no) ((void*) ((u8*) (arc) + ((RoomArc*) (arc))->ofs[no]))
+#else
 #define ROOM_ARC_PTR(arc, no) ((void*) (((RoomArc*) (arc))->ofs[no] + (u32) (arc)))
+#endif
 
 // TEV stage / texture map / texture coord counters the model renderer allocates from (pG+0x184).
 struct GxStageWork {
@@ -1243,7 +1261,14 @@ enum KEY_FLAG {
 // Test flag `no` in the word array at `base` (bit 31 - (no & 31) of word no >> 5).  The base is an
 // address rather than a field so a check can read the flags through whichever pointer the caller
 // holds.
+// `base` is always the address of a live u32[] flag array member of an already-in-memory struct
+// (Debug_flg, Status_flg, ...), never an on-disc/relocated field -- same-object pointer arithmetic,
+// not GameCube-address compression.
+#ifdef TARGET_PC
+#define FlagChk(base, no) (*(u32*) ((u8*) (base) + (((no) >> 5) << 2)) & (0x80000000 >> ((no) & 31)))
+#else
 #define FlagChk(base, no) (*(u32*) ((((no) >> 5) << 2) + (u32) (base)) & (0x80000000 >> ((no) & 31)))
+#endif
 
 // The same test written as a shift into the sign bit, for a condition that tests two bits of one
 // word: two mask tests fold into a single mask and stop matching, two shifts stay two tests.
@@ -1335,16 +1360,28 @@ enum EXT_FLAG {
 #define RmfFlagChk(g, n) FlagChk(&(g)->Room_flg, n)
 
 // Set and clear, against the same base and index as FlagChk.
+// Same reasoning as FlagChk.
+#ifdef TARGET_PC
+#define FlagOn(base, no) (*(u32*) ((u8*) (base) + (((no) >> 5) << 2)) |= (0x80000000 >> ((no) & 31)))
+#define FlagOff(base, no) (*(u32*) ((u8*) (base) + (((no) >> 5) << 2)) &= ~(0x80000000 >> ((no) & 31)))
+#else
 #define FlagOn(base, no) (*(u32*) ((((no) >> 5) << 2) + (u32) (base)) |= (0x80000000 >> ((no) & 31)))
 #define FlagOff(base, no) (*(u32*) ((((no) >> 5) << 2) + (u32) (base)) &= ~(0x80000000 >> ((no) & 31)))
+#endif
 #define FlagXor(base, no) (*(u32*) ((((no) >> 5) << 2) + (u32) (base)) ^= (0x80000000 >> ((no) & 31)))
 
 // The same four, for a call site whose flag number is a variable or a struct field rather than an
 // enumerator.  Both arguments are copied into locals: substituted twice the field would be loaded
 // twice, where the original loads it once.  The number keeps the type the call site gives it, so an
 // index cast to u32 folds its shift into a single rlwinm where a signed one takes two instructions.
+// Same reasoning as FlagChk: `base` is a live in-memory pointer, not an on-disc field.
+#ifdef TARGET_PC
+#define FLAG_WORD_VAR(base, no, op) ({ u8* flagBase_ = (u8*) (base); __typeof__(no) flagNo_ = (no); \
+                                       *(u32*) (flagBase_ + ((flagNo_ >> 5) << 2)) op; })
+#else
 #define FLAG_WORD_VAR(base, no, op) ({ u32 flagBase_ = (u32) (base); __typeof__(no) flagNo_ = (no); \
                                        *(u32*) (((flagNo_ >> 5) << 2) + flagBase_) op; })
+#endif
 #define FlagChkVar(base, no) FLAG_WORD_VAR(base, no, & (0x80000000 >> (flagNo_ & 31)))
 #define FlagOnVar(base, no) FLAG_WORD_VAR(base, no, |= (0x80000000 >> (flagNo_ & 31)))
 #define FlagOffVar(base, no) FLAG_WORD_VAR(base, no, &= ~(0x80000000 >> (flagNo_ & 31)))
@@ -1391,9 +1428,18 @@ static inline void U16Set(u16& d, u16 v) { d = v; }
 
 // Offset of a GlobalWork member, written with the null-pointer idiom. Address arithmetic that adds it to pG
 // keeps the offset as the last term (`pG->field` adds it first), which some callers need.
+// Not a real address at any width (the "pointer" is null + a small member offset, never actually
+// dereferenced as a GlobalWork*): safe unchanged under TARGET_PC, the value never exceeds
+// sizeof(GlobalWork).
 #define PG_OFS(f) ((u32) &((GlobalWork*) 0)->f)
 // Death words of enemy list `list` (Em_flg row: eight u32, one bit per entry). The scaled index is added to pG
 // first and the member offset last; written as `pG->Em_flg[list]` the address is built differently.
+// pG is a live in-memory pointer here (unlike PG_OFS's null-based offset above), so the same
+// same-object-pointer-arithmetic fix as FlagChk applies.
+#ifdef TARGET_PC
+#define EM_FLG_ROW(list) ((u32*) ((u8*) pG + (list) * 0x20 + PG_OFS(Em_flg)))
+#else
 #define EM_FLG_ROW(list) ((u32*) ((list) * 0x20 + (u32) pG + PG_OFS(Em_flg)))
+#endif
 
 #endif

@@ -19,7 +19,12 @@ struct ItemScreenWork;
 struct SsArc {
     u32 ofs[0x12];
 };
+// Same reasoning as global.h's PL_ARC_PTR: `arc` is a live host buffer, `ofs[no]` a plain offset.
+#ifdef TARGET_PC
+#define SS_ARC_PTR(arc, no) ((void*) ((u8*) (arc) + (arc)->ofs[no]))
+#else
 #define SS_ARC_PTR(arc, no) ((void*) ((arc)->ofs[no] + (u32) (arc)))
+#endif
 
 // The work is the `SUB_SCREEN` of the Sscrn module's `Widget<SUB_SCREEN>` template (the module's
 // mangled names carry the tag); SubScreenWork is the DOL-side alias.
