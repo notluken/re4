@@ -794,3 +794,95 @@ genuinely new; whoever next builds `re4_game_all` standalone (`cmake --build bui
 re4_game_all -k 0`) should log the full failing-file list the way docs/port-phase2.md section 9 did.
 
 No window renders this session (crash still predates GX/VI frame submission) -- no screenshot.
+
+## 18. Ptr32 `operator[]` regression fixed (RE4_U32_32=OFF), baseline reconfirmed
+
+Coordinator's read of the `cam_ctrl.cpp` error (section 17) was right: an ambiguous `operator[]`
+between `Ptr32<Vec>` (member `operator[](std::size_t)`) and the compiler-synthesized built-in
+`operator[](Vec*, long)` (reached via `Ptr32<T>`'s `operator T*()`) is a genuine regression from
+Phase 2 step 5's `Ptr32<T>` -- under `RE4_U32_32=OFF`, `s32` is `long`, distinct from `int`/
+`std::size_t`, so an `s32`-typed index (`cam_ctrl.cpp`'s `pArea->points[(i + 1) % pArea->num]`) needs
+a standard conversion for the member candidate and ties with the built-in's user-defined-conversion
+path closely enough for clang to call it ambiguous. Fixed in `include/port/ptr32.h`: `operator[]` is
+now a template on the index type (`template <class Index, ...> T& operator[](Index i)`,
+`std::enable_if`-constrained to integral types), so the member candidate always has an exact-match
+index argument and wins outright regardless of the index's real type.
+
+**Baseline reconfirmed the way docs/port-phase2.md's own methodology does** -- `git stash` the fix,
+rebuild `re4_game_all -k 0` under `RE4_U32_32=OFF`, capture the failing-file list (34 files, including
+`cam_ctrl.cpp`), restore the fix, rebuild, capture again (33 files) -- `diff` of the two lists shows
+**exactly one file drops out (`cam_ctrl.cpp`), nothing new added**. `ctest` still 2/2. `re4_boot`
+(`RE4_U32_32=ON`) still builds clean with the same header change. Only `include/port/ptr32.h` touched
+(no `src/`/`include/` outside `include/port/`), so per the port rules this did not need the remote
+docker byte-identity pass -- pushed directly after the local confirmation above.
+
+## 19. Byte-swap hypothesis noted for the intermittent `Snd_str_blk_init` crash (section 15)
+
+Coordinator's flag: the SndInit-era intermittent crash (small, un-offset-looking `data` address after
+reading the sound stream file's header table, not reproducible every run) smells like a **missing
+byte-swap** (the header's u32 fields are big-endian on-disc, read raw on a little-endian arm64 host)
+rather than a bad/uninitialized read. Recorded as the leading hypothesis for whoever picks up Phase 3
+(byte-swap-at-load) / Phase 5 (sound) for this file -- not verified this pass (`SndInit()` is stubbed
+under `TARGET_PC` for now, section 15, so this doesn't block boot progress today, but the real fix
+when sound is un-stubbed is very likely a `Swap32`-shaped fix on this header table's fields, not a
+GCPTR/pointer-conversion fix at all).
+
+## 20. Font-read blocker, narrowed: a `cDvdQueue` slot reused with stale `m_Rno0` (2026-09-24)
+
+Followed the coordinator's suggested next step (breakpoint on `cDvdQueue::readInit`/`readMain`/the
+`SYS_SN_PC_READ` path, compare `FileExistCheck` vs the actual open). Findings, most specific first:
+
+- **The read genuinely never opens the file.** Breakpoint on `DVDFastOpen` (Aurora's real open
+  entrypoint) set right as `MessageControl::loadFont("Font/common_p.fnt", ...)` starts: it never
+  fires before "Font load failed" prints. `Dvd.FileExistCheck` (called moments earlier in
+  `loadCommonFont()`, same path string) *does* reach `DVDFastOpen` successfully (no "not found" log)
+  -- so entry-number resolution (`DVDConvertPathToEntrynum`) itself is fine; something between
+  `DvdReadN()`/`cDvd::ReadReq()` and `cDvdQueue::fileOpen()`'s own `DVDFastOpen` call never gets that
+  far this time.
+- **Root mechanism, caught live**: `cDvdQueue::Read()`'s dispatcher (`func_tbl[m_Rno0]`) is called
+  with **`m_Rno0 == 3`** (`readExit`, the *last* state, not `0`/`readInit`) on the very first `Read()`
+  call for this request -- confirmed with a breakpoint on `cDvdQueue::Initialize()` immediately
+  followed by one on `cDvdQueue::Read()` for the same `this` (`0x100ce7a48`): `m_Rno0` already reads
+  `3` *before* `Initialize()` runs (`Initialize()` itself never touches `m_Rno0`/`m_Rno1`).
+  `readExit()` (`src/game/dvd.cpp:820`) unconditionally calls `fileClose()` then only prints/sets a
+  result if one of three `m_be_flag` bits (`0x04000000`/`0x100000`/`0x200000`, done/cancelled/error)
+  is set -- none are, on a slot that never actually ran `readInit`/`readMain` -- so it silently does
+  nothing but mark the slot "finished" (`m_be_flag |= 0x400000`), `Read()` returns 0 (done) on the
+  first call, and `ReadCheck()` reports whatever stale `getStatus()` value the slot happened to hold
+  from before -- deterministically "not 1", hence "Font load failed", without ever touching Aurora's
+  DVD layer at all for this request.
+- **Why `m_Rno0` is 3 going in is not yet root-caused.** `cDvd::pullReadQueue()` (`src/game/dvd.cpp:
+  1452`) only hands out a slot after `memclr_asm(q, sizeof(cDvdQueue))` (which would zero `m_Rno0`),
+  gated on `q->chk(1) == 0` (the slot's "in use" bit clear). A slot only becomes free again via
+  `PushQueue()` (`m_be_flag &= ~1`), called from `cDvd::readCheckMain()`'s `ST_COMPLETE`/`ST_CANCEL`/
+  `ST_ERROR` branches (i.e. only once the *caller* has polled `ReadCheck()` and consumed the result)
+  -- or from `cDvd::ReadProc()`'s own completion path when the "keep" bit (`0x20000000`) is set.
+  One inspection this pass (`b cDvd::ReadReq`, stepped past `q->Initialize()`) printed a `q` whose
+  `reqfile`/`reqline` matched the current call (`"D:/Bio4/Prog/dvd.cpp"`/`100`, i.e. `Initialize()`
+  had run) but whose `mramSize` field still held `6208` -- the exact byte count from an *earlier,
+  unrelated* successful read's `dvdread_callback` (section 16) -- meaning that slot's struct was
+  **not actually zeroed** by `pullReadQueue()` for this call, contradicting the source's own memclr.
+  Not yet reconciled with the `m_Rno0==3`-at-`Read()` observation above (different lldb sessions,
+  possibly different queue slots/`this` values -- **TO VERIFY**, did not confirm both observations
+  are the same slot in the same run). Leading hypotheses, not confirmed: (a) `pullReadQueue()`'s
+  16-slot pool is being exhausted faster than slots are freed during boot (nothing before the title
+  screen calls `Watcher()`/the per-frame loop that would normally drive completion+release for
+  non-synchronous requests -- but this *is* a synchronous request, sync ones should self-complete via
+  `blockRead` without needing `Watcher()`), so `pullReadQueue()` may be silently returning a
+  **not-actually-free** slot, or a completely different bug in this port's environment causes
+  `chk(1)`/`memclr_asm` to disagree with the real slot state; (b) a real, pre-existing vendor-logic
+  edge case around one-shot synchronous reads not calling `PushQueue()` on the "not kept" branch
+  (`cDvd::ReadProc()`'s `else { m_be_flag |= 0x800; }`, section notes above) that happens to be masked
+  on real hardware by some other invariant this port breaks.
+
+**Next step for whoever picks this up**: breakpoint on `cDvd::pullReadQueue` with a watchpoint (or a
+conditional breakpoint keyed on slot index) tracking exactly which of the 16 `DvdQueue[]` slots gets
+reused for the font read and its `m_be_flag`/`m_Rno0` value at the moment `chk(1)==0` is evaluated,
+across the *whole* boot sequence from the first DVD read onward (not just this one call) -- the
+`this` pointer alone (`0x100ce7a48`) recurred across several unrelated reads in this session's traces
+("etc/moji8.tpl" and the font read both used it), suggesting slot 0 specifically is the one in a bad
+state, which would narrow this considerably. Not attempted further this pass -- budget-limited, this
+is a real, well-isolated vendor state-machine bug (or a port-environment trigger of one), not a
+one-line fix.
+
+No window renders this session (crash still predates GX/VI frame submission) -- no screenshot.

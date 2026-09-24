@@ -114,7 +114,19 @@ public:
 #endif
 
     T* operator->() const { return GCPTR<T>(m_handle); }
-    T& operator[](std::size_t i) const { return GCPTR<T>(m_handle)[i]; }
+    // Templated on the index type (rather than a fixed std::size_t) so overload resolution always
+    // has an exact match on the index argument, same as it would with GCPTR<T>(m_handle)[i] written
+    // out longhand: with a fixed std::size_t parameter and RE4_U32_32 off (where s32 is `long`,
+    // distinct from `int`/std::size_t), a `long`-typed index (as game code passing an `s32` commonly
+    // is, e.g. cam_ctrl.cpp's `pArea->points[(i + 1) % pArea->num]`) needed a standard conversion to
+    // std::size_t for this member operator[], but *also* qualified the compiler-synthesized built-in
+    // `operator[](T*, long)` (via the T* conversion operator above) -- two equally-ranked candidates,
+    // an ambiguous call, a real regression the RE4_U32_32=OFF build did not have before Ptr32<T>
+    // existed. An exact-match template parameter here makes the member operator strictly better on
+    // the index argument (identity vs. the built-in's implicit-object-conversion tax), so it always
+    // wins outright.
+    template <class Index, class = std::enable_if_t<std::is_integral<Index>::value>>
+    T& operator[](Index i) const { return GCPTR<T>(m_handle)[static_cast<std::ptrdiff_t>(i)]; }
 
     bool operator==(std::nullptr_t) const { return m_handle == 0; }
     bool operator!=(std::nullptr_t) const { return m_handle != 0; }
