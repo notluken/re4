@@ -163,23 +163,47 @@ void SystemMemInit()
     SysMem.weapon = 0x80974000;
     SysMem.usb = 0x81800000;
     SysMem.debug = 0x8181FB00;
+#ifdef TARGET_PC
+    // The vendor's own u32 fields (SysMem.arena_lo, arenaLo, arenaHi, HeapHead) hold real
+    // addresses here, not on-disc/relocated data -- but on this 64-bit host, Aurora's
+    // OSGetArenaLo/Hi/OSInitAlloc return real 64-bit host pointers (include/port/mem1.h: Aurora's
+    // own arena tracking now lives inside re4_port's embedded arena), so a plain narrowing
+    // `(u32) pointer` cast would silently truncate them instead of producing the GameCube-looking
+    // address the rest of this function's math (0x8034FFFF, SysMem.weapon, ...) expects.
+    // re4_port::GC32()/GCPTR() (include/port/ptr32.h) do the same compression/decompression this
+    // repo already uses for on-disc pointer fields, applied here at the runtime
+    // heap-bookkeeping boundary instead.
+    SysMem.arena_lo = re4_port::GC32(OSGetArenaLo());
+#else
     SysMem.arena_lo = (u32) OSGetArenaLo();
+#endif
     if (SysMem.arena_lo > 0x8034FFFF) {
         OSReport("ELF size overflow\n");
 #line 100 "D:/Bio4/Prog/main_mem.cpp"
         HALT();
     }
     arenaLo = SysMem.weapon;
+#ifdef TARGET_PC
+    arenaHi = re4_port::GC32(OSGetArenaHi());
+#else
     arenaHi = (u32) OSGetArenaHi();
+#endif
     if (SysMem.heap_end > arenaHi) {
         arenaHi = SysMem.heap_end;
     }
     arenaLo = (arenaLo + 0x1F) & ~0x1F;
     arenaHi &= ~0x1F;
+#ifdef TARGET_PC
+    HeapHead = re4_port::GCPTR<OSHeapDescriptor>(arenaLo);
+    arenaLo = re4_port::GC32(OSInitAlloc(re4_port::GCPTR(arenaLo), re4_port::GCPTR(arenaHi), MEM_HEAP_NUM));
+    OSSetArenaLo(re4_port::GCPTR(arenaLo));
+    OSSetArenaHi(re4_port::GCPTR(arenaHi));
+#else
     HeapHead = (OSHeapDescriptor*) arenaLo;
     arenaLo = (u32) OSInitAlloc((void*) arenaLo, (void*) arenaHi, MEM_HEAP_NUM);
     OSSetArenaLo((void*) arenaLo);
     OSSetArenaHi((void*) arenaHi);
+#endif
     memInitHeapTbl();
     MemCreateHeap(0, arenaLo, SysMem.heap_end);
     MemSetCurrentHeap(0);
@@ -346,7 +370,11 @@ int MemCreateHeap(int no, u32 start, u32 end)
         MemDestroyHeap(no);
     }
     OSReport("-- MemCreateHeap %d %08x - %08x  ", no, start, end);
+#ifdef TARGET_PC
+    Heap[no].handle = OSCreateHeap(re4_port::GCPTR(start), re4_port::GCPTR(end));
+#else
     Heap[no].handle = OSCreateHeap((void*) start, (void*) end);
+#endif
     if (Heap[no].handle >= 0) {
         Heap[no].start = start;
         Heap[no].end = end;

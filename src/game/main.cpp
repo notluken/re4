@@ -75,6 +75,9 @@ f32 ORTHO_R;
 #include "etc_model.h"
 #include "exception.h"
 #include "espgen.h"
+#ifdef TARGET_PC
+#include "port/mem1.h"
+#endif
 
 extern "C" {
 void __main();
@@ -257,6 +260,14 @@ void systemStartInit()
 {
     memclr_asm(pG, sizeof(GlobalWork));
     OSInit();
+#ifdef TARGET_PC
+    // OSInit() calls Aurora's AuroraOSInitMemory() internally, which -- only when
+    // aurora::g_config.mem1Size is already nonzero -- allocates its own MEM1 block and would
+    // clobber whatever this repo's InitMem1() (include/port/mem1.h) set up beforehand. Calling it
+    // *here*, after OSInit() has already run once with mem1Size still 0 (a no-op on Aurora's
+    // side), means our own MEM1Start/MEM1End/mem1Size values are the only ones ever in effect.
+    re4_port::InitMem1();
+#endif
     setLanguage();
     RomFontSetting();
     if (OSGetConsoleType() & 0xF0000000) {

@@ -265,10 +265,28 @@ cCard::~cCard()
 {
 }
 
+#ifdef TARGET_PC
+// include/dolphin/card.h declares (and this repo calls) the real-hardware `CARDInit(void)`
+// signature, but Aurora's own <dolphin/card.h> (guarded by its own `#if TARGET_PC`, same macro
+// name, different project) only ever defines a two-argument
+// `CARDInit(const char* game, const char* maker)` -- both `extern "C"`, so nothing catches the
+// mismatch at compile time; calling the zero-arg declaration against that real implementation
+// left `game`/`maker` reading whatever garbage was in the argument registers, which
+// `CardGciFolder::setCurrentGame` then dereferenced. A same-named local `extern "C"` redeclaration
+// doesn't parse at block scope (linkage-specifications are namespace-scope-only, confirmed with a
+// minimal clang repro), so this needs its own name aliased onto the real symbol, at file scope.
+extern "C" void CARDInitPC(const char* game, const char* maker) asm("_CARDInit");
+#endif
+
 // Boot: initialises the CARD library and the CRC table, resets the card serial.
 void CardInit()
 {
+#ifdef TARGET_PC
+    // Null/empty values are fine either way -- setCurrentGame/setCurrentMaker both no-op on null.
+    CARDInitPC(nullptr, nullptr);
+#else
     CARDInit();
+#endif
     CRCInit();
     pG->card_serial = 1;
 }
