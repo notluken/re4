@@ -288,7 +288,11 @@ add_library(re4_port STATIC
 target_include_directories(re4_port PUBLIC ${RE4_GAME_INCLUDES})
 # TARGET_PC/RE4_U32_32 are global (add_compile_definitions() near the top of this file) -- see
 # docs/port-boot.md section 25 for why a per-target copy of this list is exactly the bug class
-# that global directive exists to make impossible.
+# that global directive exists to make impossible. Force-included cross-TU layout guard
+# (include/port/layout_asserts.h) for the same reason: this is exactly the library whose TUs
+# (os_thread.cpp) embed/touch OSThread/OSContext/TASK et al., and exactly the target that once
+# silently disagreed with the game side about their size.
+target_compile_options(re4_port PUBLIC -include ${RE4_ROOT}/include/port/layout_asserts.h)
 find_package(Threads REQUIRED)
 target_link_libraries(re4_port PUBLIC Threads::Threads)
 
@@ -326,7 +330,8 @@ if (RE4_U32_32)
             ${RE4_ROOT}/src/game/mes.cpp
     VERBATIM
   )
-  add_executable(re4_port_static_asserts ${CMAKE_BINARY_DIR}/gen/port_static_asserts.cpp)
+  add_executable(re4_port_static_asserts ${CMAKE_BINARY_DIR}/gen/port_static_asserts.cpp
+    tests/port/gx_layout_asserts.cpp)
   target_include_directories(re4_port_static_asserts PRIVATE ${RE4_GAME_INCLUDES})
   target_compile_definitions(re4_port_static_asserts PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_port_static_asserts PRIVATE ${RE4_GAME_OPTIONS})
@@ -418,7 +423,9 @@ if (RE4_BUILD_BOOT)
   add_library(re4_boot_game OBJECT ${RE4_BOOT_SOURCES_FILTERED})
   target_include_directories(re4_boot_game PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
   target_compile_definitions(re4_boot_game PRIVATE ${RE4_GAME_DEFINES})
-  target_compile_options(re4_boot_game PRIVATE ${RE4_GAME_OPTIONS} -include ${RE4_ROOT}/include/port/ptr32.h)
+  target_compile_options(re4_boot_game PRIVATE ${RE4_GAME_OPTIONS}
+    "SHELL:-include ${RE4_ROOT}/include/port/ptr32.h"
+    "SHELL:-include ${RE4_ROOT}/include/port/layout_asserts.h")
   # main.cpp's own `main()` becomes `main_game()` at compile time for this target only (src/port/
   # boot_main.cpp is re4_boot's real host entry point) -- a symbol rename via -D, not a source edit,
   # so re4_game_all's own copy of the same file (error-inventory target, unaffected) still has a
