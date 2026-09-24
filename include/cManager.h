@@ -2,6 +2,17 @@
 #define CMANAGER_H
 
 #include "types.h"
+// Debug_alloc (used by arrayPush below) is declared in main_mem.h. GCC 2.95 resolves an
+// unqualified, non-dependent name used inside a template body at instantiation time (the same
+// permissive single-phase lookup CLAUDE.md's cVarLoop/cVarRange note describes), so on the
+// original target this compiles regardless of whether a caller's #include order happened to pull
+// main_mem.h in before this header. clang's two-phase lookup needs the declaration visible at
+// template *definition* time instead -- measured: any TU that reaches this template without
+// already having included main_mem.h first (e.g. model.cpp: "atari.h" before "main_mem.h", and
+// atari.h reaches this header transitively) fails "undeclared identifier 'Debug_alloc'" under
+// TARGET_PC. A plain #include here needs no TARGET_PC guard: it only adds a declaration already
+// reachable from every TU that could hit this template, changing no emitted code.
+#include "main_mem.h"
 #ifdef TARGET_PC
 #include "port/ptr32.h"
 #endif
