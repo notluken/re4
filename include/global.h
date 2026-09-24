@@ -1372,7 +1372,14 @@ enum EXT_FLAG {
 #define FlagOn(base, no) (*(u32*) ((((no) >> 5) << 2) + (u32) (base)) |= (0x80000000 >> ((no) & 31)))
 #define FlagOff(base, no) (*(u32*) ((((no) >> 5) << 2) + (u32) (base)) &= ~(0x80000000 >> ((no) & 31)))
 #endif
+// FlagXor was missed from the FlagOn/FlagOff pair above in the original step-4 pass (found blocking
+// title.cpp's DbgFlagXor calls, docs/port-phase2.md section 9's boot-path work) -- same reasoning as
+// FlagChk/FlagOn/FlagOff: `base` is a live in-memory pointer, not an on-disc field.
+#ifdef TARGET_PC
+#define FlagXor(base, no) (*(u32*) ((u8*) (base) + (((no) >> 5) << 2)) ^= (0x80000000 >> ((no) & 31)))
+#else
 #define FlagXor(base, no) (*(u32*) ((((no) >> 5) << 2) + (u32) (base)) ^= (0x80000000 >> ((no) & 31)))
+#endif
 
 // The same four, for a call site whose flag number is a variable or a struct field rather than an
 // enumerator.  Both arguments are copied into locals: substituted twice the field would be loaded
