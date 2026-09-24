@@ -506,4 +506,6 @@ void pathGridLock(Vec* grid, Vec* in, Vec* out)
 }
 
 // the next object's .data is 8-aligned
+#ifndef TARGET_PC
 asm(".section .data; .balign 8");
+#endif

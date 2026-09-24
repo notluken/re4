@@ -172,7 +172,9 @@ static Camera em21_trap_cam = { 0 };
 // An asm-labelled alias declaration gives cse a distinct SYMBOL_REF and keeps the fresh pair.
 extern Camera em21_trap_cam_v asm("em21_trap_cam");
 // .data is padded to 8 bytes before the linker's BSS tag word.
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.text");
+#endif
 
 // Per-frame update: clears the neck flag, damage check, route check (Em21RouteCk), the R0 table
 // (Init / Move / Damage and Die share R0_Move / Scenario), then the neck, collision and scenario check;

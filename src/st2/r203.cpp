@@ -358,4 +358,6 @@ extern "C" void Evt_R203S00_Func(Event* e)
 }
 
 // The module's .data continues 8-aligned.
+#ifndef TARGET_PC
 asm(".section .data; .balign 8");
+#endif

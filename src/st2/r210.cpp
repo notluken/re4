@@ -601,4 +601,6 @@ static void plemRide(cPlayer* pl)
 }
 
 // The module's .data continues 8-aligned.
+#ifndef TARGET_PC
 asm(".section .data; .balign 8");
+#endif

@@ -1,6 +1,8 @@
 // the split object's .rodata is 8-aligned (the double of the int->float conversions would do it
 // anyway; keep the unit's head identical to the other rooms).
+#ifndef TARGET_PC
 asm(".section .rodata\n\t.balign 8\n\t.text");
+#endif
 #include "types.h"
 #include "main_mem.h"
 #include "st_room.h"

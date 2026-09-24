@@ -277,7 +277,9 @@ static u16 em22_para_flip[80] = {
     0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F,
 };
 // The original link 8-aligns the end of .data (the ngcld BSS tag follows): the 4 pad bytes after the table.
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.text");
+#endif
 
 // Per-frame update: clears the per-frame work flags, damage check, forgets the target when the player
 // is dead (plDeadWait), route check (Em22RouteCk), the R0 table, then the neck / body tilt,

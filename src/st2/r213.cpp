@@ -77,7 +77,9 @@ static u8 r213_chainUp[20] = {0xFF, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xA, 0xB, 0xC, 0x
 static u8 r213_chainDown[20] = {2, 3, 4, 5, 6, 7, 8, 9, 0xA, 0xB, 0xC, 0xD, 0xE, 0xF, 0x10, 0x11, 0x12, 0xFF, 0, 0};
 int r213_chainNum = 0x12;
 // the split object's .data is 8-aligned
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.text");
+#endif
 
 static void OpenedBoxTreasure(int id);
 static void OpenBoxTreasure(int id);

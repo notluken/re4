@@ -1758,4 +1758,8 @@ char* getItemIdStr(u32 id)
     return pW->idName2[id - 0x1000];
 }
 
+#ifndef TARGET_PC
+
 asm(".section .data; .balign 8");
+
+#endif

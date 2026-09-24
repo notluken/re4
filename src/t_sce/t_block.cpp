@@ -1513,4 +1513,8 @@ void tBlock_DebugCamera()
     }
 }
 
+#ifndef TARGET_PC
+
 asm(".section .data; .balign 8");
+
+#endif

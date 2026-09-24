@@ -53,7 +53,9 @@ struct R113Shelf {
 static R113Work* r113_work;
 
 // The original's .data is 8-aligned (r105 has the same).
+#ifndef TARGET_PC
 asm(".section .data; .balign 8");
+#endif
 static R113Cesspit r113_cesspit = {0x52, 0x53, 0x81, 0x9F, 6, 5, 7};
 static R113Shelf r113_shelf0 = {{0x57, 0x58}};
 static R113Shelf r113_shelf1 = {{0x59, 0x5A}};

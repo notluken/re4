@@ -2001,4 +2001,8 @@ static void r22c_checkShootingScore()
     SceEventEnd(0);
 }
 
+#ifndef TARGET_PC
+
 asm(".section .data\n\t.balign 8\n\t.text");
+
+#endif

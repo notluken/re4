@@ -1019,4 +1019,6 @@ void MessageDisplay::quit(SUB_SCREEN* wk)
 
 // The split object's .data is 4 bytes longer than the variables: the next unit's (ss_item) .data
 // starts 8-aligned in the REL.
+#ifndef TARGET_PC
 asm(".section .data; .balign 8; .section .text");
+#endif

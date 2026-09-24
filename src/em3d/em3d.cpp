@@ -232,7 +232,9 @@ Vec Em3d_target_tbl[8] = {
     { 25807.0f, 13198.0f, -13498.0f },
 };
 // The module's .data is padded to 8 bytes after the last table.
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.text");
+#endif
 
 // Per-frame update (emMove): the hit check, the radio hold countdown, the r_no_0 routine (0xFF
 // after a failed init destroys the work), the locked target check, the nose pitch, the rotors,

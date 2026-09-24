@@ -412,4 +412,6 @@ static void R20fEmWanderingSet()
 }
 
 // The module's .data continues 8-aligned (st2.cpp).
+#ifndef TARGET_PC
 asm(".section .data; .balign 8");
+#endif

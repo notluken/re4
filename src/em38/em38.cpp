@@ -1856,7 +1856,9 @@ void em38BirthParasite(cEm38* em)
 // Debug switch: the shell motion stays off while set.
 static int em38_shell_off = 0;
 // The original link 8-aligns the end of .data (the ngcld BSS tag follows): the 4 pad bytes after it.
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.text");
+#endif
 
 // The shell on the body's back (a second motion work) opens when the body is hurt.
 void em38ShellControl(cEm38* em)

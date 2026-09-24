@@ -338,4 +338,8 @@ void TplViewer()
     }
 }
 
+#ifndef TARGET_PC
+
 asm(".section .data; .balign 8");
+
+#endif

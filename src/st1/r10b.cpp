@@ -907,4 +907,6 @@ static void r10b_setEm()
 }
 
 // the split object's .data is 8-aligned
+#ifndef TARGET_PC
 asm(".section .data; .balign 8");
+#endif

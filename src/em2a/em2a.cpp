@@ -183,7 +183,9 @@ static Camera em2a_rescue_cam = { 0 };
 // An asm-labelled alias declaration gives cse a distinct SYMBOL_REF and keeps the fresh pair.
 extern Camera em2a_rescue_cam_v asm("em2a_rescue_cam");
 // .data is padded to 8 bytes before the linker's BSS tag word.
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.text");
+#endif
 
 // Per-frame update: the damage check of the trap kind (em2aDmCkTrap1 / Trap2), clears the per-frame
 // flags and runs the R0 table (Init / Move / Damage / Die / Scenario).

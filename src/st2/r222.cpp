@@ -63,7 +63,9 @@ static f32 r222_angB1 = 3.17f;
 static f32 r222_angB2 = -0.29f;
 static f32 r222_angB3 = 0.13f;
 // the split object's .data is padded to 8 bytes
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.text");
+#endif
 
 static void r222_TreasureBoxOpen(int id);
 static void r222_TreasureBoxOpened(int id);
@@ -249,7 +251,9 @@ static void r222_TreasureBoxOpened(int id)
 // then hold 0 instead of the section offset), and a `static const` at file scope is deferred to the
 // end of the file. The wait body reads the word through the asm-labelled alias (a distinct
 // SYMBOL_REF: gcse cannot share the `high` r10 of the arms with it, the target reloads `lis r11`).
+#ifndef TARGET_PC
 asm(".section \".rodata\"\n\t.align 2\nr222_k212:\n\t.long 0x4007b8a5\n\t.section \".text\"");
+#endif
 extern const f32 r222_k212;
 extern const f32 r222_k212_v asm("r222_k212");
 

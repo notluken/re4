@@ -376,7 +376,9 @@ CLOTH_AT_SET em2b_chain_at2[5] = {
     { 0, 0x12, 0x12, 1.0f, 650.0f, { 0.0f, 0.0f, 150.0f }, { 0.0f, 0.0f, 150.0f } },
     { 0, 0x16, 0x16, 1.0f, 650.0f, { 0.0f, 0.0f, 150.0f }, { 0.0f, 0.0f, 150.0f } },
 };
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.text");
+#endif
 
 // Module entry (SN loader): registers Em2bInit as the DOL's enemy constructor (EmInitFunc).
 extern "C" void _prolog()

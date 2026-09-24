@@ -59,7 +59,9 @@ static int r11f_actNo;
 static R11fWork* r11f_work;
 
 // the split object's .data is 8-aligned
+#ifndef TARGET_PC
 asm(".section .data; .balign 8");
+#endif
 static int r11f_actOn = 0;
 
 extern "C" void r11f_DoorReplace();

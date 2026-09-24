@@ -717,4 +717,8 @@ static inline void ToolDr()
     }
 }
 
+#ifndef TARGET_PC
+
 asm(".section .data; .balign 8");
+
+#endif

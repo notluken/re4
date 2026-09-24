@@ -7,7 +7,9 @@
 
 // The original object's .data is 8-aligned (ours would be 4-aligned): the REL's .data starts 4 bytes
 // after .rodata's end because of it.
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.section .text");
+#endif
 
 // Name lists for the editor's bit / type / set fields, "END"-terminated (one per enemy id, shared where
 // the enemies share an id family).

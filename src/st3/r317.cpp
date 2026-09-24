@@ -69,7 +69,9 @@ static R317Work* r317_work;
 
 // The original object's .rodata (0x4cc -> 0x4d0) and .data (0xdc -> 0xe0) are 8-aligned: r318's
 // sections start 8-aligned in the REL.
+#ifndef TARGET_PC
 asm(".section .rodata\n\t.balign 8\n\t.section .data\n\t.balign 8\n\t.text");
+#endif
 static SceElevator2Data r317_elvUp = {3, 0x2A, 0x19, 0x1A, {0.0f, 0.0f, 0.0f}, {0.0f, 10825.0f, 0.0f}, {6860.0f, -4775.0f, 11950.0f}, {6860.0f, 6016.0f, 11950.0f}, {0.0f, 3.1415927f, 0.0f}, 2, 3, 2, 4, 3, 0};
 static SceElevator2Data r317_elvDown = {1, 0x2A, 0x19, 0x1A, {0.0f, 10825.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, {6860.0f, 6016.0f, 11950.0f}, {6860.0f, -4775.0f, 11950.0f}, {0.0f, 1.5707964f, 0.0f}, 3, 2, 2, 4, 3, 0};
 

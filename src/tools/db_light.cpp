@@ -5924,4 +5924,6 @@ int cLitPathTool::createPath(cLightPathHeader* dst)
 }
 
 // the next object's .data is 8-aligned: the split object carries the 4-byte pad
+#ifndef TARGET_PC
 asm(".section .data; .balign 8");
+#endif

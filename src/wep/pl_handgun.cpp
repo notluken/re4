@@ -561,4 +561,6 @@ static void wep02_r2_reload(cPlayer* pl)
 
 // The object's .data is 8-aligned in the original link (wep01: .data starts 4 bytes after the end of
 // .rodata); the size is already a multiple of 8, so this only raises the section alignment.
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.text");
+#endif

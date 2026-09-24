@@ -402,7 +402,9 @@ Vec em3c_bomb_pt[5][5] = {
     { { 0.0f, 0.0f, 2000.0f }, { 0.0f, 0.0f, -500.0f }, { 200.0f, 0.0f, 0.0f }, { -200.0f, 0.0f, 0.0f }, { 0.0f, 300.0f, 0.0f } },
 };
 // The original link 8-aligns the end of .data (the ngcld BSS tag follows): the 4 pad bytes after the table.
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.text");
+#endif
 
 // Per-frame update from the enemy manager. Order: damage check, clear the per-frame Be_flg bits,
 // tick the wait timers (a dead player forces at least a 5-frame attack wait), route to the player,

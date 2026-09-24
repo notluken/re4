@@ -357,7 +357,9 @@ static GXColor col_cur = {0x80, 0x10, 0x10, 0xFF};
 static GXColor col_near = {0, 0, 0x80, 0xFF};
 static GXColor col_point = {0x40, 0x40, 0x40, 0xFF};
 static GXColor col_htr = {0x80, 0x80, 0x80, 0xFF};
+#ifndef TARGET_PC
 asm(".section .data; .balign 8; .text");
+#endif
 
 // Mode 5, - LOAD -: DEFAULT or BACKUP 1..4; shows Complete. / Load Error!.
 static void mode_load()

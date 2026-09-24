@@ -74,7 +74,9 @@ static R104Work* r104_work;
 
 // The original's .rodata and .data are 8-aligned (the .rodata end is padded to 0x2a8; r105 has the same).
 // Both tables are global in the REL (ADDR16 fields hold A only).
+#ifndef TARGET_PC
 asm(".section .rodata; .balign 8; .section .data; .balign 8");
+#endif
 R104ResetData r104_resetData[4] = {
     {{0xD9, 0xDA, 0xDB}, 2, 3, 4, 1},
     {{0xDC, 0xDD, 0xDE}, 5, 6, 7, 2},

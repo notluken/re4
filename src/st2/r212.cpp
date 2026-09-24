@@ -1127,4 +1127,6 @@ static void r212_TreasureBoxOpened(int id)
 }
 
 // The next room's .rodata starts 8-aligned (the split object carries the pad).
+#ifndef TARGET_PC
 asm(".section .rodata\n\t.balign 8\n\t.text");
+#endif

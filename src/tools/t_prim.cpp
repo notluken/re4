@@ -415,5 +415,7 @@ void set_vtx_flat_s16(S16Vec* v, GXColor* col, u16 n)
 }
 
 // the next unit's .data is 8-aligned
+#ifndef TARGET_PC
 asm(".section .data; .balign 8");
+#endif
 #endif

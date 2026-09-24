@@ -27587,4 +27587,6 @@ void em10SetPoint(cEm10* em)
 
 // The original em10.cpp object has an 8-aligned .data (the split object's sh_addralign); the size is already
 // a multiple of 8, so this only raises the section alignment (the REL places .data at +0x460D0, not +0x460CC).
+#ifndef TARGET_PC
 asm(".section .data\n\t.balign 8\n\t.text");
+#endif
