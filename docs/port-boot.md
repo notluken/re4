@@ -124,3 +124,154 @@ reading, not a linker's reachability answer.
 - **Asm units on the boot path**: `exception.cpp`, `scheduler.cpp`, the `mtspr` GQR block in
   `main.cpp` itself, plus `sofdec.cpp`/`dbmodule.cpp`/`eprintf.cpp`/`db_log.cpp` (mostly
   skippable/stubbable for first boot, not hardware-critical to reaching the title screen).
+
+## 7. `re4_boot` links (2026-09-24)
+
+Starting state: 486 undefined symbols (docs/port.md's last session). This pass fixed the
+`main_game` linkage bug (below), then closed the remaining undefined-symbol list with generated
+and hand-written stubs, and got a clean link. `cmake/boot_exclude.txt` (36 files) was **not**
+shrunk this pass -- time went to the link path instead, per the "prioritize reaching link" budget
+note; that is still open work for a future session (see the exclusion categories already recorded
+there).
+
+### `main_game` linkage bug (found first, blocked everything else)
+
+`src/port/boot_main.cpp` declared `extern "C" int main_game();`, but `-Dmain=main_game` renames
+the identifier *before* Sema ever sees it, so `main.cpp`'s renamed function does not get the
+special "no mangling" treatment a literal `main` gets -- it mangles as an ordinary C++ function
+(`__Z9main_gamev`, confirmed with `nm` on `main.cpp.o`). `extern "C"` in the declaration mismatched
+that and the two objects never linked. Fixed by dropping `extern "C"` (commit `f5db6d95`).
+
+### Undefined-symbol mangling: answered
+
+All ~486 undefined symbols are genuinely either C-linkage or genuinely C++-linkage; macOS `ld`
+demangles the C++ ones in its own error text (no `_Z`/`__Z` prefix in what it prints), which is why
+the two categories look inconsistent at a glance. Concretely:
+
+- A **plain global-namespace-scope C++ variable** (`cActionButton ActBtn;`, `extern cDvd Dvd;`,
+  ...) is **not** Itanium-mangled at all regardless of `extern "C"` -- verified with a two-line
+  `clang++ -c` + `nm` test (`Foo bar;` at global scope emits `_bar`, not `__Z3bar`). Only
+  functions (via overloading) and namespace/class-scoped entities need the `_Z` scheme.
+- A **free or member C++ function** (`cPlayer::actionSelect()`, `dmMotCk()`, ...) mangles
+  normally; `ld`'s error text prints the demangled form, which is why these show up as full
+  human-readable signatures with no `_Z`/underscore prefix at all.
+- An **`extern "C"` function or global** (most of the SDK/CRI-shaped declarations, `ActBtn`-style
+  globals' *functions* though not the globals themselves, `at_mod.h`'s `EmAtCheck` family, ...)
+  gets a single Mach-O underscore and nothing else (`_OSInitAlarm`, `_At_em_rect_rect_ck`).
+
+So the stub generator's job reduces to: symbols with exactly one leading underscore and no other
+punctuation are C-linkage (strip the underscore, look up an `extern "C"` declaration); everything
+else is already the human-readable C++ signature straight from the linker, parse that directly
+instead of re-deriving it.
+
+One genuine anomaly, not fully explained this pass (**TO VERIFY**): five symbols --
+`Dvd`, `ScreenReSize`, `pSys` (x3), `memset`, and the SndCall entry -- appeared in the raw
+`ld` undefined-symbol list with **no** leading underscore even though the real definitions are
+ordinary C-linkage globals/functions. All five turned out to share one root cause once found: each
+is the target of an `asm("literal-name")` alias in the vendor source (`main_mem.cpp`'s
+`pSysView`/`DvdView`, `card.cpp`'s `ScreenReSizeI`, `emshield.cpp`'s `SndCallV`,
+`route_ck.cpp`'s `memset_v`) -- a documented compiler-diff trick (docs/port.md, "t_esp.cpp's
+operator new") that binds the alias to the *literal* link-time name with no leading underscore.
+That's correct for the original ELF/PowerPC target (no automatic name-mangling underscore there)
+but wrong for Mach-O, which always adds that underscore for an ordinary C reference -- so the
+alias pointed at a symbol (`memset`, no underscore) that nothing defines, instead of the real one
+(`_memset`). Fixed with `TARGET_PC` branches that call the real function/global directly instead
+of aliasing (commit `ff94f937`, verified byte-identical on the remote x86_64 build below).
+
+### Stub counts (`tools/port/gen_boot_stubs.py` v2 + hand-written holdouts)
+
+| Group | Count | Where |
+|---|---|---|
+| C-linkage functions (generated) | 320 | `src/port/stubs/generated_c_stubs.cpp` |
+| C-linkage data (generated) | 24 | `src/port/stubs/generated_c_stubs.cpp` (outside the `extern "C"` block -- see the file) |
+| C++ methods/free functions (generated) | 115 | `src/port/stubs/generated_cpp_stubs.cpp` |
+| Hand-written (function-pointer params, GNU-v2-mangled `SndCall`, tables/consts normally in excluded files) | ~20 | `src/port/stubs/manual_stubs.cpp` |
+| `__builtin_new`/`delete`/`vec_new`/`vec_delete` (puzzle.cpp) | 4 | `src/port/stubs/host_new_delete.cpp` |
+| Vtable key functions + the rest of each class's virtual slots (cPlayer, cPlLeon, cPlAshley, cObjRobo, cObjRocket, cObjLauncher) | ~30 | `src/port/stubs/manual_stubs.cpp` |
+| Unresolved / not attempted | 0 | -- everything the generator flagged unresolved was covered by hand |
+
+None of the generated/hand-written stubs are **data** definitions that should have come from a
+non-excluded file instead (the `c_data` list -- `ActBtn`, `CamDbg`, `DC`, `EmReadModule`,
+`GameSave`, `lockCtr`, `m3r`, `mercId`, `PlReadModule`, `WepReadModule`, ... -- are all genuinely
+owned by excluded files per `cmake/boot_exclude.txt`'s categories).
+
+### Vtable key functions (Itanium ABI gotcha)
+
+Six classes' constructors are reachable but their *own* first non-inline virtual member function
+(the Itanium "key function" that decides which TU gets to emit the vtable) is declared but defined
+only in an excluded file, and is never itself called anywhere reachable on this boot path -- so
+the linker's undefined-symbol list only ever showed `vtable for X`, never the key function's own
+name, until the constructor was reached: `cPlayer::beginEvent`, `cPlLeon::move`,
+`cPlAshley::move`, `cObjRobo::move`, `cObjRocket::beginEvent`, `cObjLauncher::~cObjLauncher`. Once
+each key function got a stub, the linker then required *every other* virtual slot in that same
+class to be defined too (Itanium vtables are all-or-nothing per TU) -- `src/port/stubs/
+manual_stubs.cpp`'s `RE4_STUB_VOID` block covers the rest.
+
+### Aurora mismatches
+
+Aurora's static libs (`aurora_os`/`aurora_vi`/`aurora_gx`/`aurora_pad`/`aurora_dvd`/`aurora_card`/
+`aurora_mtx`/`aurora_si`/`aurora_core`) declare several `dolphin/*.h` headers this code includes,
+but do **not** implement the functions this boot path actually calls:
+
+- `dolphin/mtx.h`'s `PSMTX*`/`PSVEC*` (paired-single) family: Aurora only implements the scalar
+  `C_MTX*` equivalents (`nm libaurora_mtx.a` has `_C_MTXConcat` etc., no `_PSMTXConcat`) -- every
+  `PSMTX*`/`PSVEC*` call on this boot path is a logging stub, not real math. A real fix would wrap
+  Aurora's `C_MTX*` (verify identical semantics first, not assumed).
+- `dolphin/os/OSThread.h`, `OSAlarm.h`, `OSSemaphore.h`: declared, zero symbols defined in
+  `libaurora_os.a` (`nm | grep -i "alarm\|thread"` is empty) -- OS threading/alarms are stubbed,
+  not backed by Aurora.
+- `dolphin/ax.h`/CRI's `mwply.h`/ADX headers: no Aurora library covers sound at all; every
+  `AX*`/`ADX*`/`mwPly*` call is a stub. Expected (docs/port.md marks sound Phase 5).
+- `dolphin/gx.h`'s `GXWGFifo` (a real hardware MMIO absolute-address symbol on the original
+  target) has no Aurora equivalent; stubbed as a 1-element array (`manual_stubs.cpp`), **TO
+  VERIFY** once real GX vertex submission is wired through Aurora instead.
+
+Aurora libraries that ARE used for real: none yet load-bearing on the actual link (`aurora_gx`,
+`aurora_dvd`, `aurora_card` etc. link cleanly and their symbols weren't needed to satisfy anything
+on this pass -- the crash in section 8 happens before any of them run).
+
+### Link result
+
+`re4_boot` links cleanly (`cmake --build build-pc-boot --target re4_boot`, `RE4_BUILD_BOOT=ON
+RE4_U32_32=ON`). Verified the default host build (`RE4_U32_32=OFF`, `build-pc/`) is unaffected:
+`re4_game_core`/`re4_port`/`test_ptr32`/`test_arena` unchanged (same two pre-existing failures,
+`math_sub.cpp`/`model.cpp`, both already documented Phase 2/5 material, not touched this pass);
+`ctest` 2/2 passed.
+
+## 8. First run (2026-09-24)
+
+Ran under `lldb --batch -o run -o bt -k bt -k quit` (DVD root wiring -- `argv`/env var -- **not
+done this pass**; the crash happens before `main()`, so it never mattered this time). Crash:
+
+```
+* thread #1, stop reason = EXC_BAD_ACCESS (code=1, address=0x7)
+    frame #0: cLog::add(this=0x0, flag=0, errId=0, mes="alloc[%x]:free[%x] %s", ap=...) at db_log.cpp:209
+    frame #1: cLog::verr(this=0x0, ...) at db_log.cpp:82
+    frame #2: cLog::err(this=0x0, ...) at db_log.cpp:56
+    frame #3: mem_alloc(size=32, file="operator new", line=0, flag=1, heap=0) at main_mem.cpp:429
+    frame #4: mem_calloc(...) at main_mem.cpp:437
+    frame #5: operator new(size=8) at main_mem.cpp:80
+    frame #6..#12: libc++ std::vector<bool> allocation path
+    frame #13: aurora::gfx::render_worker::FrameSlotPool::FrameSlotPool(slotCount=2) at render_worker.cpp:138
+    frame #14: __cxx_global_var_init.3() at frame.cpp:56
+    frame #15: _GLOBAL__sub_I_frame.cpp
+    frame #16+: dyld running C++ global constructors before main()
+```
+
+**Diagnosis**: this crashes before `re4_boot`'s own `main()` ever runs, during dyld's C++ global
+static-initializer pass. Aurora's `aurora::gfx::frame` translation unit has a global
+`FrameSlotPool` object whose constructor allocates a `std::vector<bool>`, which calls
+`::operator new`. But the game's own `operator new` (`main_mem.cpp:80`) is linked into the same
+executable and is *not* namespaced or guarded -- it globally overrides `::operator new` for the
+whole process, including Aurora's unrelated internal allocations. That override routes into
+`mem_alloc`, which on any bookkeeping/logging path (`MAD` tag mismatch handling here) calls through
+a global `cLog`-family object (`Log`, presumably) that has not been constructed yet -- C++ static
+initialization order between two independently-linked static libraries (`re4_boot_game` and
+Aurora) is unspecified, and Aurora's constructor ran first this time. The `this == 0x0` in
+`cLog::add` is that not-yet-constructed global, read before its constructor set it up. This is not
+a one-line fix: it needs either (a) the game's `operator new` override scoped/deferred so it
+doesn't intercept allocations before `re4_port::InitArena()`/the log system are ready, or (b) an
+explicit init-order fence (a priority attribute, or moving Aurora's problematic global out of
+static-init entirely) so the game's own subsystems are guaranteed to construct before any
+`operator new` call reaches them. Not attempted this pass, per the "don't fix beyond the first
+crash unless trivial" instruction.
