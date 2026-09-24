@@ -10,6 +10,14 @@ excluded any more), compiled individually, clang stopping only unit-by-unit. Too
 17 (`clang-1700.6.3.2`), `-arch arm64 -std=gnu++17`, `-DTARGET_PC` plus the same `-I`/version defines
 `configure.py` uses for the ProDG game/REL units.
 
+**Correction (Phase 2, docs/port-phase2.md): "compiles clean" below means clang accepts the
+translation unit, not that the resulting struct layouts are correct.** `s32`/`u32` are `long` here
+(`include/types.h`), 8 bytes on this LP64 host versus 4 on the GameCube; every struct with an
+`s32`/`u32` field currently has the wrong size/offsets on the host, silently — clang has no reason to
+diagnose a `long` field being 8 bytes, that is the type's normal width. All the "compiles clean"
+counts in this file predate Phase 2 step 1 (`RE4_U32_32`, `docs/port-phase2.md`) and describe only
+"no clang diagnostic", never "byte-correct on-disc/in-memory layout".
+
 **`src/game`: 258 / 293 `.cpp` units (~88%) compile clean. 35 fail.** (351 units were attempted
 before this pass; the 58 `src/game/*.c` newlib units are now excluded by design, not attempted — see
 "libc exclusion" below. Not a regression: a narrower, more honest count.)

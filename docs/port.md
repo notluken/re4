@@ -225,18 +225,17 @@ Exit: every push gets an automatic byte-identity check.
 Exit (original wording, still true): `src/game` compiles (not links) on macOS arm64; the error
 inventory for phases 2-3 is written down. Now additionally true for the REL modules.
 
-### Phase 2 — 64-bit pointers in loaded data
+### Phase 2 — 64-bit pointers in loaded data (started 2026-09-24; steps 1-3 done)
 
-The disc formats (models, motions, DAT/DRS archives, REL fixups, save data) embed 32-bit pointers and
-offsets that are relocated in place after loading. On a 64-bit host those structs change size.
-
-- Inventory every struct loaded from disc that contains a pointer (start from what
-  `tools/motion/host` already had to solve).
-- Pick one strategy and apply it consistently: 32-bit offset fields plus accessors under `TARGET_PC`,
-  or load-time conversion into host-layout structs. Decide with the inventory in hand.
-- `static_assert` the on-disc struct sizes under `TARGET_PC`.
-
-Exit: every on-disc struct has a checked size and a defined host representation.
+Full inventory, strategy, macOS-specific findings, decisions, and the step-by-step plan with
+acceptance criteria: **`docs/port-phase2.md`**. Summary: strategy D (compressed 32-bit handles
+relative to a fixed host arena, `include/port/ptr32.h`'s `Ptr32<T>`), a build-time cast rewriter
+(design only so far) for the ~1,693 direct pointer<->integer casts outside the header macros, and a
+GameCube-compatible on-disc save format (no disc-format/memory-format split). Steps 1
+(`s32`/`u32` as 4-byte `int`/`unsigned int`, `RE4_U32_32` CMake option, off by default),
+2 (`include/port/ptr32.h` + `tests/port/test_ptr32.cpp`) and 3 (`src/port/arena.cpp`'s fixed host
+arena + `tests/port/test_arena.cpp`) are done and verified (115/115, `asmcheck` TOTAL 231, both
+`ctest`s passing, 100/100 on `tests/port/run_arena_stress.sh`).
 
 ### Phase 3 — endianness
 
