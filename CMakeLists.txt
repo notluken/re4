@@ -68,10 +68,17 @@ endif()
 # -Wno-address-of-temporary: `&((Vec){...})` compound-literal-address idiom (GNU C, several em*/wep*
 # units), legal for the vendor's GCC 2.95 and alive for the length of the enclosing full expression;
 # clang's default diagnostic for it is an error, not a warning, so it needs the flag, not -Wno-error.
+# -mllvm -global-isel=false: Phase 2 step 5 (docs/port-phase2.md) hit a reproducible clang/LLVM
+# backend crash (AArch64RegisterBankInfo::hasFPConstraints, GlobalISel's RegBankSelect pass) compiling
+# src/game/cam_ctrl.cpp's CameraControl::calcAddr with RE4_U32_32 on -- confirmed a codegen-only bug,
+# not a diagnostic (-fsyntax-only accepts the same source cleanly), and confirmed fixed by forcing the
+# older SelectionDAG instruction selector instead. Applied to every host target so any other unit that
+# hits the same GlobalISel bug is covered too, not just the one found so far.
 set(RE4_GAME_OPTIONS
   -Wno-invalid-offsetof
   -Wno-narrowing
   -Wno-address-of-temporary
+  -mllvm -global-isel=false
 )
 
 # --- re4_game_core: a small representative slice of src/game (Phase 1 goal: compiles, not links) ---
@@ -189,4 +196,28 @@ if (RE4_PC_BUILD_TESTS)
   add_executable(test_arena tests/port/test_arena.cpp)
   target_link_libraries(test_arena PRIVATE re4_port)
   add_test(NAME test_arena COMMAND test_arena)
+endif()
+
+# --- re4_port_static_asserts: offsetof() checks for Phase 2 step 5's Ptr32<T>-converted on-disc
+# structs (docs/port-phase2.md), generated from their own "// 0xNN" comments ---
+# Only meaningful with RE4_U32_32 ON: a Ptr32<T> field is always 4 bytes, but the *other* plain u32
+# fields interleaved in these same structs are only 4 bytes (matching the documented GameCube
+# offsets) when RE4_U32_32 is also on; with it off they are still the host's 8-byte `long`, so the
+# struct layout is not yet the on-disc one and these asserts would fail immediately -- correctly, not
+# spuriously, but there is no host build config where they should run except RE4_U32_32=ON.
+if (RE4_U32_32)
+  add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/gen/port_static_asserts.cpp
+    COMMAND ${Python3_EXECUTABLE} ${RE4_ROOT}/tools/port/gen_static_asserts.py
+            > ${CMAKE_BINARY_DIR}/gen/port_static_asserts.cpp
+    DEPENDS ${RE4_ROOT}/tools/port/gen_static_asserts.py
+            ${RE4_ROOT}/include/model.h ${RE4_ROOT}/include/tpl.h ${RE4_ROOT}/include/cam_ctrl.h
+            ${RE4_ROOT}/include/game.h ${RE4_ROOT}/include/room_jmp.h ${RE4_ROOT}/include/atari.h
+    VERBATIM
+  )
+  add_executable(re4_port_static_asserts ${CMAKE_BINARY_DIR}/gen/port_static_asserts.cpp)
+  target_include_directories(re4_port_static_asserts PRIVATE ${RE4_GAME_INCLUDES})
+  target_compile_definitions(re4_port_static_asserts PRIVATE ${RE4_GAME_DEFINES})
+  target_compile_options(re4_port_static_asserts PRIVATE ${RE4_GAME_OPTIONS})
+  add_test(NAME re4_port_static_asserts COMMAND re4_port_static_asserts)
 endif()
