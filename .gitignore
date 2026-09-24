@@ -27,3 +27,8 @@ tools/research/mwccdbg/retrowin32
 
 # host port build (CMakeLists.txt at repo root, cmake/ helpers); never read by configure.py/ninja
 build-pc/
+build-pc-*/
+
+# tools/port/cast_rewriter's own standalone build tree (built against Homebrew LLVM, see its
+# CMakeLists.txt header comment); the tool's source is committed, this build output is not.
+build-pc-tool/

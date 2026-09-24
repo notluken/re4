@@ -49,6 +49,32 @@ option(RE4_U32_32 "s32/u32 = 4-byte int/unsigned int under TARGET_PC (Phase 2 st
 
 set(RE4_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 
+# Phase 2 section 8 (docs/port-phase2.md): the build-time cast rewriter. Implied by RE4_U32_32
+# (that is the config where the ~1,693 direct pointer<->integer casts actually need to become
+# GC32()/GCPTR<T>() to compile at all), but can be forced independently for testing.
+#
+# tools/port/cast_rewriter/ is NOT built by this configure -- it needs libTooling, which Apple's
+# bundled clang does not ship (verified 2026-09-24); build it once, separately, against Homebrew
+# LLVM (see tools/port/cast_rewriter/CMakeLists.txt's header comment), then point
+# RE4_CAST_REWRITER_BIN at the resulting binary. tools/port/rewrite_casts.py is the actual driver
+# (also invokable by hand): it reads this configure's own compile_commands.json, runs the rewriter
+# once per src/game source with RE4_U32_32 OFF (the cast still type-checks there -- see the
+# script's own header comment for why, and docs/port-phase2.md section 8), and writes the
+# rewritten copies to build-pc/gen/. This is a whole-tree regeneration step run at configure time,
+# not a per-file incremental custom command yet -- see docs/port-phase2.md, "steps not started",
+# for that gap.
+option(RE4_REWRITE_CASTS "Run the Phase 2 cast rewriter and compile build-pc/gen/ instead of src/ for host game targets" ${RE4_U32_32})
+set(RE4_CAST_REWRITER_BIN "${RE4_ROOT}/build-pc-tool/re4_cast_rewriter" CACHE FILEPATH
+    "Path to the built tools/port/cast_rewriter binary (built separately, see its CMakeLists.txt)")
+if (RE4_REWRITE_CASTS)
+  if (NOT EXISTS ${RE4_CAST_REWRITER_BIN})
+    message(WARNING "RE4_REWRITE_CASTS is on but ${RE4_CAST_REWRITER_BIN} does not exist -- "
+                     "build tools/port/cast_rewriter first (see its CMakeLists.txt), or the "
+                     "re4_game_all/re4_rel_all sources below fall back to the unrewritten originals.")
+    set(RE4_REWRITE_CASTS OFF)
+  endif()
+endif()
+
 # Matches configure.py's include_dirs (project_root/include, project_root/src,
 # project_root/build/<version>/include) plus the version defines cflags_game carries.
 set(RE4_GAME_INCLUDES
@@ -118,10 +144,45 @@ if (RE4_PC_BUILD_ALL_GAME)
   )
   list(FILTER RE4_GAME_ALL_SOURCES EXCLUDE REGEX ".*/(memset_2|yz2asm)\\.cpp$")
 
+  # Custom target: `cmake --build build-pc --target re4_rewrite_casts` runs the Phase 2 rewriter
+  # (tools/port/rewrite_casts.py) over every re4_game_all source, using *this* configure's own
+  # compile_commands.json. Two-pass by construction (see the RE4_REWRITE_CASTS comment above): a
+  # first `cmake --build` (or plain `cmake -S . -B build-pc`) is needed before build-pc/gen/ exists
+  # at all, so RE4_REWRITE_CASTS's source-swap below only takes effect once build-pc/gen/<file> is
+  # already on disk from a previous run of this target -- not a per-file incremental custom command
+  # yet (docs/port-phase2.md, "steps not started").
+  add_custom_target(re4_rewrite_casts
+    COMMAND ${Python3_EXECUTABLE} ${RE4_ROOT}/tools/port/rewrite_casts.py
+            --compile-commands ${CMAKE_BINARY_DIR}/compile_commands.json
+            --rewriter ${RE4_CAST_REWRITER_BIN}
+            --out-dir ${RE4_ROOT}/build-pc/gen
+            --sources-filter /src/game/
+    WORKING_DIRECTORY ${RE4_ROOT}
+    COMMENT "re4_rewrite_casts: rewriting src/game pointer<->integer casts into build-pc/gen/"
+    VERBATIM
+  )
+
+  if (RE4_REWRITE_CASTS)
+    set(RE4_GAME_ALL_SOURCES_REWRITTEN "")
+    foreach(_src IN LISTS RE4_GAME_ALL_SOURCES)
+      file(RELATIVE_PATH _rel ${RE4_ROOT} ${_src})
+      set(_gen "${RE4_ROOT}/build-pc/gen/${_rel}")
+      if (EXISTS ${_gen})
+        list(APPEND RE4_GAME_ALL_SOURCES_REWRITTEN ${_gen})
+      else()
+        list(APPEND RE4_GAME_ALL_SOURCES_REWRITTEN ${_src}) # not rewritten yet: fall back to the original
+      endif()
+    endforeach()
+    set(RE4_GAME_ALL_SOURCES ${RE4_GAME_ALL_SOURCES_REWRITTEN})
+  endif()
+
   add_library(re4_game_all OBJECT ${RE4_GAME_ALL_SOURCES})
   target_include_directories(re4_game_all PRIVATE ${RE4_GAME_INCLUDES})
   target_compile_definitions(re4_game_all PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_game_all PRIVATE ${RE4_GAME_OPTIONS})
+  if (RE4_REWRITE_CASTS)
+    add_dependencies(re4_game_all re4_rewrite_casts)
+  endif()
 endif()
 
 # --- re4_rel_all: every REL module unit (em*/pl*/wep*/st*/Sscrn/Tools/t_*, plus the shared
