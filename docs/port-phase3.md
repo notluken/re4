@@ -164,14 +164,119 @@ to swap under `TARGET_PC`) could not be checked against a live code path this pa
 once `Render_init`/an actual `GXWGFifo`-writing call site is reached; the answer likely lives in
 whichever Aurora file decodes the FIFO stream on the receiving end (not yet located/read this pass).
 
-## 6. What's next
+## 6. Correction: `Ptr32<T>` storage made uniformly big-endian (coordinator review, 2026-09-24)
 
-- Un-stub or narrowly stub `SndBgmTblInit()`/whatever else `systemRestartInit()` calls that assumes
-  `SndInit()` actually ran (Phase 5 decision, not this pass's to make).
-- `include/model.h`'s `cModelData` plain fields still need `BE<T>` before the title archive's model
-  data can be read correctly (section 2's table) -- next on the boot path once sound is unblocked.
+Coordinator review of section 1's original design found a genuine latent bug, confirmed by
+inspection (not by a new crash): with the original split -- unrelocated fields BE (raw disk bytes,
+untouched), relocated fields host-native (computed at runtime, stored unswapped) -- **the
+"already relocated?" sign-bit guard used throughout this codebase
+(`(s32) field >= 0` / `(s32) field.raw_handle() >= 0`) is wrong for any raw offset whose low byte is
+>= 0x80.** A small on-disc offset like `0x000000C0` is stored in memory as bytes `00 00 00 C0` (its
+semantic MSB -- always zero for a small offset -- at the lowest address, BE convention); reading
+those same 4 bytes as a native little-endian `s32` reinterprets the *last* byte (`0xC0`, the
+offset's actual LSB) as the sign byte, giving `0xC0000000` -- negative, a false "already relocated".
+This only went unnoticed because every offset this session's runs happened to exercise had a low
+byte < 0x80. The same split also meant the inverse-relocation direction
+(`RelocPtrToOffset`/`SlidePtr`, `src/game/model.cpp`; the save-data equivalent in
+`src/game/game.cpp`) wrote a plain host-native numeric offset back through `FromRaw()` unswapped --
+so a relocate -> unrelocate -> relocate round trip (or a save write) would silently flip byte order
+relative to a real GameCube's, breaking save compatibility.
+
+**Fix**: `Ptr32<T>`'s storage (`include/port/ptr32.h`) is now *always* big-endian, whether the field
+currently holds a raw pre-relocation offset or an already-relocated handle -- exactly like a real
+GameCube's own big-endian CPU, which never had two interpretations to begin with. `load()`/`store()`
+(private, swap on every access) are the only place the swap happens; every public accessor
+(`raw_handle()`, `operator T*()`, the explicit `u32`/`int`/`s32` casts, `FromRaw()`) goes through
+them. The since-added, since-removed `raw_handle_be()` workaround (section 3's original fix) is
+gone -- it was correct for the one call site it touched (`MessageFont::create()`) but left every
+*other* `raw_handle()` user in the tree (`cam_ctrl.cpp`, `card.cpp`, `game.cpp`, `model.cpp`,
+`room_jmp.cpp`, `texture.cpp`, `trans.cpp`) still broken, exactly the "systematic, not ad hoc"
+project rule this correction restores. No call site needed editing besides `mes.cpp`'s revert back
+to plain `raw_handle()` (matching every other call site's existing style) -- the class-wide fix is
+what makes all of them correct at once.
+
+**Verification**: `tests/port/test_ptr32.cpp` gained a round-trip test -- a synthetic on-disc buffer
+with a raw offset whose low byte is `0xC0` (exactly the failure class), taken through relocate ->
+sign-check -> unrelocate -> byte-identical-to-original-bytes check -> relocate again -> same real
+pointer as the first time. `ctest`: 4/4 (`RE4_U32_32=ON`), 3/3 (default `OFF`). `re4_boot` re-run:
+reaches the same frontier as before the fix (font/message system still completes correctly),
+confirming no regression from the correction. Remote byte-identity: unchanged (`ptr32.h` is
+`include/port/`, exempt from the byte-matching gate, but re-verified anyway alongside the other
+changes in this pass -- see the commit log).
+
+## 7. Sound made inert under `TARGET_PC` (coordinator's plan: "sound off for first boot", systematic)
+
+Audited every `SndMem`/`pSnd`-touching statement in `src/game/snd.cpp` (its own file is the entire
+public API boundary -- `include/snd.h` declares ~62 `Snd*` entry points, every one of them defined
+in this one file) plus `src/game/se_at.cpp` (`SeAt*`, the other four boundary functions `snd.h`
+declares) for unconditional dereferences of state `SndInit()`'s `TARGET_PC` stub never populates.
+
+**Finding: most of this code is already safe.** The vendor's own logic gates almost everything on
+`pSnd->blk_flag` (`SND_BIT_CK`/`sndExistCheck`) or a null header check (`se_at.cpp`'s
+`Snd.pSeAtHeader == 0`, `sndVolCalc`'s `pSnd->hdr == NULL`, ...) -- a zeroed `SndWork`/`SndMemWork`
+(the stub's `memclr_asm`) naturally fails every one of these the same way "block not loaded on real
+hardware" would, so `SndCall`, `sndVolCalc`, `sndPitchCalc`, all of `se_at.cpp`, and the large
+majority of the ~62 boundary functions need **no** change at all. `SndStrReq`'s 6-argument overload
+already has an explicit vendor-provided "missing data" gate (`str_flag`, the `"SND: No STR Header."`
+branch) -- `SndInit()`'s stub now sets `str_flag = 0` (one line) so that existing gate does its job
+instead of being silently bypassed by its file-scope initializer (`int str_flag = 1;`).
+
+**Genuinely unguarded (found by exhaustive audit of every `SndMem.{bgm_tbl,door_tbl,bgm_file,
+str_file,blk_mram}` access in the file, not by waiting for each one to crash)**: real hardware never
+needed a "did this fail to load" check for these, so none exists. Stubbed individually, at entry,
+under `TARGET_PC`, with a return value matching the function's own documented contract:
+
+| Function | Dereferences | Stub return |
+|---|---|---|
+| `SndBgmTblInit()` | `SndMem.bgm_tbl->list_ofs` | (void) |
+| `SndDoorSeLoad()` | `SndMem.door_tbl->num_ofs` | `-1` ("no read request", already documented) |
+| `SndBgmTblSet(u16, int)` | `SndMem.bgm_tbl->list_ofs`/`room_ofs` | `0` ("not found", already documented) |
+| `SndBlkInit(int, int, int)` | `SndMem.blk_mram[blk]` (`*(u32*) adr`) | (void) -- also means `pSnd->blk_flag`'s bit for that block is never set, correctly leaving it "still not loaded" for every caller that *does* check the flag |
+| `SndBgmLoad(int)` | `SndMem.bgm_file[bgm_no]` | (void) -- `SndBgmDataReadCheck()`'s own guard returns "free slot" (not `-1`) precisely when nothing is loaded, so it does not stop this one |
+| `SndDriverInit()` | Real AX/CRI driver setup (`Snd_system_init`, `AXFXSetHooks`, ...), no Aurora backend (Phase 5) | (void) |
+| `SndSystemReset()` | Calls `SndDriverInit()` plus `SEQQuit`/`SYNQuit`/`AXQuit`/... (same Phase 5 driver calls) | (void) |
+
+FMV (Sofdec/mwPly): already deferred (`docs/port-boot.md` section 2/6, `SofdecInit()`/
+`init_dbmodule()`), not touched this pass -- no FMV entry point has been reached by any run yet.
+
+**Verified**: `re4_boot` now runs past `systemStartInit()`/`systemRestartInit()` entirely, through
+`TaskExec(Title_task)`, into the first frame loop (`main_game()`'s `for(;;)`, `main.cpp:140`) --
+past every sound-related call on the boot path. Default host build unaffected (`re4_game_all -k 0`
+failing-file list unchanged, 34 files, diffed directly against the pre-session baseline); `ctest`
+still green.
+
+## 8. Current blocker: `DrawOTag` dereferences a garbage 2D ordering-table pointer (2026-09-24)
+
+```
+Stack overflow in Thread 0 !!  (OSPanic, logged but non-fatal here -- a stub, TO VERIFY if that's safe)
+* thread, EXC_BAD_ACCESS, address=0x180cf769c
+  frame #0: DrawOTag(pOt=0x180cf769c) at libgpu.cpp:98 -> } while (*pOt != 0xFFFFFFFF);
+  frame #1: main_game() at main.cpp:140 (the frame loop, first iteration)
+```
+
+**Diagnosis (not root-caused this pass)**: this is downstream of `InitOt()`/`Render`/`Render_before`
+(all still logging-only stubs, docs/port-boot.md section 7's Aurora-mismatch survey -- no real GX
+backend wired yet, Phase 4 scope) -- the 2D ordering table `DrawOTag` walks is either never
+initialized to a valid empty-list terminator by these stubs, or `Trans()`/whatever populates
+per-frame OT entries writes through a code path this session did not trace. Not an endianness bug
+(no on-disc structure is involved here -- the OT lives entirely in runtime-allocated MRAM/arena
+memory) and not sound -- this is squarely Phase 4 (render) material, plus the separate
+"Stack overflow in Thread 0" `OSPanic` that fired moments earlier and evidently did not actually
+abort the process (**TO VERIFY** whether that is itself masking a real problem, e.g. a scheduler
+task/stack-size mismatch under `TARGET_PC`'s host `pthread`-based `CreateArenaThread`, or a harmless
+stub). Stopping here per the "stop at a design decision" instruction -- reaching real GX submission
+is Phase 4's scope, not Phase 3's.
+
+No window renders this session (still predates any actual GX/VI frame submission) -- no screenshot.
+
+## 9. What's next
+
+- Sound is now inert (section 7) and `cModelData`'s plain fields are `BE<T>`'d (section 6's fix
+  applies uniformly; `include/model.h` converted this pass) -- neither blocks boot progress anymore.
+- Section 8's `DrawOTag`/render blocker is next -- Phase 4 (real Aurora GX submission) territory,
+  not endianness.
 - `include/room_jmp.h`'s `CRoomInfo` plain fields (if any -- not confirmed this pass) and the DVD
-  size table's still-unknown layout are both still open.
-- A systematic (not per-crash) sweep of every `// 0xNN`-commented struct for un-`BE<T>`'d plain
-  fields would close the gap this pass's crash-driven approach leaves open by construction (only
-  fields actually reached by a crash got fixed).
+  size table's still-unknown layout are both still open, not yet reached by any run.
+- A systematic (not per-crash) sweep of every remaining `// 0xNN`-commented struct for un-`BE<T>`'d
+  plain fields (title archive's TPL is covered via `tpl.h`, but nothing downstream of section 8's
+  blocker has been reached yet to know what else it touches) is still open.

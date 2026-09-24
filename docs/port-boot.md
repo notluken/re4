@@ -1053,3 +1053,35 @@ the "stop at a design decision" instruction. Verified: `ctest` still green (`tes
 before/after diffed directly).
 
 No window opens this session (crash still predates any GX/VI frame submission) -- no screenshot.
+
+## 23. Ptr32<T> byte-order correction, sound made inert, past the frame loop's first draw (2026-09-24)
+
+Coordinator review found a real latent bug in section 22's `Ptr32<T>` design (mixed BE/host-native
+storage broke the "already relocated?" sign-bit guard for any raw offset with low byte >= 0x80, and
+broke save-data round-trip compatibility) and flagged sound stubbing as needing to be systematic,
+not per-crash. Both addressed; full write-up: docs/port-phase3.md sections 6-8.
+
+- `Ptr32<T>` storage is now always big-endian (`include/port/ptr32.h`); `mes.cpp` reverted to plain
+  `raw_handle()` (matching every other call site in the tree). Round-trip test added
+  (`tests/port/test_ptr32.cpp`).
+- `src/game/snd.cpp`: 7 functions that unconditionally dereference `SndMem` state `SndInit()`'s
+  `TARGET_PC` stub never populates, stubbed individually (docs/port-phase3.md section 7's table);
+  `str_flag = 0` added to the existing stub so the vendor's own "no STR header" gate works instead
+  of being bypassed. Everything else in `snd.cpp`/`se_at.cpp` was already safe by construction
+  (gated on `pSnd->blk_flag`/a null header, both naturally false/null on a zeroed `SndWork`).
+- `include/model.h`'s `cModelData` plain integer/float fields converted to `BE<T>` (title archive).
+
+**Milestone**: past `systemStartInit()`/`systemRestartInit()` entirely, through
+`TaskExec(Title_task)`, into the first frame loop (`main_game()`'s `for(;;)`, `main.cpp:140`).
+
+**Current blocker**: `DrawOTag` (`libgpu.cpp:98`) walks a garbage 2D ordering-table pointer chain --
+downstream of `Render`/`Render_before`/`InitOt()` still being logging-only stubs (no real Aurora GX
+backend, Phase 4 scope), not an endianness bug. A "Stack overflow in Thread 0 !!" `OSPanic` fires
+moments earlier and does not appear to abort the process -- **TO VERIFY** whether that itself masks
+something. Stopping here per the "stop at a design decision" instruction.
+
+Verified: `ctest` 4/4 (`RE4_U32_32=ON`) / 3/3 (default `OFF`); `re4_game_all -k 0` failing-file list
+unchanged (34 files); remote byte-identity re-checked (0 non-OK `dtk shasum` lines, `asmcheck.py
+--all` TOTAL 231, unchanged).
+
+No window renders this session (crash still predates any GX/VI frame submission) -- no screenshot.
