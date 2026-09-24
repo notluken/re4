@@ -2,6 +2,9 @@
 #define CMANAGER_H
 
 #include "types.h"
+#ifdef TARGET_PC
+#include "port/ptr32.h"
+#endif
 
 // Placement new for the managers' construct(): the work is constructed in place.
 #ifndef PLACEMENT_NEW_DEFINED
@@ -375,7 +378,13 @@ void cManager<T>::destroyAll()
 template <class T>
 inline void cManager<T>::destroy(T* p)
 {
+    // Same "does this look like a SysMem address" test as main_mem.h's VALID_PTR, inlined here
+    // instead of going through the macro; same GC32-based fix under TARGET_PC (docs/port-phase2.md).
+#ifdef TARGET_PC
+    if (re4_port::GC32(p) < 0x80000000 || re4_port::GC32(p) > 0x82FFFFFF) {
+#else
     if ((u32)p < 0x80000000 || (u32)p > 0x82FFFFFF) {
+#endif
         if (p != 0) {
             log("%s::destroy() ERROR, INVALID  PTR %08X", name, p);
         }

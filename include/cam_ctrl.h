@@ -5,6 +5,9 @@
 #include "vec.h"
 #include "camera.h"
 #include "cam_qfps.h"
+#ifdef TARGET_PC
+#include "port/ptr32.h"
+#endif
 
 class cCamera;
 class cModel;
@@ -31,14 +34,23 @@ struct CameraAreaInfo {  // hit area
     f32 height;   // 0x20
     f32 base_y;   // 0x24
     s32 num;      // 0x28  polygon vertex count
+#ifdef TARGET_PC
+    re4_port::Ptr32<Vec> points;  // 0x2C
+#else
     Vec* points;  // 0x2C
+#endif
 };
 
 struct CameraAreaRec {  // area -> cut link
     u8 type;              // 0x00  camera type of the linked cut (t_camera tcTypeTbl)
     u8 pad_1[7];
+#ifdef TARGET_PC
+    re4_port::Ptr32<CameraAreaInfo> area; // 0x08
+    re4_port::Ptr32<struct CameraCut> cut;       // 0x0C
+#else
     CameraAreaInfo* area; // 0x08
     CameraCut* cut;       // 0x0C
+#endif
 };
 
 struct CameraCut {
@@ -47,14 +59,25 @@ struct CameraCut {
     s8 type;        // 0x02  CameraControl state selector
     u8 flags;       // 0x03  bit 0: aim_ofs valid
     Vec aim_ofs;    // 0x04  added to the player position to get the aim point
+#ifdef TARGET_PC
+    re4_port::Ptr32<u16> frames;    // 0x10  key frame times
+#else
     u16* frames;    // 0x10  key frame times
+#endif
     f32 floor_ratio; // 0x14  shoulder camera floor ratio (cam_qfps setAreaData)
     u8 pad_18[0x20 - 0x18];
     s32 num;        // 0x20  key count
+#ifdef TARGET_PC
+    re4_port::Ptr32<Vec> pos;       // 0x24
+    re4_port::Ptr32<Vec> at;        // 0x28
+    re4_port::Ptr32<f32> roll;      // 0x2C
+    re4_port::Ptr32<f32> fovy;      // 0x30
+#else
     Vec* pos;       // 0x24
     Vec* at;        // 0x28
     f32* roll;      // 0x2C
     f32* fovy;      // 0x30
+#endif
 };
 
 struct CameraLerp {

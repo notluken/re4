@@ -205,12 +205,25 @@ void CalculateShape_new(cModelInfo* info, f32 rate, ShapeData* data, u8* dst)
     w->flags = (u16*) ((u8*) w->data + 3);
     w->idx = (u8*) w->data + (w->num * 2 + 3);
     p = (s32*) (w->idx + w->num);
+#ifdef TARGET_PC
+    // Same FCV-table relocation shape as motion.cpp/cam_motion.cpp (docs/port-phase2.md): p/idx are
+    // real host pointers (ShapeWork is a runtime work struct, not on-disc itself), p[] stays a plain
+    // s32 array whose relocated entries hold a GC32-style value.
+    p = (s32*) (((std::uintptr_t) p + 3) & ~std::uintptr_t(3));
+    if (*++p >= 0) {
+        u32 gcData = re4_port::GC32(w->data);
+        for (i = 0; i < w->num; i++) {
+            p[i] += gcData;
+        }
+    }
+#else
     p = (s32*) (((u32) p + 3) & ~3);
     if (*++p >= 0) {
         for (i = 0; i < w->num; i++) {
             p[i] += (u32) w->data;
         }
     }
+#endif
     w->table = p;
     w->x44 = 0;
     w->x40 = 0;
@@ -218,7 +231,11 @@ void CalculateShape_new(cModelInfo* info, f32 rate, ShapeData* data, u8* dst)
     w->rate = rate;
 
     if (dst != NULL) {
+#ifdef TARGET_PC
+        ShapeEntry* tbl = (ShapeEntry*) ((u8*) info->model_addr + info->model_addr->shapeOfs + 4);
+#else
         ShapeEntry* tbl = (ShapeEntry*) (info->model_addr->shapeOfs + (u32) info->model_addr + 4);
+#endif
 
         pp->frame = rate;
         pp->maxFrame = w->frame;
@@ -235,8 +252,13 @@ void CalculateShape_new(cModelInfo* info, f32 rate, ShapeData* data, u8* dst)
                     v *= 1.37f;
                 }
                 if (v != 0.0f) {
+#ifdef TARGET_PC
+                    ShapeEntry* e = (ShapeEntry*) ((u8*) tbl + w->idx[i] * 8);
+                    s16* src = (s16*) ((u8*) tbl + e->ofs);
+#else
                     ShapeEntry* e = (ShapeEntry*) (w->idx[i] * 8 + (u32) tbl);
                     s16* src = (s16*) (e->ofs + (u32) tbl);
+#endif
                     s32 num = e->num;
                     s32 n;
 

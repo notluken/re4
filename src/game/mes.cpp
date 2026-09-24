@@ -189,7 +189,11 @@ void MessageFont::create(int char_w, int char_h, TEXPalette* addr, u8* size)
 
     m_tpl = addr;
     if ((s32) addr->descriptorArray >= 0) {
+#ifdef TARGET_PC
+        addr->descriptorArray = (TEXDescriptor*) ((u8*) addr + addr->descriptorArray.raw_handle());
+#else
         addr->descriptorArray = (TEXDescriptor*) ((u32) addr->descriptorArray + (u32) addr);
+#endif
         d = addr->descriptorArray;
         for (i = 0; i < addr->numDescriptors; i++, d++) {
             d->textureHeader = (TEXHeader*) ((u8*) addr + (u32) d->textureHeader);

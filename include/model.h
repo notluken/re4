@@ -6,6 +6,9 @@
 #include "cManager.h"
 #include "atariInfo.h"
 #include "main_mem.h"
+#ifdef TARGET_PC
+#include "port/ptr32.h"
+#endif
 
 // game/math_sub.cpp (C++ linkage; math_sub.h declares them too)
 void RotMatrix(Mtx m, Vec* ang);
@@ -91,23 +94,47 @@ struct ModelDataHead {
 
 // Model data referenced by a bin (game/model.cpp `cModelData`); only the flag word is known.
 struct cModelData {
+    // Fields at 0x00/0x0C/0x10/0x14/0x1C/0x30/0x34 are 32-bit pointer fields relocated in place by
+    // model.cpp's calcModelAddr/calcModelOffset (docs/port-phase2.md, "the inventory"): Ptr32<T>
+    // keeps every offset exactly where the on-disc/relocated format has it (4 bytes, same position)
+    // under TARGET_PC, instead of a real (8-byte) host pointer that would shift every field after it.
+#ifdef TARGET_PC
+    re4_port::Ptr32<ModelDataHead> pHead;  // 0x00
+#else
     ModelDataHead* pHead;  // 0x00
+#endif
     u8 pad_4[0xC - 0x4];
+#ifdef TARGET_PC
+    re4_port::Ptr32<u8> pClr;      // 0x0C  vertex colour array (GX_VA_CLR0, RGBA8; used when flags bit31 is set)
+    re4_port::Ptr32<u8> pTex;      // 0x10  texture coordinate array (GX_VA_TEX0)
+    re4_port::Ptr32<u8> pWeight;   // 0x14  skinning weights (trans MakeWeightPalette: Weight[x18] or WeightExt[x2A])
+#else
     void* pClr;      // 0x0C  vertex colour array (GX_VA_CLR0, RGBA8; used when flags bit31 is set)
     void* pTex;      // 0x10  texture coordinate array (GX_VA_TEX0)
     void* pWeight;   // 0x14  skinning weights (trans MakeWeightPalette: Weight[x18] or WeightExt[x2A])
+#endif
     u8 weight_palette_num;  // 0x18  Weight entries of pWeight (trans MakeWeightPalette); <= 1 with nParts == 1: rigid, original arrays
     u8 nParts;       // 0x19  parts count (cModel::setModel copies it into cModel::nParts)
     u16 displist_num;  // 0x1A  primitive (display list) part count (dbmodule DrawObjWireframe)
+#ifdef TARGET_PC
+    re4_port::Ptr32<struct ModelPart> pParts;  // 0x1C  first part header (0x20 bytes + primitive stream)
+#else
     struct ModelPart* pParts;  // 0x1C  first part header (0x20 bytes + primitive stream)
+#endif
     u32 flags;       // 0x20  bit31: s16 tex coords (frac 8), bit30 (0x40000000): SmxGetFlag bit1, bit29: s8 normals
     u32 nTex;        // 0x24  texture count (trans: must be <= 0xF7)
     u8 shift;        // 0x28  vertex fixed-point shift (dbmodule: scale = 1 / (1 << shift))
     u8 pad_29;
     u16 weight_ext_num;  // 0x2A  extended weight entries (> 0xFF: pWeight is a WeightExt table)
-    u32 shapeOfs;    // 0x2C  offset of the shape (vertex delta) table (shape.cpp)
+    u32 shapeOfs;    // 0x2C  offset of the shape (vertex delta) table (shape.cpp) -- stays a plain
+                     // u32 byte offset, never promoted to a pointer (docs/port-phase2.md inventory)
+#ifdef TARGET_PC
+    re4_port::Ptr32<u8> vtxOrig;   // 0x30  original vertex positions (shape.cpp ResetShape source)
+    re4_port::Ptr32<u8> nrmOrig;   // 0x34  original vertex normals
+#else
     void* vtxOrig;   // 0x30  original vertex positions (shape.cpp ResetShape source)
     void* nrmOrig;   // 0x34  original vertex normals
+#endif
     u16 nVtx;        // 0x38  vertex count (8 bytes each)
     u16 nNrm;        // 0x3A  normal count
     u32 version;     // 0x3C  0x20010801 / 0x20030817 / 0x20030818 (model.cpp: the two tables below exist from 0x20030818)

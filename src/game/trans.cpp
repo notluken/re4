@@ -2584,6 +2584,18 @@ void CalcTplAddrC8(TEXPalette* tpl)
     if ((s32) tpl->descriptorArray < 0) {
         return;
     }
+#ifdef TARGET_PC
+    tpl->descriptorArray = (TEXDescriptor*) ((u8*) tpl + tpl->descriptorArray.raw_handle());
+    for (i = 0; i < tpl->numDescriptors; i++) {
+        TEXDescriptor* td = &tpl->descriptorArray[i];
+        td->textureHeader = (TEXHeader*) ((u8*) tpl + td->textureHeader.raw_handle());
+        td->textureHeader->data = (void*) ((u8*) tpl + td->textureHeader->data.raw_handle());
+        if (td->CLUTHeader != 0) {
+            td->CLUTHeader = (CLUTHeader*) ((u8*) tpl + td->CLUTHeader.raw_handle());
+            td->CLUTHeader->data = (void*) ((u8*) tpl + td->CLUTHeader->data.raw_handle());
+        }
+    }
+#else
     tpl->descriptorArray = (TEXDescriptor*) ((u32) tpl->descriptorArray + (u32) tpl);
     for (i = 0; i < tpl->numDescriptors; i++) {
         TEXDescriptor* td = &tpl->descriptorArray[i];
@@ -2594,6 +2606,7 @@ void CalcTplAddrC8(TEXPalette* tpl)
             td->CLUTHeader->data = (void*) ((u32) tpl + (u32) td->CLUTHeader->data);
         }
     }
+#endif
 }
 
 // Boot (CoreDataRead): the specular environment textures, the two indirect ramp textures and the

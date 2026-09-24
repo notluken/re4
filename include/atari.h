@@ -84,7 +84,14 @@ public:
     u16 m_nSlope;          // 0x1A  group B
     u16 m_nWall;          // 0x1C  group C (walls: flag 0x80 checks [n0 + n1, n0 + n1 + n2))
     u16 m_Flag;        // 0x1E  bit0: `idx` holds a child cSatBlock
+    // Relocated by cSat::blockInit (docs/port-phase2.md "the inventory"): Ptr32<T> under TARGET_PC.
+    // Between two #line directives with no __LINE__/HALT() call in that span (checked), so inserting
+    // this comment and the #else branch here shifts nothing that matters.
+#ifdef TARGET_PC
+    re4_port::Ptr32<cSatBlock> m_pList; // 0x20
+#else
     cSatBlock* m_pList; // 0x20
+#endif
     u16 idx[0];      // 0x24  polygon indices
 
     int lineOverlap(Vec* center, Vec* w, Vec* v);

@@ -905,10 +905,25 @@ void cGameSave::calcOffset(SAVE_DATA_HEAD* head, u32 headaddr)
         return;
     }
     if (headaddr == 0) {
+#ifdef TARGET_PC
+        headaddr = re4_port::GC32(head);
+#else
         headaddr = (u32) head;
+#endif
     }
     // One shared temporary: its anti-dependences keep each load below the previous add/sub.
     head->base = 0;
+#ifdef TARGET_PC
+    // Each field temporarily holds a plain byte offset here (not a real address, same shape as
+    // cModelData's pClr et al., docs/port-phase2.md): FromRaw/raw_handle write and read that raw
+    // 4-byte value directly, skipping the "cast an offset to a fake T* and let the constructor
+    // GC32 it" step that a real pointer construction would (wrongly) trigger.
+    head->pGlobal = re4_port::Ptr32<GameSaveBlock>::FromRaw(head->pGlobal.raw_handle() - headaddr);
+    head->pRm = re4_port::Ptr32<u8>::FromRaw(head->pRm.raw_handle() - headaddr);
+    head->pSscrn = re4_port::Ptr32<u32>::FromRaw(head->pSscrn.raw_handle() - headaddr);
+    head->pMr = re4_port::Ptr32<u8>::FromRaw(head->pMr.raw_handle() - headaddr);
+    head->pItm = re4_port::Ptr32<u8>::FromRaw(head->pItm.raw_handle() - headaddr);
+#else
     p = (u32) head->pGlobal;
     head->pGlobal = (GameSaveBlock*) (p - headaddr);
     p = (u32) head->pRm;
@@ -919,6 +934,7 @@ void cGameSave::calcOffset(SAVE_DATA_HEAD* head, u32 headaddr)
     head->pMr = (void*) (p - headaddr);
     p = (u32) head->pItm;
     head->pItm = (void*) (p - headaddr);
+#endif
 }
 
 // Converts the image's section offsets back to pointers (base = the image itself).
@@ -930,6 +946,16 @@ void cGameSave::calcAddr(SAVE_DATA_HEAD* head)
         return;
     }
     head->base = head;
+#ifdef TARGET_PC
+    {
+        u32 gcHead = re4_port::GC32(head);
+        head->pGlobal = re4_port::Ptr32<GameSaveBlock>::FromRaw(gcHead + head->pGlobal.raw_handle());
+        head->pRm = re4_port::Ptr32<u8>::FromRaw(gcHead + head->pRm.raw_handle());
+        head->pSscrn = re4_port::Ptr32<u32>::FromRaw(gcHead + head->pSscrn.raw_handle());
+        head->pMr = re4_port::Ptr32<u8>::FromRaw(gcHead + head->pMr.raw_handle());
+        head->pItm = re4_port::Ptr32<u8>::FromRaw(gcHead + head->pItm.raw_handle());
+    }
+#else
     p = (u32) head->pGlobal;
     head->pGlobal = (GameSaveBlock*) ((u32) head + p);
     p = (u32) head->pRm;
@@ -940,6 +966,7 @@ void cGameSave::calcAddr(SAVE_DATA_HEAD* head)
     head->pMr = (void*) ((u32) head + p);
     p = (u32) head->pItm;
     head->pItm = (void*) ((u32) head + p);
+#endif
 }
 
 // Allocates the save image: global block at 0x40, room data at 0x3740, then sub screen, merchant
@@ -968,11 +995,24 @@ SAVE_DATA_HEAD* cGameSave::alloc()
     size = itemOfs + itemSize;
 #line 1385 "D:/Bio4/Prog/game.cpp"
     d = (SAVE_DATA_HEAD*) MEM_CALLOC(size, 1, 13);
+#ifdef TARGET_PC
+    // Same "field temporarily holds a plain offset, not a real address" shape as calcOffset above
+    // (docs/port-phase2.md): this is the image's *initial* state (base == 0 below, "offsets"),
+    // before calcAddr ever runs, so FromRaw writes the raw offset directly, same as it would read
+    // back with raw_handle() -- casting a fake (T*) globalOfs pointer would wrongly run it through
+    // GC32 as if it were a real address.
+    d->pGlobal = re4_port::Ptr32<GameSaveBlock>::FromRaw(globalOfs);
+    d->pRm = re4_port::Ptr32<u8>::FromRaw(roomOfs);
+    d->pSscrn = re4_port::Ptr32<u32>::FromRaw(sscrnOfs);
+    d->pMr = re4_port::Ptr32<u8>::FromRaw(merchantOfs);
+    d->pItm = re4_port::Ptr32<u8>::FromRaw(itemOfs);
+#else
     d->pGlobal = (GameSaveBlock*) globalOfs;
     d->pRm = (void*) roomOfs;
     d->pSscrn = (u32*) sscrnOfs;
     d->pMr = (void*) merchantOfs;
     d->pItm = (void*) itemOfs;
+#endif
     d->size = size;
     d->base = 0;
     calcAddr(d);

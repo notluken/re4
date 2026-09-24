@@ -88,9 +88,17 @@ cRoomJmp::cRoomJmp(void* p)
             if ((u32) info->name >= 0x80000000 && (u32) info->name <= 0x82FFFFFF) {
                 return;
             }
+#ifdef TARGET_PC
+            // Same relocation shape as model.cpp's calcModelAddr (docs/port-phase2.md): `tbl` is
+            // a real host pointer, each field's raw_handle() is the file-relative offset to add.
+            info->name = (char*) ((u8*) tbl + info->name.raw_handle());
+            info->person = (char*) ((u8*) tbl + info->person.raw_handle());
+            info->person2 = (char*) ((u8*) tbl + info->person2.raw_handle());
+#else
             info->name = (char*) ((u32) tbl + (u32) info->name);
             info->person = (char*) ((u32) tbl + (u32) info->person);
             info->person2 = (char*) ((u32) tbl + (u32) info->person2);
+#endif
         }
     }
 }

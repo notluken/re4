@@ -231,6 +231,22 @@ void MotionSetCore(cModel* m, void* w_, void* data_, void* seq_, int hokan, int 
     }
     // Two statements: the end pointer lives in `tbl` (r10) before the align (one expression ties the
     // partsNo reload to the sum and allocates it).
+#ifdef TARGET_PC
+    // tbl/pJoint_no are real host pointers, never on-disc fields themselves (MotionWorkSub is a
+    // runtime work struct, docs/port-phase2.md "the inventory"): the align-up below stays plain
+    // pointer arithmetic. tbl[] itself is the FCV table -- an array of u32 that, once relocated,
+    // holds a GC32-style value the same way cModelData's blendTbl/flipTbl do (stays u32, not
+    // Ptr32<T>[]); GC32(w->pMot) is what a truncating (u32) w->pMot was standing in for.
+    tbl = (u32*) (w->pJoint_no + w->Joint_num);
+    tbl = (u32*) (((std::uintptr_t) tbl + 3) & ~std::uintptr_t(3));
+    tbl++;
+    if ((s32) tbl[0] >= 0) {
+        u32 gcPMot = re4_port::GC32(w->pMot);
+        for (i = 0; i < w->Joint_num; i++) {
+            tbl[i] += gcPMot;
+        }
+    }
+#else
     tbl = (u32*) ((u32) w->pJoint_no + w->Joint_num);
     tbl = (u32*) (((u32) tbl + 3) & ~3);
     tbl++;
@@ -239,6 +255,7 @@ void MotionSetCore(cModel* m, void* w_, void* data_, void* seq_, int hokan, int 
             tbl[i] += (u32) w->pMot;
         }
     }
+#endif
     w->pHermite_data = tbl;
     w->Null_rot = 0xFFFF;
     w->Null_pos = 0xFFFF;

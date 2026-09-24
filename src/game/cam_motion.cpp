@@ -10,6 +10,9 @@
 #include "main_mem.h"
 #include <string.h>
 #include "math_sub_decl.h"
+#ifdef TARGET_PC
+#include "port/ptr32.h"
+#endif
 
 // Binds the motion file: frame count, parts (track) table, key offsets relocated to pointers,
 // key history cleared; blend frames `hokan`, flags (bit2 loop, bit3 pause) and the start frame.
@@ -26,6 +29,20 @@ CameraMotion::CameraMotion(void* data, int hokan, int flags, f32 frame)
     w->nParts = w->data->nParts;
     w->partsInfo = (u16*) ((u8*) w->data + 3);
     w->partsNo = (u8*) w->data + (w->nParts * 2 + 3);
+#ifdef TARGET_PC
+    // Same FCV-table relocation shape as motion.cpp's MotionSetCore (docs/port-phase2.md): tbl/
+    // partsNo are real host pointers (CameraMotionWork is a runtime work struct, not on-disc
+    // itself), tbl[] stays a plain u32 array whose relocated entries hold a GC32-style value.
+    tbl = (u32*) (w->partsNo + w->nParts);
+    tbl = (u32*) (((std::uintptr_t) tbl + 3) & ~std::uintptr_t(3));
+    tbl++;
+    if ((s32) tbl[0] >= 0) {
+        u32 gcData = re4_port::GC32(w->data);
+        for (i = 0; i < w->nParts; i++) {
+            tbl[i] += gcData;
+        }
+    }
+#else
     tbl = (u32*) ((u32) w->partsNo + w->nParts);
     tbl = (u32*) (((u32) tbl + 3) & ~3);
     tbl++;
@@ -34,6 +51,7 @@ CameraMotion::CameraMotion(void* data, int hokan, int flags, f32 frame)
             tbl[i] += (u32) w->data;
         }
     }
+#endif
     w->keyTbl = tbl;
     for (i = 0; i < w->nParts; i++) {
         w->hist[i][0] = w->hist[i][1] = w->hist[i][2] = 0;

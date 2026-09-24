@@ -2,6 +2,9 @@
 #define ROOM_JMP_H
 
 #include "types.h"
+#ifdef TARGET_PC
+#include "port/ptr32.h"
+#endif
 
 // game/room_jmp.cpp: debug "AREA JUMP" tool over the room info table (roomInfoAddr).
 //
@@ -20,9 +23,15 @@ struct CRoomInfo {
     };
     Vec pos;        // 0x04
     f32 angle;      // 0x10
+#ifdef TARGET_PC
+    re4_port::Ptr32<char> name;     // 0x14
+    re4_port::Ptr32<char> person;      // 0x18
+    re4_port::Ptr32<char> person2;     // 0x1C
+#else
     char* name;     // 0x14
     char* person;      // 0x18
     char* person2;     // 0x1C
+#endif
 
     void setNextPos();
 };

@@ -301,20 +301,36 @@ CameraDataHeader* CameraControl::calcAddr(CameraDataHeader* pBuff)
         OSReport("CameraControl::calcAddr(): R%1d%02x Ver02", pG->stage_no, pG->room_no);
     }
 
+    // Same relocation shape as model.cpp's calcModelAddr (docs/port-phase2.md): every field below
+    // is a Ptr32<T> whose raw_handle() is already the right value to add to a real base pointer;
+    // `pBuff` itself stays a real host pointer throughout (no GC32 needed on it, only pointer
+    // arithmetic: `(u8*) pBuff + field.raw_handle()` is exactly `(T*) ((u32) field + (u32) pBuff)`
+    // without ever truncating the real 8-byte pBuff).
     rec = (CameraAreaRec*) (pBuff + 1);
     for (i = 0; i < pBuff->numArea; i++, rec++) {
         if ((s32) rec->area < 0) {
             return pBuff;
         }
+#ifdef TARGET_PC
+        rec->area = (CameraAreaInfo*) ((u8*) pBuff + rec->area.raw_handle());
+        if (rec->cut) {
+            rec->cut = (CameraCut*) ((u8*) pBuff + rec->cut.raw_handle());
+        }
+#else
         rec->area = (CameraAreaInfo*) ((u32) rec->area + (u32) pBuff);
         if (rec->cut) {
             rec->cut = (CameraCut*) ((u32) rec->cut + (u32) pBuff);
         }
+#endif
     }
 
     area = (CameraAreaInfo*) rec;
     for (i = 0; i < pBuff->numArea; i++, area++) {
+#ifdef TARGET_PC
+        area->points = (Vec*) ((u8*) pBuff + area->points.raw_handle());
+#else
         area->points = (Vec*) ((u32) area->points + (u32) pBuff);
+#endif
         if (ver2) {
             area->attr = 3;
         }
@@ -331,11 +347,19 @@ CameraDataHeader* CameraControl::calcAddr(CameraDataHeader* pBuff)
 
     cut = (CameraCut*) area;
     for (i = 0; i < pBuff->numCut; i++, cut++) {
+#ifdef TARGET_PC
+        cut->pos = (Vec*) ((u8*) pBuff + cut->pos.raw_handle());
+        cut->at = (Vec*) ((u8*) pBuff + cut->at.raw_handle());
+        cut->roll = (f32*) ((u8*) pBuff + cut->roll.raw_handle());
+        cut->fovy = (f32*) ((u8*) pBuff + cut->fovy.raw_handle());
+        cut->frames = (u16*) ((u8*) pBuff + cut->frames.raw_handle());
+#else
         cut->pos = (Vec*) ((u32) cut->pos + (u32) pBuff);
         cut->at = (Vec*) ((u32) cut->at + (u32) pBuff);
         cut->roll = (f32*) ((u32) cut->roll + (u32) pBuff);
         cut->fovy = (f32*) ((u32) cut->fovy + (u32) pBuff);
         cut->frames = (u16*) ((u32) cut->frames + (u32) pBuff);
+#endif
     }
     return pBuff;
 }

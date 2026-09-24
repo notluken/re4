@@ -2,6 +2,9 @@
 #define GAME_H
 
 #include "types.h"
+#ifdef TARGET_PC
+#include "port/ptr32.h"
+#endif
 
 // game/game.cpp: save data front end.
 
@@ -15,14 +18,28 @@ struct GameSaveBlock {
 // Save data image (cGameSave::alloc). The section pointers are stored as offsets from the image
 // start while it travels (calcOffset) and turned back into addresses by calcAddr; `base` is 0 in
 // the offset form.
+// On-disc/save-image pointer fields (docs/port-phase2.md "the inventory"): Ptr32<T> under TARGET_PC,
+// same reasoning as cModelData (include/model.h) -- the save format stays GameCube-compatible.
 struct SAVE_DATA_HEAD {
+#ifdef TARGET_PC
+    re4_port::Ptr32<SAVE_DATA_HEAD> base;     // 0x00  the image's own address (0 = offsets)
+#else
     SAVE_DATA_HEAD* base;     // 0x00  the image's own address (0 = offsets)
+#endif
     u32 size;                 // 0x04
+#ifdef TARGET_PC
+    re4_port::Ptr32<GameSaveBlock> pGlobal;   // 0x08  offset 0x40
+    re4_port::Ptr32<u8> pItm;              // 0x0C  cItemMgr::save/load
+    re4_port::Ptr32<u8> pRm;              // 0x10  cRoomData::save/load (0x3740)
+    re4_port::Ptr32<u32> pSscrn;              // 0x14  SscrnDataSave/Load
+    re4_port::Ptr32<u8> pMr;          // 0x18  MerchantDataSave/Load
+#else
     GameSaveBlock* pGlobal;   // 0x08  offset 0x40
     void* pItm;              // 0x0C  cItemMgr::save/load
     void* pRm;              // 0x10  cRoomData::save/load (0x3740)
     u32* pSscrn;              // 0x14  SscrnDataSave/Load
     void* pMr;          // 0x18  MerchantDataSave/Load
+#endif
 };
 
 class cGameSave {

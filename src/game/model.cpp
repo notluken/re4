@@ -19,6 +19,31 @@
 #include "ref_access.h"
 #include <dolphin/os.h>
 
+#ifdef TARGET_PC
+// Phase 2 step 5 (docs/port-phase2.md): calcModelAddr/calcModelOffset/slideModelAddr/calcTplAddr/
+// calcTplOffset below relocate cModelData/TEXPalette fields between "file-relative offset" and
+// "real pointer" by truncating a real pointer through (u32) and adding/subtracting it from another
+// truncated real pointer -- exactly what a 64-bit host cannot do. Since a Ptr32<T> field already
+// stores that same GC-looking 32-bit value internally (see include/port/ptr32.h), the three
+// operations below only need to read/write that raw value, never a real 8-byte host address:
+//   - offset -> pointer: construct a real host T* from a real host base pointer + the raw offset,
+//     which Ptr32<T>'s normal (T*) constructor then compresses the usual way (GC32 internally).
+//   - pointer -> offset: the field's raw u32 (its "explicit operator u32()") already equals
+//     GC32(realPointer); subtracting the struct's own GC32(base) gives the same offset GC's
+//     (u32)ptr - (u32)base would have, without ever forming or truncating a real 8-byte address.
+//   - slide by `ofs`: same raw-value arithmetic, no base pointer involved.
+// Defined once, here, ahead of every #line-governed function below, so every call site is a single
+// line and no #line-derived line number anywhere in this file shifts.
+namespace {
+template <class T>
+inline void RelocOffsetToPtr(re4_port::Ptr32<T>& field, u8* realBase) { field = (T*) (realBase + field.raw_handle()); }
+template <class T>
+inline void RelocPtrToOffset(re4_port::Ptr32<T>& field, u32 gcBase) { field = re4_port::Ptr32<T>::FromRaw(field.raw_handle() - gcBase); }
+template <class T>
+inline void SlidePtr(re4_port::Ptr32<T>& field, int ofs) { field = re4_port::Ptr32<T>::FromRaw(field.raw_handle() + ofs); }
+} // namespace
+#endif
+
 // Model / parts / model info (cModel, cParts, cModelInfo) and their pools (PartsMgr, ModInfoMgr).
 
 extern "C" {
@@ -953,10 +978,18 @@ void calcModelAddr(cModelData* d)
     d->nrmOrig = base + (u32) d->nrmOrig;
     if (d->version > 0x20030817) {
         if (d->blendTbl != 0) {
+#ifdef TARGET_PC
+            d->blendTbl = re4_port::GC32(d) + d->blendTbl;
+#else
             d->blendTbl = (u32) base + d->blendTbl;
+#endif
         }
         if (d->flipTbl != 0) {
+#ifdef TARGET_PC
+            d->flipTbl = re4_port::GC32(d) + d->flipTbl;
+#else
             d->flipTbl = (u32) base + d->flipTbl;
+#endif
         }
     }
     if ((u32) d->pParts & 0x1F) {
@@ -973,6 +1006,26 @@ void calcModelOffset(cModelData* d)
     if ((int) d->pClr >= 0) {
         return;
     }
+#ifdef TARGET_PC
+    {
+        u32 gcBase = re4_port::GC32(d);
+        RelocPtrToOffset(d->pClr, gcBase);
+        RelocPtrToOffset(d->pTex, gcBase);
+        RelocPtrToOffset(d->pHead, gcBase);
+        RelocPtrToOffset(d->pWeight, gcBase);
+        RelocPtrToOffset(d->pParts, gcBase);
+        RelocPtrToOffset(d->vtxOrig, gcBase);
+        RelocPtrToOffset(d->nrmOrig, gcBase);
+        if (d->version > 0x20030817) {
+            if (d->blendTbl != 0) {
+                d->blendTbl -= gcBase;
+            }
+            if (d->flipTbl != 0) {
+                d->flipTbl -= gcBase;
+            }
+        }
+    }
+#else
     d->pClr = (void*) ((u8*) d->pClr - base);
     d->pTex = (void*) ((u8*) d->pTex - base);
     d->pHead = (ModelDataHead*) ((u8*) d->pHead - base);
@@ -988,16 +1041,32 @@ void calcModelOffset(cModelData* d)
             d->flipTbl -= (u32) base;
         }
     }
+#endif
 }
 
 // The bin moved by `ofs` bytes (block.cpp compaction): shift its pointers.
 void slideModelAddr(u32 addr, int ofs)
 {
+#ifdef TARGET_PC
+    // `addr` is a GC32-style handle here (same family as every other on-disc pointer field), not a
+    // real host address: GCPTR recovers the real cModelData* the same way a Ptr32<T> field would.
+    cModelData* d = re4_port::GCPTR<cModelData>(addr);
+#else
     cModelData* d = (cModelData*) addr;
+#endif
 
     if ((int) d->pClr >= 0) {
         calcModelAddr(d);
     }
+#ifdef TARGET_PC
+    SlidePtr(d->pClr, ofs);
+    SlidePtr(d->pTex, ofs);
+    SlidePtr(d->pHead, ofs);
+    SlidePtr(d->pWeight, ofs);
+    SlidePtr(d->pParts, ofs);
+    SlidePtr(d->vtxOrig, ofs);
+    SlidePtr(d->nrmOrig, ofs);
+#else
     d->pClr = (u8*) d->pClr + ofs;
     d->pTex = (u8*) d->pTex + ofs;
     d->pHead = (ModelDataHead*) ((u8*) d->pHead + ofs);
@@ -1005,6 +1074,7 @@ void slideModelAddr(u32 addr, int ofs)
     d->pParts = (ModelPart*) ((u8*) d->pParts + ofs);
     d->vtxOrig = (u8*) d->vtxOrig + ofs;
     d->nrmOrig = (u8*) d->nrmOrig + ofs;
+#endif
     if (d->version > 0x20030817) {
         if (d->blendTbl != 0) {
             d->blendTbl += ofs;
@@ -1026,6 +1096,18 @@ void calcTplAddr(TEXPalette* tpl)
     if ((int) tpl->descriptorArray < 0) {
         return;
     }
+#ifdef TARGET_PC
+    RelocOffsetToPtr(tpl->descriptorArray, (u8*) tpl);
+    for (i = 0; i < tpl->numDescriptors; i++) {
+        if (tpl->descriptorArray[i].textureHeader != NULL) {
+            RelocOffsetToPtr(tpl->descriptorArray[i].textureHeader, (u8*) tpl);
+            if (tpl->descriptorArray[i].textureHeader->unpacked == 0) {
+                RelocOffsetToPtr(tpl->descriptorArray[i].textureHeader->data, (u8*) tpl);
+                tpl->descriptorArray[i].textureHeader->unpacked = 1;
+            }
+        }
+    }
+#else
     tpl->descriptorArray = (TEXDescriptor*) ((u32) tpl->descriptorArray + (u32) tpl);
     for (i = 0; i < tpl->numDescriptors; i++) {
         if (tpl->descriptorArray[i].textureHeader != NULL) {
@@ -1036,6 +1118,7 @@ void calcTplAddr(TEXPalette* tpl)
             }
         }
     }
+#endif
 }
 
 // Inverse of calcTplAddr.
@@ -1046,6 +1129,21 @@ void calcTplOffset(TEXPalette* tpl)
     if ((int) tpl->descriptorArray >= 0) {
         return;
     }
+#ifdef TARGET_PC
+    {
+        u32 gcBase = re4_port::GC32(tpl);
+        for (i = 0; i < tpl->numDescriptors; i++) {
+            if (tpl->descriptorArray[i].textureHeader != NULL) {
+                if (tpl->descriptorArray[i].textureHeader->unpacked != 0) {
+                    RelocPtrToOffset(tpl->descriptorArray[i].textureHeader->data, gcBase);
+                    tpl->descriptorArray[i].textureHeader->unpacked = 0;
+                }
+                RelocPtrToOffset(tpl->descriptorArray[i].textureHeader, gcBase);
+            }
+        }
+        RelocPtrToOffset(tpl->descriptorArray, gcBase);
+    }
+#else
     for (i = 0; i < tpl->numDescriptors; i++) {
         if (tpl->descriptorArray[i].textureHeader != NULL) {
             if (tpl->descriptorArray[i].textureHeader->unpacked != 0) {
@@ -1056,6 +1154,7 @@ void calcTplOffset(TEXPalette* tpl)
         }
     }
     tpl->descriptorArray = (TEXDescriptor*) ((u8*) tpl->descriptorArray - (u8*) tpl);
+#endif
 }
 
 // Shifts a relocated TPL's pointers by ofs.
@@ -1067,6 +1166,15 @@ void slideTplAddr(void* p, int ofs)
     if ((int) tpl->descriptorArray >= 0) {
         calcTplAddr(tpl);
     }
+#ifdef TARGET_PC
+    SlidePtr(tpl->descriptorArray, ofs);
+    for (i = 0; i < tpl->numDescriptors; i++) {
+        if (tpl->descriptorArray[i].textureHeader != NULL) {
+            SlidePtr(tpl->descriptorArray[i].textureHeader, ofs);
+            SlidePtr(tpl->descriptorArray[i].textureHeader->data, ofs);
+        }
+    }
+#else
     tpl->descriptorArray = (TEXDescriptor*) ((u8*) tpl->descriptorArray + ofs);
     for (i = 0; i < tpl->numDescriptors; i++) {
         if (tpl->descriptorArray[i].textureHeader != NULL) {
@@ -1074,6 +1182,7 @@ void slideTplAddr(void* p, int ofs)
             tpl->descriptorArray[i].textureHeader->data = (u8*) tpl->descriptorArray[i].textureHeader->data + ofs;
         }
     }
+#endif
 }
 
 // Destroys every model info of the chain.
@@ -1127,12 +1236,23 @@ void cModel::setJointInfo(void* pHead)
 
     if (d->version == 0x20030818) {
         if (d->blendTbl != 0) {
+#ifdef TARGET_PC
+            // blendTbl/flipTbl stay plain u32 fields (docs/port-phase2.md inventory: not promoted
+            // to a Ptr32<T> like the other cModelData fields), holding a GC32-style value once
+            // calcModelAddr has relocated them -- GCPTR recovers the real pointer the same way.
+            Motion.blendTbl = re4_port::GCPTR<u16>(d->blendTbl);
+#else
             Motion.blendTbl = (u16*) d->blendTbl;
+#endif
         } else {
             Motion.blendTbl = 0;
         }
         if (d->flipTbl != 0) {
+#ifdef TARGET_PC
+            Motion.flip = re4_port::GCPTR<u16>(d->flipTbl + 4);
+#else
             Motion.flip = (u16*) (d->flipTbl + 4);
+#endif
         } else {
             Motion.flip = 0;
         }
@@ -1214,7 +1334,11 @@ void getBoundingBox(cModelData* d, ModelBound* pBox)
     f32 minX = 65536.0f;
     u32 n = d->nVtx;
     u8 shift = d->shift;
+#ifdef TARGET_PC
+    s16* v = (s16*) (u8*) d->vtxOrig; // Ptr32<u8> -> u8* (implicit) -> s16* (reinterpret)
+#else
     s16* v = (s16*) d->vtxOrig;
+#endif
     u32 i;
 
     if (n != 0) {
