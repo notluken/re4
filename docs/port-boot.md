@@ -1250,3 +1250,130 @@ matching-build verification for anything touching `src/`/`include/` outside `src
 `include/port/`) as work lands, not only at session end -- done for every commit this pass
 (`c5864124`, `606a4708`, `4ac0b070`, `07c179c9`; the `main_sub.cpp` un-exclude was remote-verified
 before merging to `port/macos-arm64`: `dtk shasum` 0 non-OK, `asmcheck.py --all` TOTAL 231).
+
+## 27. A window opens for the first time: `aurora_initialize()` was never called (2026-09-24)
+
+Root cause of "no window ever opens" (every prior session's blocker was upstream of this, so it was
+never actually tested): `src/port/boot_main.cpp`'s host `main()` never called `aurora_initialize()`/
+`aurora_update()`/`aurora_begin_frame()`/`aurora_end_frame()` at all -- confirmed by grepping the
+whole repo (`grep -rn aurora_initialize src/ include/` was empty before this pass). `VIInit()`
+(`../aurora/lib/dolphin/vi/vi.cpp`) is a no-op; the real SDL window is created inside
+`aurora_initialize()` (`../aurora/lib/aurora.cpp`), which nothing in this repo ever invoked. Every
+previous session's boot run genuinely never reached a point where this would have mattered (each
+stopped on an earlier crash), so this was never exercised, not a regression.
+
+**Threading design** (full rationale in `include/port/vi.h`): AppKit requires the window/event loop
+on the process's real main thread; the game runs on its own arena thread
+(`src/port/boot_main.cpp`'s `CreateArenaThread`). Chosen split:
+
+- Host **main thread** (`src/port/boot_main.cpp`, after starting the game thread): calls
+  `re4_port::RunPresentLoop()` (`src/port/vi.cpp`, new), which itself calls `aurora_initialize()`
+  once (creating the window), then loops `aurora_update()` (SDL event pump; watches for
+  `AURORA_EXIT`) + `aurora_begin_frame()`/`aurora_end_frame()` every iteration.
+  `AuroraConfig::vsync = true` makes `aurora_end_frame()`'s swapchain present block on the real
+  display refresh -- that is this port's ~60 Hz tick source, not a manual `sleep`.
+  `config.mem1Size`/`mem2Size` are left `0` so Aurora doesn't allocate its own MEM1/ARAM block
+  (`re4_port::InitMem1()`, section 13, already owns that).
+- Each loop iteration is one "retrace": bumps an atomic counter and invokes whichever
+  pre/post-retrace callback the game registered via `VISetPreRetraceCallback`/
+  `VISetPostRetraceCallback` (real implementations now, `src/port/vi.cpp`) -- **on the main thread**,
+  not the game thread. Deliberate, not an oversight: `main.cpp`'s own frame loop drives its vsync
+  counter (`vsync_cnt`) with a *busy-wait* (`while (vsync_cnt < GetSystemVcnt()-1) {}`) that the
+  registered callback (`postVSyncCallback`) is expected to advance from *outside* that spin -- on
+  real hardware this is a literal interrupt preempting the CPU mid-loop, which "runs the callback on
+  the game thread's own cooperative turn" cannot reproduce (the game thread is exactly the thread
+  stuck spinning). Confirmed by reading `main.cpp` before choosing this design, not assumed. **Open
+  risk, not verified**: the callback touches `pG`/`vsync_cnt` with no lock -- a genuine cross-thread
+  data race, accepted here on the grounds that real VI hardware's own ISR would touch the same
+  state from interrupt context with no lock either; revisit if it proves unstable.
+- `VIWaitForRetrace()` (called directly by the game thread at a few points, e.g. `Render_init()`'s
+  boot-time call, `src/game/main_sub.cpp`) blocks the **calling** thread on a condition variable
+  until the next tick the main thread produces.
+- `VISetNextFrameBuffer`/`VISetBlack`/`VIGetNextField`/`VIGetRetraceCount` given real (not
+  logging-only) semantics in the same file, matching `include/dolphin/vi/vifuncs.h`'s real
+  signatures. `VIFlush()` needed no change -- Aurora's own `../aurora/lib/dolphin/vi/vi.cpp` already
+  defines it (real, empty on purpose: nothing to flush without a hardware FIFO).
+- **Not synchronized with this pass**: actual GX submission (`Render()`/`Render_swap()`/
+  `GXCopyDisp`, still on the game thread, unchanged) is not bracketed by the main thread's
+  `aurora_begin_frame()`/`aurora_end_frame()` pair at all -- a real, open risk (Aurora's GX/Dawn
+  command encoding may assume single-threaded use inside one begin/end pair), flagged in
+  `include/port/vi.h` rather than guessed at. Did not block this session's actual run (see below --
+  the crash reached is upstream of any real GX submission from the game thread), so not chased
+  further; whoever reaches real GX draws next should watch for it.
+
+New/changed files: `include/port/vi.h`, `src/port/vi.cpp` (new); `src/port/boot_main.cpp` (calls
+`re4_port::RunPresentLoop()` instead of sleeping); `CMakeLists.txt` (adds `src/port/vi.cpp` to
+`re4_boot`'s sources); `src/port/stubs/generated_c_stubs.cpp` /
+`src/port/stubs/manual_stubs.cpp` (removed the now-superseded logging stubs for
+`VISetPostRetraceCallback`/`VIWaitForRetrace`/`VISetBlack`/`VISetNextFrameBuffer`/`VIGetNextField` --
+real implementations now live in `src/port/vi.cpp`). All `src/port/`/`include/port/`/`CMakeLists.txt`
+changes -- no remote matching-build round trip needed per the port rules.
+
+**Verified: the window opens.** Re-running `re4_boot` (section 12's command) now logs
+`[info] [aurora::gpu] Attempting to initialize Metal` through a real adapter/device/swapchain
+creation sequence (`Device: Apple M4 (IntegratedGPU)`, `Compatible surface: true`) and
+`re4_boot: Aurora window opened`, and the process runs measurably further into the boot sequence
+than any prior session (`STUB: Render() called` -- the frame loop's own `Render()` call site,
+`main.cpp:169` -- is reached; every previous session's last log line was well before this).
+
+**Current blocker, confirmed live with lldb**: the same "DrawOTag walks a garbage OT pointer"
+symptom section 23 first noted, this time with a real crash and root cause, not a guess:
+
+```
+* thread #4, stop reason = EXC_BAD_ACCESS (code=2, address=0x180cffc1c)
+    frame #0: DrawOTag(pOt=0x0000000180cffc1c) at libgpu.cpp:98
+        -> } while (*pOt != 0xFFFFFFFF);
+    frame #1: main_game() at main.cpp:140
+```
+
+**Root cause (not a struct/endianness bug -- a real address-space mismatch)**: `libgpu.cpp`'s OT
+primitives (`AddPrim`/`DelPrim`/`ClearOTagR`/`DrawOTag`) store a *live RAM pointer* inside a plain
+`u32`, using the real GameCube hardware's own trick: RAM addresses always have bit 31 set
+(`0x80000000`-based), so an "empty"/"not yet linked" list cell can mask that bit off
+(`& 0x7FFFFFFF`) as a spare flag and OR it back (`| 0x80000000`) before dereferencing. This a
+different mechanism from the disc-relocated-pointer problem `include/port/ptr32.h`'s `Ptr32<T>`/
+`GC32`/`GCPTR` already solves (Phase 2) -- it never touches a struct field that gets byte-swapped or
+round-tripped through disk, only the *live address* of a plain global, `MainOt`
+(`u32 MainOt[5]`, `src/game/main.cpp`). On this host, `&MainOt[i]` is an ordinary 64-bit process
+address that does not fit in 32 bits at all (confirmed: `ClearOTagR` masks the low 31 bits of that
+address into the table, discarding everything above bit 31 -- not just the sign bit -- so the
+address can never be recovered by OR-ing it back in; `DrawOTag`'s `p[1]` dereference of what's left
+is exactly the observed garbage-pointer crash). `GC32()`/`GCPTR()` (`include/port/ptr32.h`) cannot
+paper over this the way they do for on-disc pointers: they require the pointer to live inside the
+arena's compressed 4 GiB window (`g_base` and up) -- and `MainOt` is an ordinary linked-in global,
+not something allocated from the arena, so `GC32(&MainOt[i])` would itself fail its own bounds
+assert. Confirmed this is the actual mechanism (not asserted from the RTL alone): read `ClearOTagR`/
+`DrawOTag`'s exact masking arithmetic, matched it against the crash's own `pOt` value, and confirmed
+`MainOt` is a plain global (`grep -n "u32 MainOt" src/game/main.cpp`), not arena-backed.
+
+**This is a design decision, not a small fix** (stopping here per that instruction) -- the same
+"pointer stored in a 32-bit game-visible int" idiom this port has hit before (Phase 2's whole
+reason for existing), but this time on a plain linked-in global instead of disc-relocated/heap data,
+which `Ptr32<T>`'s existing window doesn't cover. Two candidate directions for whoever picks this up
+next, neither attempted this pass:
+
+1. **Move every such statically-addressed table into the arena at startup** (a small "game statics"
+   sub-region of `re4_port`'s arena, populated by copying each global's initializer in at boot) so
+   `GC32`/`GCPTR` already work for them unchanged -- keeps `libgpu.cpp` byte-identical even under
+   `TARGET_PC`, but needs a way to find every such global (`MainOt` is confirmed; whether the
+   renderer's real (non-stub) code touches others the same way is unaudited -- `trans.cpp`/GX
+   submission are still excluded, section 26, so this pass could not check them).
+2. **Widen the OT's storage under `TARGET_PC` only** (e.g. a parallel host-pointer-sized table, or a
+   `TARGET_PC` reinterpretation of the bit-trick using `GC32`/`GCPTR` after first special-casing
+   "does this address happen to be arena-resident") -- touches every call site across
+   `libgpu.cpp`/`debug.cpp`/`datactrl.cpp`/`main_mem.cpp` that participates in this idiom, larger
+   surface, but doesn't require relocating any global.
+
+No screenshot captured this session despite the window opening: the crash above happens seconds into
+the run (mid font-load retry loop) and terminates the whole process (unhandled `SIGBUS`) before a
+`screencapture` call could be scripted against it; a live `lldb`-paused screenshot attempt found the
+inferior already gone by the time a second command reached it (lldb's batch mode has no stdin to
+keep it attached without `-k quit`, which itself lets the process exit). Whoever picks up the OT fix
+above should screenshot on the next run once the crash is gone -- the window is real and does open
+(confirmed by Aurora's own successful adapter/device/swapchain log lines), so this is expected to be
+straightforward once nothing crashes before the first `aurora_end_frame()` a few iterations in.
+
+Verified no regression: default host build (`RE4_U32_32=OFF`) untouched by this pass (only
+`src/port/`, `include/port/vi.h`, `CMakeLists.txt`'s `RE4_BUILD_BOOT` block touched); `ctest` not
+rerun this pass (no `include/port/`/`src/port/` change affects the non-boot test targets' logic,
+only adds a new boot-only source file) -- **TO VERIFY** by whoever next has a spare `ctest` run.

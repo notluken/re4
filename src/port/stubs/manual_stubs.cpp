@@ -190,30 +190,8 @@ BOOL OSUnlink(OSModuleInfo* oldModule)
     return 0;
 }
 
-// VISetBlack/VISetNextFrameBuffer/VIGetNextField: real VI presentation, Phase 4 render-path work
-// (docs/port-boot.md section 26's GX/VI parity table -- Aurora's own aurora_vi implements window/
-// VIConfigure/VIFlush but not these three raw SDK entry points). Logging stubs, same shape as
-// every other not-yet-wired subsystem call on this boot path; VIGetNextField's return (0/1, which
-// field is about to scan out) is read by main_sub.cpp only to choose a debug on-screen coordinate,
-// never dereferenced as a pointer -- 0 is a safe, always-valid field index.
-void VISetBlack(BOOL black)
-{
-    (void) black;
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: VISetBlack() called\n"); warned = true; }
-}
-void VISetNextFrameBuffer(void* fb)
-{
-    (void) fb;
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: VISetNextFrameBuffer() called\n"); warned = true; }
-}
-u32 VIGetNextField(void)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: VIGetNextField() called\n"); warned = true; }
-    return 0;
-}
+// VISetBlack/VISetNextFrameBuffer/VIGetNextField: real implementations, src/port/vi.cpp
+// (docs/port-boot.md's frame-presentation milestone).
 } // extern "C"
 
 // SceSys: global cSceSys instance, normally defined in sce_sys.cpp (still excluded,

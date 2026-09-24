@@ -2060,19 +2060,8 @@ u32 VIGetDTVStatus()
     if (!warned) { std::fprintf(stderr, "STUB: VIGetDTVStatus() called\n"); warned = true; }
     return 0;
 }
-// VISetPostRetraceCallback: `VIRetraceCallback VISetPostRetraceCallback(VIRetraceCallback cb)`
-VIRetraceCallback VISetPostRetraceCallback(VIRetraceCallback cb)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: VISetPostRetraceCallback() called\n"); warned = true; }
-    return (VIRetraceCallback) 0;
-}
-// VIWaitForRetrace: `void VIWaitForRetrace(void)`
-void VIWaitForRetrace(void)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: VIWaitForRetrace() called\n"); warned = true; }
-}
+// VISetPostRetraceCallback/VIWaitForRetrace: real implementations, src/port/vi.cpp
+// (docs/port-boot.md's frame-presentation milestone -- these are no longer logging stubs).
 // YarareAdd: `void YarareAdd(cEm* pEm, YARARE_INFO* pAt, f32 x, f32 y, f32 z, f32 r, f32 h, s16 pno, u16 flag)`
 void YarareAdd(cEm* pEm, YARARE_INFO* pAt, f32 x, f32 y, f32 z, f32 r, f32 h, s16 pno, u16 flag)
 {
