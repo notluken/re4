@@ -195,7 +195,16 @@ public:
 
     MesWork* getWork() { return &m_Msg[0]; }
     // Slot address the way the original computes it (index scaled first, then the base).
+#ifdef TARGET_PC
+    // Same same-object pointer arithmetic as the FlagChk family (docs/port-phase2.md step 4): `this`
+    // is a live in-memory pointer, never a GC address field, so this is plain arithmetic, not GC32
+    // compression. Not caught by the cast rewriter: it only rewrites direct casts physically written
+    // in a .cpp/.c file being compiled, not inline functions defined in a header (docs/port-phase2.md
+    // section 9's boot-path spot-check found this one blocking main.cpp).
+    Message* getMes(int no) { return (Message*) ((u8*) this + no * sizeof(Message) + sizeof(u32)); }
+#else
     Message* getMes(int no) { return (Message*) (no * sizeof(Message) + (u32) this + sizeof(u32)); }
+#endif
 
     void setLayout(int no, int type);
     void setLanguage(int lang);
