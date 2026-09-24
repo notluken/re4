@@ -40,8 +40,9 @@ the original word by word and `python3 tools/fdiff.py game/foo <symbol>` shows o
 ## Layout
 
 - `src/game/` — the game (C++; a few newlib C units). `src/em*/` enemies, `src/wep*/` weapons,
-  `src/pl*/` player characters, `src/st*/` rooms (one REL per room), `src/t_*/`, `src/Tools/`,
-  `src/tools/` the in-game debug editors, `src/Sscrn/` the sub-screens, `src/lib/` SDK, CRI and runtime.
+  `src/pl*/` player characters, `src/st*/` rooms (one REL per room), `src/t_*/`, `src/tools_mod/`
+  (the `Tools` REL's own units), `src/tools/` (shared debug-editor bodies), `src/Sscrn/` the
+  sub-screens, `src/lib/` SDK, CRI and runtime.
 - `include/` — headers, including the reconstructed struct layouts.
 - `config/G4BE08/` — unit lists (`objects.py`, `modules.py`), `symbols.txt`, `splits.txt`, linker
   scripts, per-module REL data (`modules/<mod>/`), `build.sha1`.

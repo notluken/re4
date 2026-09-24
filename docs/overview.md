@@ -144,7 +144,7 @@ by the ADX audio track (`adx_*`, `sfd_adxt`, `sfd_tst` time stabiliser), fed fro
 DVD (`gcci`, `cri_cvfs`); the whole stack is single-threaded, driven by one `ADXM_ExecMain()` per frame.
 ADX is only used for movie audio; the rest of the library is linked but dead.
 
-## Debug tools (`src/tools`, `src/Tools`, `src/t_*`)
+## Debug tools (`src/tools`, `src/tools_mod`, `src/t_*`)
 
 The debug build ships the developers' in-game editors as REL modules: every tool module ends with
 `tools.cpp` (`ToolsTask` -> `DebugMenuSelected`), pauses the game through `TutilInitDefault`, draws

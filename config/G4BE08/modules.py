@@ -442,7 +442,7 @@ UNITS = {
         ("t_event/db_sctrl.cpp", "SctrlInitAxisRange", "tools/db_sctrl.cpp", {".rodata": 0x1640}),
         # Tools' db_toolbase.cpp object (its linkonce base-class inlines end it), then the cFileList object;
         # the file list instance (unreferenced from its own code) is the first 0x18 of .bss after db_light
-        ("t_event/db_toolbase.cpp", "MakeCol", "Tools/db_toolbase.cpp"),
+        ("t_event/db_toolbase.cpp", "MakeCol", "tools_mod/db_toolbase.cpp"),
         ("t_event/db_filelist.cpp", "cFileList::init", "tools/db_filelist.cpp", {".rodata": 0x1A20, ".bss": 0xAC}),
         ("t_event/t_event.cpp", "ToolEvent", None, {".rodata": 0x1A80, ".bss": 0xC4}),
         ("t_event/t_util.cpp", "TutilInitDefault", "tools/t_util_menu.cpp", {".rodata": 0x2508}),
@@ -523,31 +523,40 @@ UNITS = {
     # t_lightarea (namespace t_lightarea, starts with its own __builtin_new/delete), t_mes, t_motseq,
     # t_mv (ToolMotionViewer), the full t_prim.cpp (18 functions), t_rck.cpp, t_sce_at.cpp (the same
     # object as t_sce's), t_tplview, the full t_util.cpp (TutilGet3DPosXZ* etc.), t_vib, tools.cpp.
+    # Unit names below keep the vendor-facing "Tools/..." spelling (they are labels: splits.txt,
+    # sym_map.tsv, symbols.txt and docs all key off them and none were regenerated for this rename).
+    # The physical source for the module's own files (the ones that need an explicit override below)
+    # moved from src/Tools/ to src/tools_mod/: on a case-insensitive filesystem (APFS) src/Tools/ and
+    # src/tools/ are the same directory, and three of this module's own filenames (t_prim.cpp,
+    # t_util.cpp, tools.cpp) also exist under src/tools/ with different (shared-body) content, so
+    # src/Tools/ could not be told apart from src/tools/ by path alone on such a host. src/tools/
+    # (the shared bodies compiled into t_camera/t_emlist/t_esp/t_event/t_id/t_light/t_movie/t_sce, and
+    # already referenced here by explicit override) is untouched.
     "Tools": [
         ("Tools/db_light.cpp", None, "tools/db_light_tools.cpp"),
         ("Tools/db_mod.cpp", "dbModSetViewFlag", "tools/db_mod.cpp", {".rodata": 0x1640}),
-        ("Tools/db_toolbase.cpp", "MakeCol"),
+        ("Tools/db_toolbase.cpp", "MakeCol", "tools_mod/db_toolbase.cpp"),
         # t_atari.cpp's header-string group starts with atari.h's cFlag.set() message (0x2578), like the rooms'
-        ("Tools/t_atari.cpp", "ToolAtari", None, {".rodata": 0x2578}),
-        ("Tools/t_cons.cpp", "ToolCons", None, {".rodata": 0x29C8}),
-        ("Tools/t_dr.cpp", "tDrExit", None, {".rodata": 0x2D6C}),
+        ("Tools/t_atari.cpp", "ToolAtari", "tools_mod/t_atari.cpp", {".rodata": 0x2578}),
+        ("Tools/t_cons.cpp", "ToolCons", "tools_mod/t_cons.cpp", {".rodata": 0x29C8}),
+        ("Tools/t_dr.cpp", "tDrExit", "tools_mod/t_dr.cpp", {".rodata": 0x2D6C}),
         # t_eminfo.cpp's group starts with atari.h's cFlag.set() message (0x3088, 8-aligned: the 4-byte pad
         # before it is the linker's, t_dr's .rodata ends at 0x3084)
-        ("Tools/t_eminfo.cpp", "ToolEmInfo", None, {".rodata": 0x3088}),
-        ("Tools/t_esp_area.cpp", "IsWorkAlive", None, {".rodata": 0x3468}),
-        ("Tools/t_flr_at.cpp", "flrAtInit", None, {".rodata": 0x3A88}),
-        ("Tools/t_lightarea.cpp", "__builtin_new", None, {".rodata": 0x3FF8}),
-        ("Tools/t_mes.cpp", "ToolMes", None, {".rodata": 0x4680, ".data": 0x2170}),
-        ("Tools/t_motseq.cpp", "ToolMotSeq", None, {".rodata": 0x4860}),
-        ("Tools/t_mv.cpp", "ToolMotionViewer", None, {".rodata": 0x4E10, ".bss": 0x13DAD0}),
-        ("Tools/t_prim.cpp", "TprimInitEnv2D3D"),
+        ("Tools/t_eminfo.cpp", "ToolEmInfo", "tools_mod/t_eminfo.cpp", {".rodata": 0x3088}),
+        ("Tools/t_esp_area.cpp", "IsWorkAlive", "tools_mod/t_esp_area.cpp", {".rodata": 0x3468}),
+        ("Tools/t_flr_at.cpp", "flrAtInit", "tools_mod/t_flr_at.cpp", {".rodata": 0x3A88}),
+        ("Tools/t_lightarea.cpp", "__builtin_new", "tools_mod/t_lightarea.cpp", {".rodata": 0x3FF8}),
+        ("Tools/t_mes.cpp", "ToolMes", "tools_mod/t_mes.cpp", {".rodata": 0x4680, ".data": 0x2170}),
+        ("Tools/t_motseq.cpp", "ToolMotSeq", "tools_mod/t_motseq.cpp", {".rodata": 0x4860}),
+        ("Tools/t_mv.cpp", "ToolMotionViewer", "tools_mod/t_mv.cpp", {".rodata": 0x4E10, ".bss": 0x13DAD0}),
+        ("Tools/t_prim.cpp", "TprimInitEnv2D3D", "tools_mod/t_prim.cpp"),
         # t_rck.cpp's header-string group starts with atari.h's cFlag.set() message (0x5000)
-        ("Tools/t_rck.cpp", "ToolRctRouteCheck", None, {".rodata": 0x5000}),
+        ("Tools/t_rck.cpp", "ToolRctRouteCheck", "tools_mod/t_rck.cpp", {".rodata": 0x5000}),
         ("Tools/t_sce_at.cpp", "ToolSceAt", "tools/t_sce_at.cpp", {".rodata": 0x53B8}),
-        ("Tools/t_tplview.cpp", "ToolTplView", None, {".rodata": 0x61B8}),
-        ("Tools/t_util.cpp", "TutilInitDefault", None, {".rodata": 0x6370}),
-        ("Tools/t_vib.cpp", "ToolVibEdit"),
-        ("Tools/tools.cpp", "_prolog"),
+        ("Tools/t_tplview.cpp", "ToolTplView", "tools_mod/t_tplview.cpp", {".rodata": 0x61B8}),
+        ("Tools/t_util.cpp", "TutilInitDefault", "tools_mod/t_util.cpp", {".rodata": 0x6370}),
+        ("Tools/t_vib.cpp", "ToolVibEdit", "tools_mod/t_vib.cpp"),
+        ("Tools/tools.cpp", "_prolog", "tools_mod/tools.cpp"),
     ],
     # t_esp: yet another db_light.cpp build, a db_mod.cpp build with the model-set loader
     # (dbModBinName..dbModelSetCamera), db_port.cpp (GetActiveModel/MakeCol/DB_* helpers, the EspTool*
