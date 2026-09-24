@@ -849,16 +849,26 @@ void Matrix2AxisAngle(Mtx m, Vec* ang)
     if (!warned) { std::fprintf(stderr, "STUB: Matrix2AxisAngle() called\n"); warned = true; }
 }
 // memclr_asm: `void memclr_asm(void* dst, u32 n)`
+// NOT a logging-only stub (docs/port-boot.md's stub audit, coordinator lead): a pure real-memory-
+// operation asm-bodied unit (docs/port-boot.md section 4's asm-bodied-unit survey) that the
+// generic stub generator treated like any other undefined symbol -- a one-time "STUB: ... called"
+// marker with no actual effect. Every caller depends on the destination actually being cleared
+// (e.g. `cDvd::pullReadQueue()`'s `memclr_asm(q, sizeof(cDvdQueue))` resetting a reused
+// `cDvdQueue` slot's state machine -- docs/port-boot.md section 20's `m_Rno0`-stays-stale bug was
+// this exact function doing nothing). Real semantics: zero-fill, same as `memset(dst, 0, n)`.
 void memclr_asm(void* dst, u32 n)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: memclr_asm() called\n"); warned = true; }
+    if (dst && n) {
+        std::memset(dst, 0, n);
+    }
 }
 // memset_asm: `void memset_asm(void* dst, int c, u32 n)`
+// Same class of bug as memclr_asm above -- real semantics, `memset(dst, c, n)`.
 void memset_asm(void* dst, int c, u32 n)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: memset_asm() called\n"); warned = true; }
+    if (dst && n) {
+        std::memset(dst, c, n);
+    }
 }
 // MercSysGetSaveWork: `void MercSysGetSaveWork(MercSaveWork* pSaveWk)`
 void MercSysGetSaveWork(MercSaveWork* pSaveWk)
@@ -1171,16 +1181,30 @@ BOOL OSInitFont(OSFontHeader* fontData)
     return 0;
 }
 // OSInitSemaphore: `void OSInitSemaphore(OSSemaphore* sem, s32 count)`
+// NOT a logging-only stub (docs/port-boot.md's stub audit): real semantics, not just a call-site
+// marker -- callers read `sem->count`/`sem->queue` afterward (OSWaitSemaphore/OSSignalSemaphore-
+// shaped code), same class of bug as memclr_asm/memset_asm below (a struct the game depends on
+// being actually filled, not a hardware side effect to merely acknowledge).
 void OSInitSemaphore(OSSemaphore* sem, s32 count)
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: OSInitSemaphore() called\n"); warned = true; }
+    if (sem) {
+        sem->count = count;
+        sem->queue.head = nullptr;
+        sem->queue.tail = nullptr;
+    }
 }
 // OSInitThreadQueue: `void OSInitThreadQueue(OSThreadQueue* queue)`
+// Same class of bug as OSInitSemaphore above: real semantics (empty the queue), not just a marker.
 void OSInitThreadQueue(OSThreadQueue* queue)
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: OSInitThreadQueue() called\n"); warned = true; }
+    if (queue) {
+        queue->head = nullptr;
+        queue->tail = nullptr;
+    }
 }
 // OSPanic: `void OSPanic(const char* file, int line, const char* msg, ...)`
 void OSPanic(const char* file, int line, const char* msg, ...)
@@ -1189,10 +1213,18 @@ void OSPanic(const char* file, int line, const char* msg, ...)
     if (!warned) { std::fprintf(stderr, "STUB: OSPanic() called\n"); warned = true; }
 }
 // OSReport: `void OSReport(const char* fmt, ...)`
+// NOT a logging-only stub: a real vfprintf pass-through, not just a one-time call-site marker --
+// this is the game's own diagnostic channel (`"DVD: Read File: %s"`, `"DVD: Read Ok "`, ...,
+// src/game/dvd.cpp among many others) and losing every message behind a single "STUB: OSReport()
+// called" line (the generic generated-stub shape) actively hid this session's own DVD-queue bug
+// investigation (docs/port-boot.md section 20) -- high debugging value, no correctness risk either
+// way (OSReport has no return value/output parameter callers depend on).
 void OSReport(const char* fmt, ...)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSReport() called\n"); warned = true; }
+    va_list ap;
+    va_start(ap, fmt);
+    std::vfprintf(stderr, fmt, ap);
+    va_end(ap);
 }
 // OSResetSystem: `void OSResetSystem(int reset, u32 resetCode, BOOL forceMenu)`
 void OSResetSystem(int reset, u32 resetCode, BOOL forceMenu)
@@ -1478,127 +1510,297 @@ void primInit()
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: primInit() called\n"); warned = true; }
 }
+// The whole PSMTX*/PSVEC* family below is NOT logging-only anymore (docs/port-boot.md's stub
+// audit, coordinator lead): these are pure paired-single matrix/vector math with no hardware
+// dependency (Aurora only implements the scalar C_MTX* family, docs/port-boot.md section 7 --
+// none of that is wired up here, this is a plain, independent re-implementation using the same
+// well-known Dolphin SDK formulas), and every caller reads the output matrix/vector afterward --
+// leaving them untouched (the generic generated-stub shape) is the exact same class of bug as
+// memclr_asm/OSInitSemaphore above, just for float matrices instead of raw bytes. `Mtx` is the
+// GameCube's 3x4 affine transform (rows 0-2, a 4th row of [0,0,0,1] is always implicit, never
+// stored).
 // PSMTX44MultVec: `void PSMTX44MultVec(const Mtx44 m, const Vec* src, Vec* dst)`
+// Full 4x4 * homogeneous point (w=1), no perspective divide (matches the un-normalized shape of
+// every other PSMTXMultVec* here) -- **TO VERIFY** if any caller expects the divide-by-w a
+// projection matrix would need instead.
 void PSMTX44MultVec(const Mtx44 m, const Vec* src, Vec* dst)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTX44MultVec() called\n"); warned = true; }
+    if (!m || !src || !dst) {
+        return;
+    }
+    f32 x = m[0][0] * src->x + m[0][1] * src->y + m[0][2] * src->z + m[0][3];
+    f32 y = m[1][0] * src->x + m[1][1] * src->y + m[1][2] * src->z + m[1][3];
+    f32 z = m[2][0] * src->x + m[2][1] * src->y + m[2][2] * src->z + m[2][3];
+    dst->x = x;
+    dst->y = y;
+    dst->z = z;
 }
 // PSMTXConcat: `void PSMTXConcat(const Mtx lhs, const Mtx rhs, Mtx ab)`
+// ab = lhs * rhs (both 3x4 affine, implicit [0,0,0,1] 4th row) -- computed into a local temp first
+// so `ab` aliasing `lhs`/`rhs` (a very common call shape, `PSMTXConcat(m, m, m)`) is safe.
 void PSMTXConcat(const Mtx lhs, const Mtx rhs, Mtx ab)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXConcat() called\n"); warned = true; }
+    if (!lhs || !rhs || !ab) {
+        return;
+    }
+    Mtx tmp;
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            tmp[i][j] = lhs[i][0] * rhs[0][j] + lhs[i][1] * rhs[1][j] + lhs[i][2] * rhs[2][j];
+        }
+        tmp[i][3] = lhs[i][0] * rhs[0][3] + lhs[i][1] * rhs[1][3] + lhs[i][2] * rhs[2][3] + lhs[i][3];
+    }
+    std::memcpy(ab, tmp, sizeof(Mtx));
 }
 // PSMTXCopy: `void PSMTXCopy(const Mtx src, Mtx dst)`
 void PSMTXCopy(const Mtx src, Mtx dst)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXCopy() called\n"); warned = true; }
+    if (src && dst && src != dst) {
+        std::memcpy(dst, src, sizeof(Mtx));
+    }
 }
 // PSMTXIdentity: `void PSMTXIdentity(Mtx m)`
 void PSMTXIdentity(Mtx m)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXIdentity() called\n"); warned = true; }
+    if (!m) {
+        return;
+    }
+    m[0][0] = 1.0f; m[0][1] = 0.0f; m[0][2] = 0.0f; m[0][3] = 0.0f;
+    m[1][0] = 0.0f; m[1][1] = 1.0f; m[1][2] = 0.0f; m[1][3] = 0.0f;
+    m[2][0] = 0.0f; m[2][1] = 0.0f; m[2][2] = 1.0f; m[2][3] = 0.0f;
 }
 // PSMTXInverse: `u32 PSMTXInverse(const Mtx src, Mtx inv)`
+// General affine inverse: invert the 3x3 linear part (cofactor/adjugate over the determinant),
+// then invTranslation = -invRotation * translation. Returns 0 (matching the real SDK's "singular,
+// did not write `inv`" contract) when the determinant is too close to zero to invert safely.
 u32 PSMTXInverse(const Mtx src, Mtx inv)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXInverse() called\n"); warned = true; }
-    return 0;
+    if (!src || !inv) {
+        return 0;
+    }
+    f32 a = src[0][0], b = src[0][1], c = src[0][2];
+    f32 d = src[1][0], e = src[1][1], f = src[1][2];
+    f32 g = src[2][0], h = src[2][1], i = src[2][2];
+    f32 det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if (det > -1e-12f && det < 1e-12f) {
+        return 0;
+    }
+    f32 invDet = 1.0f / det;
+    f32 r00 = (e * i - f * h) * invDet, r01 = (c * h - b * i) * invDet, r02 = (b * f - c * e) * invDet;
+    f32 r10 = (f * g - d * i) * invDet, r11 = (a * i - c * g) * invDet, r12 = (c * d - a * f) * invDet;
+    f32 r20 = (d * h - e * g) * invDet, r21 = (b * g - a * h) * invDet, r22 = (a * e - b * d) * invDet;
+    f32 tx = src[0][3], ty = src[1][3], tz = src[2][3];
+    inv[0][0] = r00; inv[0][1] = r01; inv[0][2] = r02;
+    inv[1][0] = r10; inv[1][1] = r11; inv[1][2] = r12;
+    inv[2][0] = r20; inv[2][1] = r21; inv[2][2] = r22;
+    inv[0][3] = -(r00 * tx + r01 * ty + r02 * tz);
+    inv[1][3] = -(r10 * tx + r11 * ty + r12 * tz);
+    inv[2][3] = -(r20 * tx + r21 * ty + r22 * tz);
+    return 1;
 }
 // PSMTXMultVec: `void PSMTXMultVec(const Mtx m, const Vec* src, Vec* dst)`
+// Affine point transform (rotation/scale + translation); safe for `dst == src` via locals.
 void PSMTXMultVec(const Mtx m, const Vec* src, Vec* dst)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXMultVec() called\n"); warned = true; }
+    if (!m || !src || !dst) {
+        return;
+    }
+    f32 x = m[0][0] * src->x + m[0][1] * src->y + m[0][2] * src->z + m[0][3];
+    f32 y = m[1][0] * src->x + m[1][1] * src->y + m[1][2] * src->z + m[1][3];
+    f32 z = m[2][0] * src->x + m[2][1] * src->y + m[2][2] * src->z + m[2][3];
+    dst->x = x;
+    dst->y = y;
+    dst->z = z;
 }
 // PSMTXMultVecArray: `void PSMTXMultVecArray(const Mtx m, const Vec* srcBase, Vec* dstBase, u32 count)`
 void PSMTXMultVecArray(const Mtx m, const Vec* srcBase, Vec* dstBase, u32 count)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXMultVecArray() called\n"); warned = true; }
+    if (!m || !srcBase || !dstBase) {
+        return;
+    }
+    for (u32 i = 0; i < count; i++) {
+        PSMTXMultVec(m, &srcBase[i], &dstBase[i]);
+    }
 }
 // PSMTXMultVecSR: `void PSMTXMultVecSR(const Mtx m, const Vec* src, Vec* dst)`
+// Same as PSMTXMultVec but drops the translation column ("SR" = scale/rotate only) -- used for
+// direction vectors, not points.
 void PSMTXMultVecSR(const Mtx m, const Vec* src, Vec* dst)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXMultVecSR() called\n"); warned = true; }
+    if (!m || !src || !dst) {
+        return;
+    }
+    f32 x = m[0][0] * src->x + m[0][1] * src->y + m[0][2] * src->z;
+    f32 y = m[1][0] * src->x + m[1][1] * src->y + m[1][2] * src->z;
+    f32 z = m[2][0] * src->x + m[2][1] * src->y + m[2][2] * src->z;
+    dst->x = x;
+    dst->y = y;
+    dst->z = z;
 }
 // PSMTXQuat: `void PSMTXQuat(Mtx m, const Quaternion* q)`
+// Found `Quaternion`'s real layout after all (`include/vec.h`, plain x/y/z/w) -- standard
+// quaternion-to-rotation-matrix formula, translation column 0.
 void PSMTXQuat(Mtx m, const Quaternion* q)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXQuat() called\n"); warned = true; }
+    if (!m || !q) {
+        return;
+    }
+    f32 x = q->x, y = q->y, z = q->z, w = q->w;
+    f32 xx = x * x, yy = y * y, zz = z * z;
+    f32 xy = x * y, xz = x * z, yz = y * z;
+    f32 wx = w * x, wy = w * y, wz = w * z;
+    m[0][0] = 1.0f - 2.0f * (yy + zz); m[0][1] = 2.0f * (xy - wz);        m[0][2] = 2.0f * (xz + wy);        m[0][3] = 0.0f;
+    m[1][0] = 2.0f * (xy + wz);        m[1][1] = 1.0f - 2.0f * (xx + zz); m[1][2] = 2.0f * (yz - wx);        m[1][3] = 0.0f;
+    m[2][0] = 2.0f * (xz - wy);        m[2][1] = 2.0f * (yz + wx);        m[2][2] = 1.0f - 2.0f * (xx + yy); m[2][3] = 0.0f;
 }
 // PSMTXRotAxisRad: `void PSMTXRotAxisRad(Mtx m, const Vec* axis, f32 rad)`
+// Rodrigues' rotation formula about an arbitrary (normalized) axis; translation column left 0.
 void PSMTXRotAxisRad(Mtx m, const Vec* axis, f32 rad)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXRotAxisRad() called\n"); warned = true; }
+    if (!m || !axis) {
+        return;
+    }
+    f32 len = std::sqrt(axis->x * axis->x + axis->y * axis->y + axis->z * axis->z);
+    if (len < 1e-12f) {
+        PSMTXIdentity(m);
+        return;
+    }
+    f32 x = axis->x / len, y = axis->y / len, z = axis->z / len;
+    f32 c = std::cos(rad), s = std::sin(rad), t = 1.0f - c;
+    m[0][0] = t * x * x + c;     m[0][1] = t * x * y - s * z; m[0][2] = t * x * z + s * y; m[0][3] = 0.0f;
+    m[1][0] = t * x * y + s * z; m[1][1] = t * y * y + c;     m[1][2] = t * y * z - s * x; m[1][3] = 0.0f;
+    m[2][0] = t * x * z - s * y; m[2][1] = t * y * z + s * x; m[2][2] = t * z * z + c;     m[2][3] = 0.0f;
 }
 // PSMTXRotRad: `void PSMTXRotRad(Mtx m, char axis, f32 rad)`
+// Rotation about a cardinal axis ('X'/'Y'/'Z', either case); translation column 0.
 void PSMTXRotRad(Mtx m, char axis, f32 rad)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXRotRad() called\n"); warned = true; }
+    if (!m) {
+        return;
+    }
+    f32 c = std::cos(rad), s = std::sin(rad);
+    PSMTXIdentity(m);
+    switch (axis) {
+    case 'x': case 'X':
+        m[1][1] = c;  m[1][2] = -s;
+        m[2][1] = s;  m[2][2] = c;
+        break;
+    case 'y': case 'Y':
+        m[0][0] = c;  m[0][2] = s;
+        m[2][0] = -s; m[2][2] = c;
+        break;
+    case 'z': case 'Z':
+        m[0][0] = c;  m[0][1] = -s;
+        m[1][0] = s;  m[1][1] = c;
+        break;
+    }
 }
 // PSMTXScale: `void PSMTXScale(Mtx m, f32 xS, f32 yS, f32 zS)`
 void PSMTXScale(Mtx m, f32 xS, f32 yS, f32 zS)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXScale() called\n"); warned = true; }
+    if (!m) {
+        return;
+    }
+    m[0][0] = xS;   m[0][1] = 0.0f; m[0][2] = 0.0f; m[0][3] = 0.0f;
+    m[1][0] = 0.0f; m[1][1] = yS;   m[1][2] = 0.0f; m[1][3] = 0.0f;
+    m[2][0] = 0.0f; m[2][1] = 0.0f; m[2][2] = zS;   m[2][3] = 0.0f;
 }
 // PSMTXTrans: `void PSMTXTrans(Mtx m, f32 xT, f32 yT, f32 zT)`
 void PSMTXTrans(Mtx m, f32 xT, f32 yT, f32 zT)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXTrans() called\n"); warned = true; }
+    if (!m) {
+        return;
+    }
+    m[0][0] = 1.0f; m[0][1] = 0.0f; m[0][2] = 0.0f; m[0][3] = xT;
+    m[1][0] = 0.0f; m[1][1] = 1.0f; m[1][2] = 0.0f; m[1][3] = yT;
+    m[2][0] = 0.0f; m[2][1] = 0.0f; m[2][2] = 1.0f; m[2][3] = zT;
 }
 // PSMTXTransApply: `void PSMTXTransApply(const Mtx src, Mtx dst, f32 xT, f32 yT, f32 zT)`
+// dst = src with an additional translation applied in src's own (local) orientation -- i.e. the
+// rotation/scale part is unchanged, the translation column gains `src`'s rotated (xT,yT,zT).
 void PSMTXTransApply(const Mtx src, Mtx dst, f32 xT, f32 yT, f32 zT)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXTransApply() called\n"); warned = true; }
+    if (!src || !dst) {
+        return;
+    }
+    f32 t0 = src[0][0] * xT + src[0][1] * yT + src[0][2] * zT + src[0][3];
+    f32 t1 = src[1][0] * xT + src[1][1] * yT + src[1][2] * zT + src[1][3];
+    f32 t2 = src[2][0] * xT + src[2][1] * yT + src[2][2] * zT + src[2][3];
+    if (src != dst) {
+        std::memcpy(dst, src, sizeof(Mtx));
+    }
+    dst[0][3] = t0;
+    dst[1][3] = t1;
+    dst[2][3] = t2;
 }
 // PSMTXTranspose: `void PSMTXTranspose(const Mtx src, Mtx xPose)`
+// Transposes the 3x3 linear part and folds the translation through it negated -- the real SDK
+// semantic (matches known public decompilations), correct as an inverse for an orthonormal
+// (pure rotation + translation, no scale) `src`; not a general algebraic transpose of the 3x4.
 void PSMTXTranspose(const Mtx src, Mtx xPose)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSMTXTranspose() called\n"); warned = true; }
+    if (!src || !xPose) {
+        return;
+    }
+    Mtx tmp;
+    tmp[0][0] = src[0][0]; tmp[0][1] = src[1][0]; tmp[0][2] = src[2][0];
+    tmp[1][0] = src[0][1]; tmp[1][1] = src[1][1]; tmp[1][2] = src[2][1];
+    tmp[2][0] = src[0][2]; tmp[2][1] = src[1][2]; tmp[2][2] = src[2][2];
+    tmp[0][3] = -(src[0][0] * src[0][3] + src[1][0] * src[1][3] + src[2][0] * src[2][3]);
+    tmp[1][3] = -(src[0][1] * src[0][3] + src[1][1] * src[1][3] + src[2][1] * src[2][3]);
+    tmp[2][3] = -(src[0][2] * src[0][3] + src[1][2] * src[1][3] + src[2][2] * src[2][3]);
+    std::memcpy(xPose, tmp, sizeof(Mtx));
 }
 // PSVECAdd: `void PSVECAdd(const Vec* a, const Vec* b, Vec* ab)`
 void PSVECAdd(const Vec* a, const Vec* b, Vec* ab)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSVECAdd() called\n"); warned = true; }
+    if (!a || !b || !ab) {
+        return;
+    }
+    ab->x = a->x + b->x;
+    ab->y = a->y + b->y;
+    ab->z = a->z + b->z;
 }
 // PSVECCrossProduct: `void PSVECCrossProduct(const Vec* a, const Vec* b, Vec* axb)`
 void PSVECCrossProduct(const Vec* a, const Vec* b, Vec* axb)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSVECCrossProduct() called\n"); warned = true; }
+    if (!a || !b || !axb) {
+        return;
+    }
+    f32 x = a->y * b->z - a->z * b->y;
+    f32 y = a->z * b->x - a->x * b->z;
+    f32 z = a->x * b->y - a->y * b->x;
+    axb->x = x;
+    axb->y = y;
+    axb->z = z;
 }
 // PSVECDotProduct: `f32 PSVECDotProduct(const Vec* a, const Vec* b)`
 f32 PSVECDotProduct(const Vec* a, const Vec* b)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSVECDotProduct() called\n"); warned = true; }
-    return 0.0f;
+    if (!a || !b) {
+        return 0.0f;
+    }
+    return a->x * b->x + a->y * b->y + a->z * b->z;
 }
 // PSVECScale: `void PSVECScale(const Vec* src, Vec* dst, f32 scale)`
 void PSVECScale(const Vec* src, Vec* dst, f32 scale)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSVECScale() called\n"); warned = true; }
+    if (!src || !dst) {
+        return;
+    }
+    dst->x = src->x * scale;
+    dst->y = src->y * scale;
+    dst->z = src->z * scale;
 }
 // PSVECSubtract: `void PSVECSubtract(const Vec* a, const Vec* b, Vec* a_b)`
 void PSVECSubtract(const Vec* a, const Vec* b, Vec* a_b)
 {
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PSVECSubtract() called\n"); warned = true; }
+    if (!a || !b || !a_b) {
+        return;
+    }
+    a_b->x = a->x - b->x;
+    a_b->y = a->y - b->y;
+    a_b->z = a->z - b->z;
 }
 // PullCloth: `int PullCloth(Cloth** ppCl)`
 int PullCloth(Cloth** ppCl)

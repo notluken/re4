@@ -48,7 +48,10 @@
 #include "snd.h"
 #include "snd_sdk.h"
 
+#include <cmath>
+#include <cstdarg>
 #include <cstdio>
+#include <cstring>
 
 #endif // TARGET_PC
 #endif // RE4_PORT_STUB_COMMON_H
