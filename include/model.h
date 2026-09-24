@@ -8,6 +8,7 @@
 #include "main_mem.h"
 #ifdef TARGET_PC
 #include "port/ptr32.h"
+#include "port/be.h"
 #endif
 
 // game/math_sub.cpp (C++ linkage; math_sub.h declares them too)
@@ -115,31 +116,45 @@ struct cModelData {
 #endif
     u8 weight_palette_num;  // 0x18  Weight entries of pWeight (trans MakeWeightPalette); <= 1 with nParts == 1: rigid, original arrays
     u8 nParts;       // 0x19  parts count (cModel::setModel copies it into cModel::nParts)
-    u16 displist_num;  // 0x1A  primitive (display list) part count (dbmodule DrawObjWireframe)
 #ifdef TARGET_PC
+    re4_port::BE<u16> displist_num;  // 0x1A  primitive (display list) part count (dbmodule DrawObjWireframe)
     re4_port::Ptr32<struct ModelPart> pParts;  // 0x1C  first part header (0x20 bytes + primitive stream)
+    re4_port::BE<u32> flags;       // 0x20  bit31: s16 tex coords (frac 8), bit30 (0x40000000): SmxGetFlag bit1, bit29: s8 normals
+    re4_port::BE<u32> nTex;        // 0x24  texture count (trans: must be <= 0xF7)
 #else
+    u16 displist_num;  // 0x1A  primitive (display list) part count (dbmodule DrawObjWireframe)
     struct ModelPart* pParts;  // 0x1C  first part header (0x20 bytes + primitive stream)
-#endif
     u32 flags;       // 0x20  bit31: s16 tex coords (frac 8), bit30 (0x40000000): SmxGetFlag bit1, bit29: s8 normals
     u32 nTex;        // 0x24  texture count (trans: must be <= 0xF7)
+#endif
     u8 shift;        // 0x28  vertex fixed-point shift (dbmodule: scale = 1 / (1 << shift))
     u8 pad_29;
+#ifdef TARGET_PC
+    re4_port::BE<u16> weight_ext_num;  // 0x2A  extended weight entries (> 0xFF: pWeight is a WeightExt table)
+    // 0x2C: offset of the shape (vertex delta) table (shape.cpp) -- stays a plain u32 byte offset,
+    // never promoted to a pointer (docs/port-phase2.md inventory), but it is still a big-endian
+    // on-disc integer (Phase 3, docs/port-phase3.md) like any other plain field here.
+    re4_port::BE<u32> shapeOfs;    // 0x2C
+    re4_port::Ptr32<u8> vtxOrig;   // 0x30  original vertex positions (shape.cpp ResetShape source)
+    re4_port::Ptr32<u8> nrmOrig;   // 0x34  original vertex normals
+    re4_port::BE<u16> nVtx;        // 0x38  vertex count (8 bytes each)
+    re4_port::BE<u16> nNrm;        // 0x3A  normal count
+    re4_port::BE<u32> version;     // 0x3C  0x20010801 / 0x20030817 / 0x20030818 (model.cpp: the two tables below exist from 0x20030818)
+    // 0x40/0x44: file offsets until calcModelAddr relocates them (same reasoning as shapeOfs above).
+    re4_port::BE<u32> blendTbl;    // 0x40  MotionWork::blendTbl (cModel::setJointInfo); a file offset until calcModelAddr relocates it
+    re4_port::BE<u32> flipTbl;     // 0x44  MotionWork::flip points 4 bytes into it (setJointInfo)
+#else
     u16 weight_ext_num;  // 0x2A  extended weight entries (> 0xFF: pWeight is a WeightExt table)
     u32 shapeOfs;    // 0x2C  offset of the shape (vertex delta) table (shape.cpp) -- stays a plain
                      // u32 byte offset, never promoted to a pointer (docs/port-phase2.md inventory)
-#ifdef TARGET_PC
-    re4_port::Ptr32<u8> vtxOrig;   // 0x30  original vertex positions (shape.cpp ResetShape source)
-    re4_port::Ptr32<u8> nrmOrig;   // 0x34  original vertex normals
-#else
     void* vtxOrig;   // 0x30  original vertex positions (shape.cpp ResetShape source)
     void* nrmOrig;   // 0x34  original vertex normals
-#endif
     u16 nVtx;        // 0x38  vertex count (8 bytes each)
     u16 nNrm;        // 0x3A  normal count
     u32 version;     // 0x3C  0x20010801 / 0x20030817 / 0x20030818 (model.cpp: the two tables below exist from 0x20030818)
     u32 blendTbl;    // 0x40  MotionWork::blendTbl (cModel::setJointInfo); a file offset until calcModelAddr relocates it
     u32 flipTbl;     // 0x44  MotionWork::flip points 4 bytes into it (setJointInfo)
+#endif
 };
 
 // Shape (morph) animation data referenced by cModelInfo::pShape (game/shape.cpp).
