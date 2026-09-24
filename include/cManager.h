@@ -6,7 +6,17 @@
 // Placement new for the managers' construct(): the work is constructed in place.
 #ifndef PLACEMENT_NEW_DEFINED
 #define PLACEMENT_NEW_DEFINED
+#ifdef TARGET_PC
+// On the GameCube target size_t is `unsigned int`, so the vendor's first parameter below already
+// is size_t and this overload is accepted as-is. On a 64-bit host size_t is `unsigned long`; a
+// non-member operator new must take size_t as its first parameter (ISO), so spell it as size_t
+// here instead of hardcoding the 32-bit width. Same job, host-correct width; bytes for the
+// original target are untouched (see the #else branch).
+#include <cstddef>
+inline void* operator new(std::size_t, void* p) { return p; }
+#else
 inline void* operator new(unsigned int, void* p) { return p; }
+#endif
 #endif
 
 // Base of every managed work object (cLight, cEsp, cObj, cEm, ...).
@@ -27,7 +37,13 @@ public:
     // Works are pool-managed: `delete work` only runs the destructor (be_flag cleared).
     // size_t is `unsigned int` for this compiler; with u32 (unsigned long) GCC 2.95 would not
     // treat this as the usual deallocation function.
+#ifdef TARGET_PC
+    // Same reasoning as the placement `operator new` above: this member must take size_t to be
+    // recognized as the (no-op) sized deallocation function paired with the virtual destructor.
+    void operator delete(void*, std::size_t) {}
+#else
     void operator delete(void*, unsigned int) {}
+#endif
     // addListBack's `p->next = 0` goes through this: the argument copy gives the zero register a
     // lifetime of 2 luids, which is what makes loop.c hoist `li rN, 0` out of createBack's loop
     void setNext(cUnit* n) { pNext = n; }

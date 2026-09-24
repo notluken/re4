@@ -571,7 +571,11 @@ public:
     };
     // 0xF4 vptr
 
+#ifdef TARGET_PC
+    void* operator new(std::size_t size);
+#else
     void* operator new(unsigned int size);
+#endif
     cEsp();
     virtual ~cEsp();
     virtual void move();

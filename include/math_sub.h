@@ -15,9 +15,14 @@
 // scheduling barrier (loads after it are not hoisted above it).
 static inline f32 fabsf(f32 x)
 {
+#ifdef TARGET_PC
+    // No PPC `fabs` on the host; same single-instruction op via the compiler builtin.
+    return __builtin_fabsf(x);
+#else
     f32 r;
     asm volatile("fabs %0,%1" : "=f"(r) : "f"(x));
     return r;
+#endif
 }
 
 // Column `c` of a matrix read into a Vec.

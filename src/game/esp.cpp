@@ -127,7 +127,11 @@ int PullEsp(cEsp** ppEsp, int id)
 // backward scan from the `goto` stops at the inner NOTE_INSN_LOOP_BEG instead of the guard jump.
 // Loops 1/2/4 as for/while loops get strength-reduced `&esp->flag` givs the target lacks, so they
 // stay goto loops.
+#ifdef TARGET_PC
+void* cEsp::operator new(std::size_t size)
+#else
 void* cEsp::operator new(unsigned int size)
+#endif
 {
     static u32 old_hit = 0;
     cEspSystem* sys = g_pEspSys;

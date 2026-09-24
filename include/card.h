@@ -1,6 +1,9 @@
 #ifndef CARD_H
 #define CARD_H
 
+#ifdef TARGET_PC
+#include <cstddef>
+#endif
 #include "types.h"
 #include "db_log.h"
 #include "cDataSwap.h"
@@ -227,9 +230,16 @@ public:
     void calcTplAddr(struct TEXPalette* tpl);
     void setMsgWindow(int a, int sw);
 
+#ifdef TARGET_PC
+    // Same size_t-width reasoning as include/cManager.h: a member operator new/delete must take
+    // size_t as its first parameter to be recognized as such; spell it host-correctly here.
+    void* operator new(std::size_t size) { return MEM_CALLOC(size, 1, 13); }
+    void operator delete(void* p) { Mem_free(p); }
+#else
 #line 386 "D:/Bio4/Prog/card.h"
     void* operator new(unsigned int size) { return MEM_CALLOC(size, 1, 13); }
     void operator delete(void* p) { Mem_free(p); }
+#endif
 };
 
 extern "C" {

@@ -44,7 +44,14 @@ extern JOY Joy[4];
 // game/debug.cpp: pad used by the debug tools (currently &Joy[0])
 JOY* GetBugCheckController();
 
+#ifndef TARGET_PC
 extern "C" void* memcpy(void* dst, const void* src, unsigned int n);
+#else
+// The host's <string.h>/<cstring> already declares memcpy with the standard size_t width
+// (unsigned long here, not unsigned int); redeclaring it with the GameCube's 32-bit size_t
+// conflicts, so on the host this file relies on whichever standard header the includer pulled in.
+#include <cstring>
+#endif
 
 // Pad snapshot used by the debug tools: copies Joy[no] into the tool work at byte offset `ofs`.
 // The destination is byte-pointer arithmetic on purpose: only then does GCC 2.95 treat the

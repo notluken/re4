@@ -6,6 +6,9 @@
 // mem_alloc tags every block with "MAD" + file(line) for MemCheckUsedHeap; Debug_alloc serves
 // the tools from the current debug heap. operator new/delete route here.
 #include "types.h"
+#ifdef TARGET_PC
+#include <cstddef>
+#endif
 #include "global.h"
 #include "main_mem.h"
 #include "db_log.h"
@@ -61,13 +64,21 @@ void* pMemTile;
 static u32 _epy;
 
 // Zeroed allocation from the current heap.
+#ifdef TARGET_PC
+void* operator new(std::size_t size)
+#else
 void* operator new(unsigned int size)
+#endif
 {
     return mem_calloc(size, "operator new", 0, 1, MEM_HEAP_CURRENT);
 }
 
 // Zeroed array allocation from the current heap.
+#ifdef TARGET_PC
+void* operator new[](std::size_t size)
+#else
 void* operator new[](unsigned int size)
+#endif
 {
     return mem_calloc(size, "operator new", 0, 1, MEM_HEAP_CURRENT);
 }
@@ -872,4 +883,7 @@ static void memSetCheck()
 }
 
 // main_sub's .bss starts 8-aligned; the split object carries the 4-byte pad.
+#ifndef TARGET_PC
 asm(".section .bss; .balign 8");
+
+#endif
