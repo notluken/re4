@@ -795,6 +795,104 @@ re4_game_all -k 0`) should log the full failing-file list the way docs/port-phas
 
 No window renders this session (crash still predates GX/VI frame submission) -- no screenshot.
 
+## 18a. Stub audit (2026-09-24, coordinator lead -- root cause of section 20's blocker)
+
+Coordinator's diagnosis was exactly right: `memclr_asm`/`memset_asm` (`src/port/stubs/
+generated_c_stubs.cpp`, `tools/port/gen_boot_stubs.py`'s generic output) were pure logging-only
+stubs -- print a one-time "STUB: ... called" marker, touch no memory at all. `cDvd::pullReadQueue()`'s
+`memclr_asm(q, sizeof(cDvdQueue))` (meant to zero a reused `cDvdQueue` slot's state machine) was a
+complete no-op, so a reused slot kept its previous request's `m_Rno0`/`m_Rno1`/status/`mramSize` --
+section 20's exact bug. This is a real, general failure mode of the mechanical stub generator: it
+treats every undefined symbol identically (a call-site marker with a default return value), which is
+correct for genuinely hardware-dependent calls (GX submission, AX/ADX sound, VI/PAD) but silently
+wrong for any stub whose *whole contract* is a side effect the caller depends on.
+
+**Fixed** (real semantics, not logging):
+- `memclr_asm`/`memset_asm` (`src/port/stubs/generated_c_stubs.cpp`) -- now real `memset` calls.
+  Root cause of section 20's stale-`cDvdQueue`-slot bug; the font read (and everything before it that
+  used a fresh/reused DVD queue slot) now genuinely completes (`DVD: Read Ok`, real `OSReport` text --
+  see below).
+- `OSInitSemaphore`/`OSInitThreadQueue` (same file) -- same class of bug (a struct the game reads
+  afterward, e.g. `OSWaitSemaphore`/`OSSleepThread`-shaped code checking `queue.head`), fixed to
+  actually zero the queue/set the count instead of doing nothing.
+- `OSReport` -- was logging-only (a single generic "STUB: OSReport() called" marker, the actual
+  format string and arguments discarded); now a real `vfprintf(stderr, fmt, ap)` pass-through. High
+  diagnostic value (this is the game's own `printf`-shaped log channel, `"DVD: Read File: %s"` etc.
+  throughout `dvd.cpp`) and zero correctness risk (no return value or output parameter any caller
+  depends on). This alone is what let section 20's actual bug become visible in this session's own
+  further debugging (real "DVD: Read Ok"/"DVD: Read Error!!!" lines instead of one generic marker).
+- The whole `PSMTX*`/`PSVEC*` paired-single matrix/vector family (18 functions, `generated_c_stubs.
+  cpp`) -- every one filled its output matrix/vector with nothing (same bug class: Aurora doesn't
+  implement these either, docs section 7, so this reimplements the well-known Dolphin SDK formulas
+  directly, no hardware dependency). `PSMTXIdentity`, `PSMTXCopy`, `PSMTXConcat`, `PSMTXScale`,
+  `PSMTXTrans`, `PSMTXTransApply`, `PSMTXTranspose`, `PSMTXRotRad`, `PSMTXRotAxisRad`, `PSMTXQuat`
+  (found `Quaternion`'s real layout in `include/vec.h` after all), `PSMTXInverse` (general 3x3
+  cofactor inverse + translation), `PSMTXMultVec`/`PSMTXMultVecArray`/`PSMTXMultVecSR`/
+  `PSMTX44MultVec`, `PSVECAdd`/`PSVECSubtract`/`PSVECScale`/`PSVECCrossProduct`/`PSVECDotProduct`.
+  `PSMTXIdentity` is the very first stub line every boot run prints -- these run constantly.
+
+**Audited, left as logging-only stubs, with reasoning** (categories from the coordinator's list --
+memory/string ops, tick/time, interrupt enable/disable, cache ops, queue/list ops, struct-filling
+`*Init`s -- checked against the ~413 stub names across `src/port/stubs/*.cpp`):
+- No `OSGetTick`/`OSGetTime`/`DCFlushRange`/`ICInvalidateRange`/`memcpy_asm` appear in the stub set
+  at all -- not undefined symbols, so either unused on this boot path or already satisfied by a real
+  implementation (Aurora's or this repo's own), not a stub gap.
+- `OSDisableInterrupts`/`OSEnableInterrupts`/`OSRestoreInterrupts` -- return a fixed `0`/enum value;
+  every real caller pattern in this codebase is the self-consistent `BOOL old = OSDisableInterrupts();
+  ...; OSRestoreInterrupts(old);` shape, where a constant stub value round-trips correctly regardless
+  of what it actually is (no other code branches on the *value* itself on this boot path) -- left
+  alone, no bug found.
+- `OSGetFontEncode`/`OSGetConsoleType`/`OSGetConsoleSimulatedMemSize`/`DBIsDebuggerPresent`/
+  `OSSetErrorHandler`/`OSSetSaveRegion`/`OSInitAlarm`/`ADXGC_SetupDvdFs`/`init_dbmodule`/
+  `mwPlyInitSfdFx` -- either intentionally-designed stubs (`OSGetConsoleType` returning "not dev
+  console" is load-bearing for skipping the host-filesystem branch, section 2) or genuinely
+  Phase-4/5 material (sound/FMV/SN-debugger/font-ROM) with no consumer before the current blocker;
+  not touched.
+- `OSInitFont` -- fills a font-metrics struct the real IPL font ROM would provide; no host equivalent
+  exists (no ROM image), and the actual message-font system (section 20-21) reads its own `.fnt`
+  files from disc instead, not this struct -- left alone, **TO VERIFY** if anything before the title
+  screen reads it.
+- `VISetPostRetraceCallback`'s registered callback is never invoked (no real VI vsync driving it yet)
+  -- flagged as a real, *not yet fixed* gap for later: the per-frame `cDvd::Watcher()` polling loop
+  that drives *asynchronous* (non-blocking) DVD reads to completion is normally reached by way of the
+  frame loop this callback would drive; every DVD read seen on the boot path so far has been the
+  *synchronous* (`blockRead`) kind, which doesn't need it, so this hasn't blocked anything yet --
+  worth checking again once an async read is reached.
+- `Render_init`/`Render`/`Render_before` and the rest of the GX-family stubs -- genuinely need a real
+  Aurora GX backend wired up, not fakeable with a local formula the way PSMTX/PSVEC were; left alone,
+  Phase 4 material.
+- The remaining ~370 stub names (full list groupable by `src/port/stubs/*.cpp`'s own comments) are
+  either Phase 5 sound/FMV/CRI-middleware calls, per-class virtual-function stubs for classes not
+  reachable yet, or genuinely dead code on this boot path (never called before the current blocker,
+  confirmed by their absence from every "STUB: ... called" line this session's actual runs printed)
+  -- not audited function-by-function this pass; the methodology above (does the caller read a struct
+  or return value the stub is supposed to fill?) is the test to apply as each one is actually reached.
+
+**Verified**: `re4_boot` builds clean with all of the above; rerunning the boot sequence shows real
+`OSReport`-formatted `"DVD: Read File: ..."`/`"DVD: Read Ok"`/`"DVD: Read Error!!!"` lines (previously
+invisible behind the generic stub marker) and the font read's queue slot completing correctly instead
+of section 20's silent `readExit()`-without-`readInit()` bug -- see section 21 for what happens next.
+
+## 18b. `cDvd::ReadCheck`'s missing `return` -- a real UB/ABI gap, fixed under `TARGET_PC`
+
+With section 18a's fix landed, `Font/common_p.fnt`'s read now genuinely completes (`DVD: Read Ok`),
+but `MessageControl::loadFont()` still logged "Font load failed" -- traced to
+`cDvd::ReadCheck(int, int*, int*, void**)` (`src/game/dvd.cpp`): the vendor source has **no explicit
+`return` statement at all** in this overload; on real PPC/the original compiler, `readCheckMain()`'s
+result is still sitting in r3 when the function falls off its closing brace (nothing between the
+call and the return touches that register), so it "returns" the right value for free -- a real,
+load-bearing register-reuse quirk of the original ABI, not a decompilation gap (confirmed: no
+`NON_MATCHING` marker on this file, this shape is the byte-identical original). That is undefined
+behavior in portable C++ with no such guarantee on arm64/clang, and it observably does not reproduce
+here. Fixed under `TARGET_PC` only (the `#else` branch is textually identical to the original, byte
+identity for the matching build is unaffected -- confirmed safe to insert lines at this point in the
+file: `dvd.cpp`'s last `#line` directive is at line 1175, well before this function, and no
+`__LINE__`/`HALT`/`ASSERTMSGLINE` call follows it anywhere in the rest of the file) by capturing
+`readCheckMain()`'s result in a local and returning it explicitly.
+
+**Milestone**: `MessageControl::loadCommonFont()`'s `Font/common_p.fnt` read now succeeds end to end
+(open, read, `ReadCheck` reports success) -- past section 20's blocker entirely.
+
 ## 18. Ptr32 `operator[]` regression fixed (RE4_U32_32=OFF), baseline reconfirmed
 
 Coordinator's read of the `cam_ctrl.cpp` error (section 17) was right: an ambiguous `operator[]`
@@ -884,5 +982,40 @@ across the *whole* boot sequence from the first DVD read onward (not just this o
 state, which would narrow this considerably. Not attempted further this pass -- budget-limited, this
 is a real, well-isolated vendor state-machine bug (or a port-environment trigger of one), not a
 one-line fix.
+
+**Resolved this session** (sections 18a/18b): the stub audit's `memclr_asm` fix was exactly this bug
+-- `pullReadQueue()`'s slot-clear was a no-op, not the read/pool-exhaustion logic itself. Confirmed
+directly: rerunning with the fix shows real `OSReport` output (`memset_asm`/`OSReport` also fixed,
+section 18a) all the way through, no more stale-slot behavior, no more "Font load failed".
+
+## 21. Next blocker: the loaded `.fnt`'s on-disc fields are unswapped (big-endian), Phase 3 territory
+
+With sections 18a/18b's fixes, `Font/common_p.fnt` now genuinely opens, reads, and reports success
+(`DVD: Read Ok`) -- but crashes one step later, inside `MessageFont::create()` (`src/game/mes.cpp`),
+on `t->pTex->width` where `t->pTex` is null (fault address `0x2`, consistent with a null `TEXHeader*`
+plus `width`'s small field offset).
+
+**Diagnosis**: `create()`'s loop that sets `t->pTex = th` for each of `m_tpl`'s texture descriptors
+(`for (i = 0; i < m_tpl->numDescriptors; i++, d++, t++) { ...; t->pTex = th; ... }`, `src/game/
+mes.cpp` ~line 211) only runs `m_tpl->numDescriptors` times -- if that field reads as `0`, the loop
+body (and the `t->pTex` assignment) never executes at all, leaving `t->pTex` at whatever `memclr_asm`
+(now correctly zeroing, section 18a) initialized it to: null. `numDescriptors` is a raw `u32` field
+read straight off the disc, big-endian, with no byte-swap applied before this code interprets it on a
+little-endian host -- exactly the class of bug the coordinator's section 19 byte-swap hypothesis (for
+the sound header table) predicted, now confirmed for a second, different on-disc format (TPL-style
+texture-palette headers, this time for the font system specifically, not the sound stream table).
+This is genuinely **Phase 3 work already named in the plan** (per this session's own task brief:
+"per-format load-time byte swappers for boot formats as planned ..., not ad hoc") -- the descriptor-
+array relocation code immediately above this loop (`d->textureHeader = (TEXHeader*) ((u8*) addr +
+(u32) d->textureHeader); ...`) already has its pointer-relocation side handled (`Ptr32<T>`/raw-offset
+arithmetic, Phase 2), but nothing swaps the raw big-endian integer fields (`numDescriptors`, the
+offsets themselves, `width`/`height`/`format` once reached) before that arithmetic runs on them.
+
+**Not attempted this pass**: a real fix needs a systematic byte-swap step for this format (and
+probably the sibling TPL-descriptor format the title-screen archive already uses, docs/port-phase2.md
+step 4's `ARC_PTR`/TPL table), not a one-off patch to this one call site -- exactly the "systematic,
+not ad hoc" boundary this session's brief named. Whoever picks this up next should look at whether
+Phase 2's TPL/`TEXDescriptor`-family structs already have (or need) a `Swap32`-shaped helper applied
+right after the raw disc read, before any relocation arithmetic touches the same bytes.
 
 No window renders this session (crash still predates GX/VI frame submission) -- no screenshot.

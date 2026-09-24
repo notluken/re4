@@ -1475,7 +1475,21 @@ int cDvd::ReadCheck(int id, int* mram_size, int* aram_size, void** addr)
 {
     DvdReadInfo info;
 
+#ifdef TARGET_PC
+    // No explicit `return` here at all in the original: on real PPC, `readCheckMain`'s result is
+    // still sitting in r3 (nothing after it touches that register on the taken-or-not-taken path),
+    // so the function "returns" it for free -- a real, load-bearing register-reuse quirk of the
+    // original compiler, not a decompilation gap (this file's `NON_MATCHING`/bytecmp status is
+    // unaffected; nothing here changes for that build, see the #else branch below). That is
+    // undefined behavior in C++ with no ABI guarantee on arm64/clang, and observably does not
+    // reproduce here: `MessageControl::loadFont()` saw a real "DVD: Read Ok" from `readCheckMain`
+    // but still read this function's return value as "not 1" (docs/port-boot.md section 20's
+    // follow-up). Captures and returns the value explicitly instead, purely a host-side fix.
+    int ret = readCheckMain(id, &info);
+    if (ret == 1) {
+#else
     if (readCheckMain(id, &info) == 1) {
+#endif
         if (mram_size) {
             *mram_size = info.mramSize;
         }
@@ -1486,6 +1500,9 @@ int cDvd::ReadCheck(int id, int* mram_size, int* aram_size, void** addr)
             *addr = (void*) info.addr[0][0];
         }
     }
+#ifdef TARGET_PC
+    return ret;
+#endif
 }
 
 // Poll variant used by read.cpp that also fills a DvdReadInfo.
