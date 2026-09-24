@@ -591,3 +591,116 @@ contents/vtable, or checking whether `aurora_dvd_open()` needs to fully settle (
 thread of its own?) before the first read can safely be queued.
 
 No window ever opens this session (crash predates any GX/VI frame submission) -- no screenshot.
+
+## 14. SDK header parity check and the real cause of section 13's DVD-worker crash (2026-09-24)
+
+The coordinator's hypothesis for section 13's blocker was a `DVDFileInfo`/`DVDCommandBlock` struct-layout
+mismatch between this repo's `include/dolphin/dvd.h` and Aurora's own copy. Checked directly:
+`diff include/dolphin/dvd.h ../aurora/include/dolphin/dvd.h` -- the two are **byte-identical** apart from
+three lines this repo doesn't need (`DVDConvertEntrynumToPath`, `DVDGetDOLLocation` declarations, one
+comment). `DVDCommandBlock`/`DVDFileInfo` themselves are word-for-word the same struct in both copies, and
+`RE4_GAME_INCLUDES` is searched before `${RE4_AURORA_DIR}/include` (`CMakeLists.txt`), so game code
+resolves to this repo's copy -- which, being identical, produces the same in-memory layout Aurora's own
+`dvd.cpp` compiles against. **The layout-mismatch hypothesis does not hold for this struct.**
+
+`CARDInit` (section 13, point 5) *is* a genuine confirmed case of the hypothesis's general shape (a
+same-named function/struct that silently disagrees between this repo's SDK header and Aurora's own,
+already fixed there) -- but it is a signature mismatch (arg count), not a size/offset mismatch, and it
+was already fixed before this pass.
+
+### Root cause, found with lldb (breakpoint on `readFromHandle`, inspected `handle`'s vtable pointer)
+
+Not a struct-layout bug at all: a **field-ownership conflict**. The real GameCube SDK's contract leaves
+`DVDFileInfo::cb.userData` free for the caller once `DVDOpen()` returns -- the real hardware's low-level
+DVD driver never reads it again, and this game relies on exactly that: `src/game/dvd.cpp`'s
+`cDvdQueue::fileReadAsync()` (vendor code, byte-identical, cannot change) does
+`m_Info.cb.userData = this;` right after opening, storing its own bookkeeping pointer there. Aurora's host
+reimplementation of `DVDFastOpen()`/`DVDOpen()` (`../aurora/lib/dolphin/dvd/dvd.cpp`) instead uses that
+same field for its **own** internal handle object (`CommandDataNod*`/`CommandDataOverlay*`, needed because
+a host build has no LBA-addressable disc hardware and must keep a live file handle per open file). The
+game's write clobbers Aurora's handle the moment the vendor code runs its normal open-then-read sequence;
+the next async read's `getCommandHandle()` then does a virtual call through the game's `this` pointer
+reinterpreted as `CommandDataBase*` -- the `0x20142010039`/`0x100ce39c8`-shaped "vtable pointer" was
+exactly that: a live heap pointer to unrelated game state, not a corrupted/glued 32+32 value. Confirmed
+live: `lldb -o "b (anonymous namespace)::readFromHandle" -o run` showed `handle` sitting 8 bytes before its
+own `DVDCommandBlock*` in the game heap and dereferencing to garbage, consistent with reading the game's
+own nearby allocation instead of Aurora's heap-allocated handle object.
+
+**This is a genuine Aurora bug** (real-hardware-incompatible reuse of a caller-owned field), not a config
+mismatch this repo's call sites could route around -- proven with the vendor source (which cannot be
+changed) plus a live inspection of Aurora's own internal state, not asserted from the RTL/struct level
+alone.
+
+### Fix: `tools/port/aurora-patches/0001-dvd-userdata-sidetable.patch`
+
+Per the port rules (never commit into Aurora's history), this is a patch file, applied to the Aurora
+checkout's working tree by `CMakeLists.txt` at configure time (`RE4_BUILD_BOOT`, right before
+`add_subdirectory`), idempotently -- `git apply --reverse --check` gates a second application, so
+reconfiguring twice or with an already-patched checkout is a no-op, not an error. It moves Aurora's own
+per-file handle out of `cb.userData` into a private side table (`std::unordered_map<DVDCommandBlock*,
+CommandDataBase*>`, keyed by the stable `&fileInfo->cb` pointer, mutex-guarded for the worker thread) in
+`../aurora/lib/dolphin/dvd/dvd.cpp`: `getCommandHandle()`, `DVDFastOpen()`, `DVDClose()`,
+`DVDPrepareStreamAsync()` all updated; the game-visible `cb.userData` field is no longer touched by Aurora
+at all, restoring the real hardware's contract. Verified: `re4_boot` links and runs past the DVD worker
+thread crash entirely (see milestone below); default host build (`RE4_U32_32=OFF`, `build-pc/`) untouched
+-- this pass's only repo-tracked change is inside `CMakeLists.txt`'s `RE4_BUILD_BOOT` block, `ctest` still
+2/2 (the pre-existing `re4_game_all` `cam_ctrl.cpp` build error under a full `cmake --build build-pc`,
+unrelated to this change and not touched, is a separate, already-present issue -- **TO VERIFY** whether
+it's the same "two pre-existing failures" section 9 already documented or a third one; not chased this
+pass, out of scope).
+
+### Milestone: past the DVD worker thread entirely
+
+Rerunning section 12's `lldb` command after the patch: every `STUB:`/`[info]`/`[debug]` line from section
+13 reproduces identically, the disc read that used to crash the DVD worker thread now succeeds, and the
+process runs much further into `systemStartInit()` -- through `CardInit()`, `Render_init()`, ARAM setup,
+and into `SndInit()` -- before hitting a new, unrelated blocker below.
+
+### Current blocker: `SndInit()` dereferences a raw GameCube absolute address
+
+```
+* thread, EXC_BAD_ACCESS, address=0x812fc000
+  frame #0: Snd_str_blk_init(blk_no=1, data=0x812fc000) at snd_sub3.cpp:29
+      -> blk->num = *p++;   (p = (u32*) data)
+  frame #1: SndInit() at snd.cpp:125
+  frame #2: ::systemStartInit() at main.cpp:630
+```
+
+**Diagnosis**: `src/game/snd.cpp` hardcodes `#define SND_DATA_TOP 0x80370000` (vendor code, byte-identical
+-- a literal fixed GameCube main-memory address, real hardware convention: sound data is DMA'd straight to
+a fixed MEM1 address and read back through the same literal address, never through this repo's
+`Ptr32<T>`/arena-relative handle scheme). `0x812fc000` is `SND_DATA_TOP` plus an accumulated `ALIGN32`
+offset (`snd.cpp:108`), still in the same fixed-absolute-address family. Nothing in this port's arena
+(`re4_port`'s embedded, ASLR-placed heap, section 13's `InitMem1()`) lives at a literal `0x80xxxxxx` host
+address, so the dereference faults. This is exactly the sound subsystem Phase 5 already flags as deferred
+(section 2, section 6, section 7's Aurora-mismatch survey: no Aurora library covers sound at all) -- fixing
+it needs a design decision this pass does not make: either give the port's own fixed-address literals (this
+one, and any others like it in `snd.cpp`/`sofdec.cpp`) a real backing allocation at load time (translate
+`SND_DATA_TOP`-relative addresses through a small table instead of a raw literal), or intercept
+`SndInit()`/`DvdRead(..., SND_DATA_TOP, ...)` under `TARGET_PC` before this literal is ever dereferenced.
+Not attempted this pass -- stopping here per the "stop at a design decision" instruction, sound/ARAM
+addressing is Phase 5 scope, not a small local fix.
+
+### SDK header parity, systematic pass (headline only -- not exhaustive this session)
+
+Time this pass went to root-causing and fixing the actual blocker (above) rather than a full systematic
+header-by-header diff across every SDK subsystem (DVD/CARD/OS/VI/GX/PAD/AR) the coordinator's task asked
+for; that remains open. What was actually diffed head-to-head this pass:
+
+| Subsystem | Files compared | Result |
+|---|---|---|
+| DVD | `include/dolphin/dvd.h` vs `../aurora/include/dolphin/dvd.h` | Identical structs; 3 harmless declaration/comment diffs (this repo doesn't need `DVDConvertEntrynumToPath`/`DVDGetDOLLocation`) |
+| CARD | `include/dolphin/card.h` `CARDInit(void)` vs Aurora's `CARDInit(const char*, const char*)` | **Confirmed mismatch** (signature, not layout) -- already fixed before this pass (section 13, point 5), via a file-scope `asm("_CARDInit")` alias calling the real two-arg symbol with `(nullptr, nullptr)` |
+
+**Not yet compared this pass** (per the coordinator's task list, still open): OS threads/alarms/mutex/
+message queues, VI, GX object types (`GXTexObj`/`GXTlutObj`/`GXFifoObj`/`GXRenderModeObj`), PAD, AR. Given
+none of these have yet produced a crash on the boot path beyond `SndInit()`'s literal-address issue above,
+and this pass's time went to the two real, load-bearing bugs found by working the actual crash chain
+(DVD-worker fix, this section's write-up) rather than a header-by-header audit with no crash yet motivating
+it, a full systematic table is deferred to whichever session reaches the point those subsystems' real
+implementations (not stubs) start running. **TO VERIFY / open work**: build that table before GX/VI start
+mattering (past `SndInit`), since `GXTexObj`-family objects are exactly the kind of struct this repo's own
+`Ptr32<T>` conversions could plausibly disagree with Aurora's copy on, unlike DVD/CARD which turned out
+copy-identical.
+
+No window opens this session either (crash still predates any GX/VI frame submission) -- no screenshot.

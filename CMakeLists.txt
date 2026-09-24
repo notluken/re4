@@ -329,6 +329,33 @@ if (RE4_BUILD_BOOT)
   endif()
   set(AURORA_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
   set(AURORA_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+  # Apply this repo's Aurora patches (tools/port/aurora-patches/*.patch) to the checkout's
+  # working tree, idempotently (git apply --reverse --check tells us a patch is already in),
+  # every configure. Never committed into Aurora's own history -- see the port rules and the
+  # patch files' own header comments for why each one exists.
+  file(GLOB RE4_AURORA_PATCHES "${RE4_ROOT}/tools/port/aurora-patches/*.patch")
+  list(SORT RE4_AURORA_PATCHES)
+  foreach(_patch IN LISTS RE4_AURORA_PATCHES)
+    execute_process(
+      COMMAND git apply --reverse --check "${_patch}"
+      WORKING_DIRECTORY "${RE4_AURORA_DIR}"
+      RESULT_VARIABLE _patch_already_applied
+      OUTPUT_QUIET ERROR_QUIET
+    )
+    if (NOT _patch_already_applied EQUAL 0)
+      message(STATUS "RE4_BUILD_BOOT: applying Aurora patch ${_patch}")
+      execute_process(
+        COMMAND git apply "${_patch}"
+        WORKING_DIRECTORY "${RE4_AURORA_DIR}"
+        RESULT_VARIABLE _patch_apply_result
+      )
+      if (NOT _patch_apply_result EQUAL 0)
+        message(FATAL_ERROR "RE4_BUILD_BOOT: failed to apply Aurora patch ${_patch} to ${RE4_AURORA_DIR}")
+      endif()
+    endif()
+  endforeach()
+
   add_subdirectory("${RE4_AURORA_DIR}" aurora_build EXCLUDE_FROM_ALL)
 
   # cmake/boot_exclude.txt: one path (relative to repo root) per line, blank lines and #-comments
