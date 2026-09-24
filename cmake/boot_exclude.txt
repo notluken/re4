@@ -35,7 +35,6 @@ src/game/act_btn.cpp
 src/game/datactrl.cpp
 src/game/esp0a.cpp
 src/game/game.cpp
-src/game/main_sub.cpp
 src/game/mercenaries.cpp
 src/game/objRocket.cpp
 src/game/pl_ashley.cpp

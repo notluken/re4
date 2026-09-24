@@ -152,4 +152,84 @@ RE4_STUB_VOID(cPlAshley::setFace(int))
 RE4_STUB_VOID(cPlAshley::setModel())
 #undef RE4_STUB_VOID
 
+// -- main_sub.cpp: newly un-excluded this pass (docs/port-boot.md section 26 -- Render_before()
+// is now real code, no longer a stub), which surfaced these previously-unreached undefined
+// symbols for the first time (nothing on the boot path called into main_sub.cpp's own body
+// before, so the linker never needed them).
+extern "C" {
+// OSStopwatch: real timing utility, safe as a no-op (docs/port.md convention -- a stat/debug
+// facility with no gameplay-visible side effect; StopwatchInit()/etc. just read back whatever
+// these leave in `sw`, and a zeroed OSStopwatch reads as "0 time elapsed", not a crash).
+void OSInitStopwatch(OSStopwatch* sw, char* name)
+{
+    if (sw) {
+        *sw = OSStopwatch{};
+    }
+}
+void OSResetStopwatch(OSStopwatch* sw) { (void) sw; }
+void OSStartStopwatch(OSStopwatch* sw) { (void) sw; }
+void OSStopStopwatch(OSStopwatch* sw) { (void) sw; }
+
+// OSLink/OSUnlink: real DLL-module relocation (config/G4BE08's REL loader) -- no host equivalent
+// exists yet (Phase 4+ territory, module RELs are not loaded by re4_boot at all). BOOL FALSE (0)
+// is the documented "failed" return every real caller of these already checks (main_sub.cpp's
+// own DLL_EPILOG-guarded call sites), not a silent success.
+BOOL OSLink(OSModuleInfo* newModule, void* bss)
+{
+    (void) newModule;
+    (void) bss;
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: OSLink() called\n"); warned = true; }
+    return 0;
+}
+BOOL OSUnlink(OSModuleInfo* oldModule)
+{
+    (void) oldModule;
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: OSUnlink() called\n"); warned = true; }
+    return 0;
+}
+
+// VISetBlack/VISetNextFrameBuffer/VIGetNextField: real VI presentation, Phase 4 render-path work
+// (docs/port-boot.md section 26's GX/VI parity table -- Aurora's own aurora_vi implements window/
+// VIConfigure/VIFlush but not these three raw SDK entry points). Logging stubs, same shape as
+// every other not-yet-wired subsystem call on this boot path; VIGetNextField's return (0/1, which
+// field is about to scan out) is read by main_sub.cpp only to choose a debug on-screen coordinate,
+// never dereferenced as a pointer -- 0 is a safe, always-valid field index.
+void VISetBlack(BOOL black)
+{
+    (void) black;
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: VISetBlack() called\n"); warned = true; }
+}
+void VISetNextFrameBuffer(void* fb)
+{
+    (void) fb;
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: VISetNextFrameBuffer() called\n"); warned = true; }
+}
+u32 VIGetNextField(void)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: VIGetNextField() called\n"); warned = true; }
+    return 0;
+}
+} // extern "C"
+
+// SceSys: global cSceSys instance, normally defined in sce_sys.cpp (still excluded,
+// cmake/boot_exclude.txt -- pointer<->integer cast category, not yet reached). cSceSys's own
+// declaration (include/sce_sys.h) is a plain aggregate (no virtuals, no user constructor), so a
+// zero-initialized instance here is exactly what sce_sys.cpp's own `cSceSys SceSys;` would have
+// produced before SceSysInit() ever touches it -- main_sub.cpp only reads its debug-display
+// fields, never calls a method on it.
+cSceSys SceSys;
+
+// cSceSys::checkCTaskRange(): also normally defined in sce_sys.cpp (excluded, see above);
+// main_sub.cpp's Render_done() only checks the returned range for a debug on-screen prim count --
+// 0 ("no scenario task currently running") is a safe, always-valid answer.
+int cSceSys::checkCTaskRange()
+{
+    return 0;
+}
+
 #endif // TARGET_PC

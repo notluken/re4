@@ -5,6 +5,9 @@
 #include "em.h"
 #include "scheduler.h"
 #include "global.h"
+#ifdef TARGET_PC
+#include "port/ptr32.h"
+#endif
 
 // game/sce_sys.cpp: scenario task system. Scenario tasks run in scheduler slots 5..17 and are
 // linked into an ordering table (libgpu OTag) by priority.
@@ -130,7 +133,15 @@ void SceKill(void (*func)(int));
 // Em_flg row address as an integer (the original adds the list offset after the row index) (sce_at, sce_sys).
 static inline u32 emDeadRow(int n)
 {
+#ifdef TARGET_PC
+    // EM_FLG_ROW(n) is a real host pointer here (pG is a live in-memory pointer, global.h), not a
+    // GC on-disc offset -- GC32() compresses it to the same GameCube-looking address a plain
+    // (u32) cast gave on the original 32-bit target, instead of silently truncating a >4 GiB host
+    // pointer (this repo's arena.cpp/ptr32.h convention throughout).
+    return re4_port::GC32(EM_FLG_ROW(n));
+#else
     return (u32) EM_FLG_ROW(n);
+#endif
 }
 
 #endif

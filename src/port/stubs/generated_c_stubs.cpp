@@ -436,18 +436,6 @@ void DiedemoExec(int time, int type)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: DiedemoExec() called\n"); warned = true; }
 }
-// DLL_Link: `void DLL_Link(OSModuleHeader* pModule, void* pBss)`
-void DLL_Link(OSModuleHeader* pModule, void* pBss)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: DLL_Link() called\n"); warned = true; }
-}
-// DLL_Unlink: `void DLL_Unlink(OSModuleHeader* pModule)`
-void DLL_Unlink(OSModuleHeader* pModule)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: DLL_Unlink() called\n"); warned = true; }
-}
 // Draw_box: `void Draw_box(Vec* pBoxVec, u32 col, int flg)`
 void Draw_box(Vec* pBoxVec, u32 col, int flg)
 {
@@ -519,12 +507,6 @@ void DrawOba(cModel* pMod)
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: DrawOba() called\n"); warned = true; }
-}
-// EFBReSize: `void EFBReSize(int w, int h)`
-void EFBReSize(int w, int h)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: EFBReSize() called\n"); warned = true; }
 }
 // EmAtCheck: `void EmAtCheck(cModel* pMod)`
 void EmAtCheck(cModel* pMod)
@@ -772,13 +754,6 @@ u32 GetFree(int no)
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: GetFree() called\n"); warned = true; }
-    return 0;
-}
-// GetGameTime: `u32 GetGameTime(u32* ret_time, u32* ret_min, u32* ret_sec)`
-u32 GetGameTime(u32* ret_time, u32* ret_min, u32* ret_sec)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: GetGameTime() called\n"); warned = true; }
     return 0;
 }
 // GetPrimBuff: `void* GetPrimBuff(int size)`
@@ -1796,30 +1771,6 @@ void Render()
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: Render() called\n"); warned = true; }
 }
-// Render_before: `void Render_before()`
-void Render_before()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Render_before() called\n"); warned = true; }
-}
-// Render_done: `void Render_done()`
-void Render_done()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Render_done() called\n"); warned = true; }
-}
-// Render_init: `void Render_init()`
-void Render_init()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Render_init() called\n"); warned = true; }
-}
-// Render_swap: `void Render_swap()`
-void Render_swap()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Render_swap() called\n"); warned = true; }
-}
 // RotMatrixZXY: `void RotMatrixZXY(Mtx m, Vec* vec)`
 void RotMatrixZXY(Mtx m, Vec* vec)
 {
@@ -1924,24 +1875,6 @@ void SceSleep(int frames)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: SceSleep() called\n"); warned = true; }
 }
-// ScreenReSize: `void ScreenReSize(u16 w, u16 h)`
-void ScreenReSize(u16 w, u16 h)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ScreenReSize() called\n"); warned = true; }
-}
-// SecToTime: `void SecToTime(u32 sec, u32* ret_time, u32* ret_min, u32* ret_sec)`
-void SecToTime(u32 sec, u32* ret_time, u32* ret_min, u32* ret_sec)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SecToTime() called\n"); warned = true; }
-}
-// SelfScreenShotInit: `void SelfScreenShotInit()`
-void SelfScreenShotInit()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SelfScreenShotInit() called\n"); warned = true; }
-}
 // SEQInit: `void SEQInit(void)`
 void SEQInit(void)
 {
@@ -1966,24 +1899,6 @@ void SetFree(int no, u32 val)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: SetFree() called\n"); warned = true; }
 }
-// SetGameTime: `void SetGameTime()`
-void SetGameTime()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SetGameTime() called\n"); warned = true; }
-}
-// SetNearClipDist: `void SetNearClipDist(f32 dist)`
-void SetNearClipDist(f32 dist)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SetNearClipDist() called\n"); warned = true; }
-}
-// SetNoScissor: `void SetNoScissor()`
-void SetNoScissor()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SetNoScissor() called\n"); warned = true; }
-}
 // SetOrientationZX: `void SetOrientationZX(Vec* z, Vec* x, Mtx m)`
 void SetOrientationZX(Vec* z, Vec* x, Mtx m)
 {
@@ -2002,12 +1917,6 @@ void SetPrimBuffPtr()
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: SetPrimBuffPtr() called\n"); warned = true; }
-}
-// SetScissorState: `void SetScissorState()`
-void SetScissorState()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SetScissorState() called\n"); warned = true; }
 }
 // UNRESOLVED: SetSubBulldozer -- candidates: ['void SetSubBulldozer(void (*ft)(cEm*), void (*ftdm)(cEm*));', 'void (*pAux)(cEm*);']
 // ShadowInit: `void ShadowInit()`
@@ -2042,12 +1951,6 @@ f32 SQRTF(f32 x)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: SQRTF() called\n"); warned = true; }
     return 0.0f;
-}
-// StopwatchInit: `void StopwatchInit()`
-void StopwatchInit()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: StopwatchInit() called\n"); warned = true; }
 }
 // SubCharCheckHealing: `int SubCharCheckHealing()`
 int SubCharCheckHealing()
@@ -2110,12 +2013,6 @@ void SYNSetMasterVolume(SYNSYNTH* synth, s32 dB)
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: SYNSetMasterVolume() called\n"); warned = true; }
-}
-// systemVISetBlack: `void systemVISetBlack(int sw)`
-void systemVISetBlack(int sw)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: systemVISetBlack() called\n"); warned = true; }
 }
 // TEXGet: `TEXDescriptor* TEXGet(TEXPalette* pal, u32 id)`
 TEXDescriptor* TEXGet(TEXPalette* pal, u32 id)
@@ -2249,10 +2146,8 @@ u8 min_lod{};
 ReadModule PlReadModule{};
 // pSaveData: `extern SAVE_DATA_HEAD* pSaveData;`
 SAVE_DATA_HEAD* pSaveData{};
-// Rmode: `extern GXRenderModeObj Rmode;`
-GXRenderModeObj Rmode{};
-// ScreenShotTriggerType: `extern int ScreenShotTriggerType;`
-int ScreenShotTriggerType{};
+// Rmode, ScreenShotTriggerType: now defined for real by src/game/main_sub.cpp (docs/port-boot.md
+// section 26 -- no longer excluded), removed from here to avoid a duplicate-symbol link error.
 // ThermoTlut: `extern GXTlutObj ThermoTlut;`
 GXTlutObj ThermoTlut{};
 // WepReadModule: `extern ReadModule WepReadModule;`

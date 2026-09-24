@@ -455,7 +455,14 @@ void DrawTpl(TEXPalette* tpl, int x, int y, int w, int h)
     TEXDescriptor* desc;
     TEXHeader* hdr;
     CLUTHeader* clut;
+#ifdef TARGET_PC
+    // tpl is a real host pointer here (not an on-disc/relocated field), so this needs the same
+    // GC32() compression the rest of this codebase already uses at this "does this pointer look
+    // like a GameCube address" boundary instead of a (u32) cast that would just truncate it.
+    u32 addr = re4_port::GC32(tpl);
+#else
     u32 addr = (u32) tpl;
+#endif
 
     if (addr < 0x80000000 || addr > 0x82FFFFFF) {
         return;
@@ -477,9 +484,15 @@ void DrawTpl(TEXPalette* tpl, int x, int y, int w, int h)
         }
     }
     hdr = desc->textureHeader;
+#ifdef TARGET_PC
+    if (re4_port::GC32(hdr) > 0x82FFFFFF) {
+        return;
+    }
+#else
     if ((u32) hdr > 0x82FFFFFF) {
         return;
     }
+#endif
     if (hdr->format - 8 <= 1) {
         GXInitTexObjCI(&texObj, hdr->data, hdr->width, hdr->height, hdr->format, 0, 0, 0, 0);
         clut = desc->CLUTHeader;
