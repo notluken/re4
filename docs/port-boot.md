@@ -1631,3 +1631,94 @@ genuinely working, not just inferred from Aurora's own log lines.
 **Verified no regression**: `ctest` 4/4 (`build-pc-boot`, `RE4_U32_32=ON`) and 3/3 (`build-pc`, default
 `OFF`), both rebuilt and rerun. Only `include/port/`/`src/port/` touched this round (no `src/game/`
 edit) -- no remote matching-build round trip needed per the port rules.
+
+## 30. FST-address abort fixed; array 24 root-caused and fixed; new frontier past both (2026-09-24)
+
+### FST-address `GC32()` abort (section 29 part 1's blocker)
+
+`cDvd::Init()` (`src/game/dvd.cpp`) cast Aurora's real `DVDGetFSTLocation()` -- a pointer into
+Aurora's own private `std::vector<FSTEntry>`, ordinary host heap memory with zero relationship to
+the GC address window -- straight into a `GC32()`-checked `u32`, aborting exactly the way the port
+rules say it must (`include/port/arena.h`'s "no game-visible pointer to host malloc memory"). Confirmed
+`FstSize` (the only thing this cast feeds) is dead code: grepped, nothing in `src/game` or any REL
+module ever reads it again. Fixed with a small, ordinary linked-in-global placeholder
+(`re4_port::GetFstPlaceholder()`, `include/port/dvd.h`/`src/port/dvd.cpp`) standing in for the real
+address under `TARGET_PC` -- GC32()-safe by construction (section 28's g_base-anchoring already makes
+every ordinary global valid), no check weakened. `#else` branch byte-identical to the original.
+**Verified**: `re4_boot` no longer aborts here; remote matching-build round trip (`dtk shasum` 0
+non-OK, `asmcheck.py --all` TOTAL 231 unchanged); `ctest` 4/4 (`ON`) / 3/3 (`OFF`); `re4_game_all -k 0`
+failing-file set unchanged (33 files, diffed directly). Pushed (`32e7926d`).
+
+### GX array 24 ("indexed XF load from unmapped array"): root cause found and fixed
+
+The coordinator's array-24 = `GX_LIGHT_ARRAY` hypothesis (section 29 part 3) was confirmed by reading
+`../aurora/include/dolphin/gx/GXEnum.h`'s `GXAttr` enum directly (`GX_POS_MTX_ARRAY`=21,
+`GX_NRM_MTX_ARRAY`=22, `GX_TEX_MTX_ARRAY`=23, `GX_LIGHT_ARRAY`=24) -- but the actual mechanism was a
+different, broader bug than "the game bypasses `GX*` and pokes the raw FIFO": `include/gx.h`'s own
+`GXPosition3f32`/`GXPosition3s16`/`GXColor4u8`/`GXNormal3f32`/`GXNormal3s8`/`GXTexCoord2f32`/
+`GXPosition2u16`/`GXTexCoord2s16`/`GXMatrixIndex1u8` (the write-gather-pipe convenience wrappers this
+repo's own header defines for ProDG game code, since it cannot include the CodeWarrior-only real SDK
+header) are declared `static inline` -- internal linkage, so every translation unit that includes this
+header got its OWN private copy, which wrote to `GXWGFifo`, a real hardware MMIO absolute address on
+target, stubbed on host as a plain 1-element dummy array (`src/port/stubs/manual_stubs.cpp`, section 7).
+Aurora (`../aurora/lib/dolphin/gx/GXVert.cpp`) separately provides REAL, external, same-named
+implementations of all but the last of those (writing into its own software GX FIFO) -- but since our
+header's copies are `static inline`, they shadow Aurora's real symbols completely; no TU that includes
+`include/gx.h` ever calls Aurora's version for these names. Confirmed live: a single `GXBegin()`/4-or-8
+vertex quad draw had SOME of its per-vertex fields (whichever GX*() calls the header does NOT shadow,
+e.g. those reached through other headers/paths) reach Aurora's real FIFO while others (position/color/
+texcoord, all shadowed) silently vanished -- a desynced, partial vertex byte stream is exactly what
+produces "vertex data not evenly divisible" warnings and, further downstream, a garbage indexed-load
+opcode decoded as array 24.
+
+**Fix**: `include/gx.h`, `TARGET_PC` branch -- declare (don't define) the 8 functions Aurora has a real
+symbol for, so `libaurora_gx.a` satisfies them for every TU (matching how `GXBegin`/`GXSetArray`/... a
+few lines down in the same header already worked). `GXMatrixIndex1u8` (this repo's own invented name
+for a raw per-vertex matrix-index byte write; no real SDK/Aurora equivalent exists) is left as a
+documented, discarding stub -- not on the boot/title-screen render path (only `id_sys.cpp`/
+`dbmodule.cpp`/`esp01.cpp` call it, none reached yet); a real fix needs either an Aurora patch exposing
+a public FIFO-write API (today's `aurora::gx::fifo` is a private, unheadered internal namespace,
+`lib/gx/fifo.hpp`, not installed) or waiting until one of those three call sites is actually reached.
+`#else` branch (the matching build) is untouched, byte-for-byte.
+
+**Verified**: the `[fatal] indexed XF load from unmapped array 24` no longer occurs; the boot sequence
+runs measurably further (through `SS/cmn/title.snd`'s DVD read, past several more real `GXBegin`/`GXEnd`
+draws, only "vertex data not evenly divisible" *warnings* remain -- consistent with `GXMatrixIndex1u8`
+or another still-unrouted call still contributing to some draws, not yet chased further). Remote
+matching-build round trip (`dtk shasum` 0 non-OK, `asmcheck.py --all` TOTAL 231 unchanged); `ctest` 4/4
+(`ON`) / 3/3 (`OFF`); `re4_game_all -k 0` failing-file set unchanged (33 files, diffed directly). Pushed
+(`8cce0f76`).
+
+### New frontier: `EprintfDrawing()` null-pointer dereference
+
+Past both of the above, `lldb` shows a new crash, reached only now that boot progresses this far:
+
+```
+* thread #4, EXC_BAD_ACCESS (code=1, address=0x0)
+  frame #0: EprintfDrawing() at eprintf.cpp:383 (vendor line, #line-mapped -- inside the
+             `for (i = 0; i < MESS_PTR_NUM && *(u32*)(mess_ptr_buff + i*4) != 0; i++)` loop /
+             `font_draw()` call, only reached when both `eprintf_init` and `pG->debug_mode` are
+             nonzero -- this is a debug build, G4BE08, so debug_mode plausibly defaults on)
+  frame #1: EprintfFlush() at eprintf.cpp:412
+  frame #2: main_game() at main.cpp:144
+```
+
+Not root-caused this pass (budget) -- `Debug_alloc()` (`main_mem.cpp:571`, real, not stubbed) is what
+allocates `mess_ptr_buff`/`mess_keep_buffer` in `EprintfInit()`; the crash is consistent with either
+that allocation silently failing/returning null (heap not ready / a debug-heap-specific path this port
+doesn't set up the same way as the main heap) or a bad pointer somewhere in the `MESS_PTR(i)` /
+`font_draw()` chain. Whoever picks this up next: breakpoint on `EprintfInit()` first to confirm
+`mess_ptr_buff`/`eprintf_init` are actually set the way the source implies, then step into the crash
+itself.
+
+No screenshot captured this session: the in-process `RE4_PORT_SCREENSHOT` mechanism (section 29 part 4)
+did not fire this time despite `RE4_PORT_SCREENSHOT`/`RE4_PORT_SCREENSHOT_DELAY_MS` being set and
+"`Aurora window opened`" reliably printing every run (confirming the window still opens) -- the
+"screenshot attempted" log line never appeared even letting the process run to its natural
+`SIGSEGV`/exit-139 (not killed early). Not root-caused this pass (budget) -- **TO VERIFY**/open,
+flagged rather than guessed at; whoever picks up the `EprintfDrawing` blocker above should also check
+why the screenshot thread (`src/port/vi.cpp`'s `RunPresentLoop()`) isn't firing before trying again.
+
+Verified no regression on both fixes above (each checked independently, see their own paragraphs);
+default host build (`RE4_U32_32=OFF`) `re4_game_all -k 0` failing-file set unchanged (33 files) across
+both changes.
