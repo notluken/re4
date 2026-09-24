@@ -225,7 +225,7 @@ Exit: every push gets an automatic byte-identity check.
 Exit (original wording, still true): `src/game` compiles (not links) on macOS arm64; the error
 inventory for phases 2-3 is written down. Now additionally true for the REL modules.
 
-### Phase 2 — 64-bit pointers in loaded data (started 2026-09-24; steps 1-3 done)
+### Phase 2 — 64-bit pointers in loaded data (started 2026-09-24; steps 1-5 done)
 
 Full inventory, strategy, macOS-specific findings, decisions, and the step-by-step plan with
 acceptance criteria: **`docs/port-phase2.md`**. Summary: strategy D (compressed 32-bit handles
@@ -239,7 +239,14 @@ reserved memory with `VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE` measured 100/100 but 
 clobbering live malloc bookkeeping in the process, caught before it shipped, see
 `docs/port-phase2.md` "the host arena") are done and verified (115/115, `asmcheck` TOTAL 231, both
 `ctest`s passing, 100/100 on `tests/port/run_arena_stress.sh`, a `malloc()` canary check that would
-have caught the rejected design).
+have caught the rejected design). Step 4 (`ARC_PTR`/`Flag*`/`VALID_PTR` macro family, one
+`TARGET_PC` branch each, decided per macro whether it is real GameCube-address compression or plain
+same-buffer pointer arithmetic) and step 5 (`Ptr32<T>` for `cModelData`/TPL/`CameraAreaInfo`+`Cut`+
+`Rec`/`SAVE_DATA_HEAD`/`CRoomInfo`/`cSatBlock`, their relocators, and 93 generated `offsetof()`
+static_asserts, all passing) are also done: `RE4_U32_32=ON` error counts fell from 1,506/4,061
+(`src/game`/REL, step 1 alone) to 586/1,046 after both steps, `RE4_U32_32=OFF` unchanged at 35/37
+throughout (one regression caught and fixed before commit — `docs/port-phase2.md`, "what nearly went
+wrong").
 
 ### Phase 3 — endianness
 

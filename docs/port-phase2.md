@@ -250,14 +250,110 @@ Docker rebuild clean, `dtk shasum` 115/115 OK, `asmcheck.py --all` TOTAL 231 unc
 new files outside `configure.py`'s tree entirely or `#ifdef TARGET_PC`/`RE4_U32_32`-gated with the
 `#else` branch byte-identical to before).
 
-## 6. Steps not started
+## 6. Steps 4-5 (done)
 
-Step 4 (per the planner; not begun): convert the on-disc struct fields in the section 1 table to
-`Ptr32<T>` one format at a time, each with its own `RE4_U32_32`-style rollout and acceptance check.
-Later steps (link the rewritten casts into the real build, wire `InitArena()` into an actual startup
-path, endianness (Phase 3), REL loading (Phase 4)) are unscoped until step 4 lands.
+### Step 4 — header macros
 
-## 7. Build-time cast rewriter — design (not implemented yet)
+One `TARGET_PC` branch per macro, decided by what the macro's `(u32)`/`(int)` cast is actually
+doing (the coordinator's framing: "a flag macro may take a pointer's address as an int for bit ops
+-- that's not necessarily a GC address"):
+
+| Macro(s) | Where | What it does | Fix |
+|---|---|---|---|
+| `ARC_PTR`, `PL_ARC_PTR`, `ROOM_ARC_PTR`, `SS_ARC_PTR`, `TITLE_ARC_PTR`, `G_ARC_PTR` | `global.h`, `main_mem.h`(no)/`sscrn.h`, `title.h`, `title.cpp` (local dup of `ARC_PTR`) | Index a live, already-loaded host archive buffer with a plain byte offset (`arc->ofs[no]`) -- never an on-disc field itself | Plain pointer arithmetic (`(u8*) arc + arc->ofs[no]`), no `GC32`/`GCPTR` at all |
+| `FlagChk`, `FlagOn`, `FlagOff`, `FLAG_WORD_VAR` (and the `Dbg`/`Sta`/`Sys`/... wrappers) | `global.h` | `base` is always the address of a live `u32[]` member of an already-in-memory struct (`Debug_flg`, ...) | Same as above: plain pointer arithmetic |
+| `EM_FLG_ROW` | `global.h` | `pG` is a live in-memory pointer | Same |
+| `PG_OFS` | `global.h` | Null-pointer-idiom `offsetof`; never a real address at any width | **No change** -- safe as-is |
+| `MOT_SET` | `pl_npc.cpp` | Thin wrapper around `MotionSetCore`, no cast of its own | **No change** -- the counted sites are casts in its *arguments* (elsewhere, e.g. `PL_ARC_PTR` results), not the macro |
+| `EM_ARC`, `ARC` | `em.h` | Thin wrappers around `PL_ARC_PTR` | **No change** -- inherit `PL_ARC_PTR`'s fix automatically |
+| `VALID_PTR` | `main_mem.h` | Genuinely tests "does this look like a GameCube SysMem address" (`0x80000000-0x82FFFFFF`) | Routes through `GC32` (the one macro in this table that *is* GameCube-address compression) |
+| `p` (per-primitive) | `libgpu.cpp` | `tag` is a real host pointer temporarily carried in a `u32` across a call (PS1 GPU ordering-table legacy: `AddPrim`/`DelPrim`/`ClearOTagR`/`DrawOTag` store real pointers as `u32` the same way, sign bit as end-of-chain marker) | `GCPTR(tag)`; the one call site that produces such a `tag` (`make_g3((u32) &g)`) uses `GC32` to match. The rest of `libgpu.cpp`'s ordering-table traffic (`AddPrim` etc.) has the same shape and is not converted in this slice -- flagged for whoever next touches that file. |
+| `cManager<T>::destroy`'s inline check | `cManager.h` | Same `0x80000000-0x82FFFFFF` test as `VALID_PTR`, spelled out by hand instead of using the macro | Same `GC32` fix |
+
+**Acceptance, measured** (`src/game` + REL modules only, not `src/lib` -- narrower than the
+planner's tree-wide `-fms-extensions` measurement, so absolute counts differ, but the *proportional*
+drop corroborates the same finding): `RE4_U32_32=ON` error count dropped from 1,506 to 695 in
+`src/game` (46% fewer) and 4,061 to 1,054 in the REL modules (74% fewer) after step 4 alone, before
+step 5 touched a single struct. `RE4_U32_32=OFF` (default) stayed byte-for-byte at 35/37 failing
+units -- confirmed against a `git stash`-restored baseline, not just "the number looks the same"
+(one mid-step mistake briefly regressed 6 files under the default build; caught by that exact
+comparison before it was committed, see step 5's "what nearly went wrong" below).
+
+### Step 5 — on-disc structs
+
+`Ptr32<T>` for every pointer field in the section 1 table's structs still holding a native pointer
+(`include/model.h`'s `cModelData`, `include/tpl.h`'s `CLUTHeader`/`TEXHeader`/`TEXDescriptor`/
+`TEXPalette`, `include/cam_ctrl.h`'s `CameraAreaInfo`/`CameraAreaRec`/`CameraCut`, `include/game.h`'s
+`SAVE_DATA_HEAD`, `include/room_jmp.h`'s `CRoomInfo::name`/`person`/`person2`, `include/atari.h`'s
+`cSatBlock::m_pList`). `cModelData`'s `blendTbl`/`flipTbl` and the FCV/`cam_motion`/`shape` key
+tables stay plain `u32`/`s32` arrays exactly as scoped (they hold a GC32-style value once relocated,
+never a typed pointer even in the original) -- only their relocators change.
+
+Two new `Ptr32<T>` facilities came out of actually wiring this up (`port: Ptr32<T> fixes...` commit):
+- **`Ptr32<T>::FromRaw(u32)` / `.raw_handle()`**: several formats reuse a pointer field to also hold
+  a small plain integer before it is relocated (`cModelData::pClr`'s own file offset, `SAVE_DATA_HEAD`'s
+  fields in their initial `cGameSave::alloc()` state, `CameraControl::calcAddr`'s use of the struct's
+  own `raw_handle()` as the "base to add" instead of a truncating `(u32) pBuff`). Assigning through the
+  normal `Ptr32(T*)` constructor here would be wrong -- it would run the *offset value* (cast to a
+  fake pointer) through `GC32`, corrupting it -- so these go through `FromRaw`/`raw_handle()` instead,
+  bypassing `GC32`/`GCPTR` entirely for the raw 4-byte storage.
+- **`GC32(const Ptr32<T>&)`**: needed the moment `VALID_PTR(structField)`-shaped code (and the
+  `cManager<T>::destroy` fix) tried to call `GC32` on an already-`Ptr32<T>` field -- template argument
+  deduction cannot implicitly convert a class argument to match `GC32(T* p)`'s `T*` parameter, even
+  though `Ptr32<T>` converts to `T*` everywhere else. Its body is just `.raw_handle()`.
+
+**What nearly went wrong (caught before it was committed)**: the first version of these two facilities
+was correct in isolation but two more general-purpose gaps in `Ptr32<T>` only showed up once *every*
+converted struct was compiled together with `RE4_U32_32` **off** (the default host build): (1) `field
+= 0;` (the vendor's own idiom for "clear a pointer field", as common as `field = nullptr;`) was
+ambiguous between the `Ptr32(T*)` and `Ptr32(std::nullptr_t)` constructors, since a literal `0` is an
+equally valid null-pointer-constant for both; (2) casts spelled `(s32) field` (not just `(u32)`/`(int)`)
+failed once `s32` and `int` stopped being the same type (`RE4_U32_32` off). Both were invisible while
+testing `RE4_U32_32=ON` alone, where `s32 == int` hides the second gap and none of the touched code
+paths happened to hit the first. Caught by rebuilding the *default* `RE4_U32_32=OFF` `re4_game_all`
+after step 5 and diffing its failing-unit list against a `git stash`-restored pre-session baseline: 6
+files (`atari.cpp`, `card.cpp`, `eff_sys.cpp`, `main_sub.cpp`, `mes.cpp`, `texture.cpp`) had newly
+started failing under the *default* build -- a real regression, not just "still failing for an old
+reason" -- fixed (drop the `nullptr_t` constructor, add `explicit operator s32()`) and reconfirmed
+back to the exact pre-session 35/37 baseline before anything was committed. Recorded here because it
+is the kind of mistake a narrower "does `RE4_U32_32=ON` look better" check does not catch on its own.
+
+**Host static_asserts**: `tools/port/gen_static_asserts.py` reads each converted struct's own
+`// 0xNN` field comments (the same ground truth every other matching check in this repo already
+trusts) and emits `static_assert(offsetof(Struct, field) == 0xNN, ...)`; `cmake --target
+re4_port_static_asserts` (only meaningful with `RE4_U32_32=ON` -- the *other* plain `u32` fields
+interleaved in these structs are still 8 bytes with it off, so the layout is not the on-disc one yet
+and the asserts would fail correctly, not spuriously) compiles and runs the 93 resulting checks
+across all 11 structs. **All 93 pass.**
+
+**Acceptance, measured**: relocator TUs compile as far as these fields go (every remaining error in
+them is a pre-existing, out-of-scope cast -- confirmed against the same `git stash` baseline, not
+just "no error mentions these field names"): `model.cpp`, `cam_ctrl.cpp`, `game.cpp`, `room_jmp.cpp`,
+`cam_motion.cpp`, `texture.cpp` compile completely clean; `card.cpp`, `mes.cpp`, `trans.cpp`,
+`motion.cpp`, `shape.cpp`, `atari.cpp` still fail, but only on casts step 5 was never scoped to touch
+(`AddOtWorldPos`-shaped SDK calls, paired-single asm, unrelated `ARC_PTR`-style offset arithmetic).
+`RE4_U32_32=ON` error count: `src/game` 695 -> 586 (another 16% fewer after step 4's drop), REL
+modules 1,054 -> 1,046 (small: most REL units do not touch these specific structs directly).
+`RE4_U32_32=OFF` (default): unchanged at 35/37 failing units, reconfirmed against the `git stash`
+baseline after every fix in this step, including the regression above.
+
+A genuine clang/LLVM codegen bug (not a bug in the converted code -- confirmed with `-fsyntax-only`,
+which accepts the same source cleanly) surfaced compiling `cam_ctrl.cpp`'s `CameraControl::calcAddr`
+with `RE4_U32_32` on: a crash in `AArch64RegisterBankInfo::hasFPConstraints` (GlobalISel's
+`RegBankSelect` pass). `-mllvm -global-isel=false` (forces the older SelectionDAG instruction
+selector) fixed it; added to every host CMake target in case another unit hits the same bug later,
+not just the one found so far.
+
+Remote (both steps): pushed to `port/wip-phase1`, Docker rebuild clean, `dtk shasum` 115/115 OK,
+`asmcheck.py --all` TOTAL 231 unchanged.
+
+## 7. Steps not started
+
+Later steps (link the rewritten casts into the real build via the cast rewriter below, wire
+`InitArena()` into an actual startup path, endianness (Phase 3), REL loading (Phase 4)) are unscoped
+until the cast rewriter (section 8) is implemented.
+
+## 8. Build-time cast rewriter — design (not implemented yet)
 
 Goal: every direct pointer<->integer cast in the original tree (the ~1,693 measured, plus whatever
 step 4's `Ptr32<T>` conversions do not absorb) needs to become `GC32`/`GCPTR` under `TARGET_PC`

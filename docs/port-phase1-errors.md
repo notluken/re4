@@ -18,6 +18,16 @@ diagnose a `long` field being 8 bytes, that is the type's normal width. All the 
 counts in this file predate Phase 2 step 1 (`RE4_U32_32`, `docs/port-phase2.md`) and describe only
 "no clang diagnostic", never "byte-correct on-disc/in-memory layout".
 
+**Phase 2 steps 1/4/5 update (`RE4_U32_32`, docs/port-phase2.md sections 5-6): the counts below are
+the `RE4_U32_32=OFF` (default) numbers and are unchanged by any of that work** (`git stash`-diffed
+against the pre-Phase-2 baseline after every step, including one caught-before-commit near-miss —
+docs/port-phase2.md, "what nearly went wrong"). `RE4_U32_32=ON` is a separate, narrower measurement
+of the *next* problem (every pointer<->`s32`/`u32` cast, genuinely narrowing once those types are
+4 bytes), not something that ships: `src/game` errors 1,506 (step 1 alone) -> 695 (step 4) -> 586
+(step 5); REL modules 4,061 -> 1,054 -> 1,046. The remaining `RE4_U32_32=ON` errors are almost
+entirely the same two categories this file already defers to Phase 2 (further struct fields) and
+Phase 5 (paired-single/GQR asm) — see docs/port-phase2.md section 6 for the exact breakdown.
+
 **`src/game`: 258 / 293 `.cpp` units (~88%) compile clean. 35 fail.** (351 units were attempted
 before this pass; the 58 `src/game/*.c` newlib units are now excluded by design, not attempted — see
 "libc exclusion" below. Not a regression: a narrower, more honest count.)
