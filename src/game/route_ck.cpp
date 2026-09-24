@@ -460,8 +460,19 @@ direct:
 // call) whose `&p` argument is a pseudo PRE'd with the other arm's copy: a reference inline
 // around a `(...)`-prototyped memset reproduces both (`p = Vec()` gives a zeroed temporary
 // plus a block copy with our cc1plus).
+#ifdef TARGET_PC
+// The `asm("memset")` alias below binds to the *literal* link-time name "memset" with no leading
+// underscore -- correct for the original ELF/PowerPC target, but Mach-O always adds that
+// underscore itself for an ordinary C symbol reference, so on macOS the alias points at a symbol
+// (`memset`, no underscore) that is never defined (`_memset`, the real libc symbol, is). A plain
+// call sidesteps the asm-label entirely; the COMPILER-DIFF trick it exists for is GameCube-target
+// codegen, not something a host build needs to reproduce.
+#include <cstring>
+static inline void vecClear(Vec& v) { std::memset(&v, 0, sizeof(Vec)); }
+#else
 extern "C" void* memset_v(...) asm("memset");
 static inline void vecClear(Vec& v) { memset_v(&v, 0, sizeof(Vec)); }
+#endif
 // Position of route point `no` (zero without RTP).
 void RouteCkGetPoint(int no, Vec* out)
 {

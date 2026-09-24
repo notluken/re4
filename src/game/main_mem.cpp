@@ -577,13 +577,27 @@ struct MemTile {
 struct SysFlagsView {
     u32 Config_flg;  // 0x00
 };
-extern SysFlagsView* pSysView asm("pSys");
 
 struct DvdFreeSizeView {
     u32 freeSize;  // 0x00  cDvd::freeSize
     u8 pad_4[0x10];  // (keeps the extern out of small data)
 };
+
+#ifdef TARGET_PC
+// The `asm("pSys")` / `asm("Dvd")` aliases below bind to the literal link-time names "pSys" /
+// "Dvd" with no leading underscore -- correct for the original ELF/PowerPC target, but Mach-O
+// always adds that underscore for an ordinary C++ global reference, so on this host the aliases
+// point at symbols ("pSys"/"Dvd", no underscore) nothing defines; the real ones (include/main.h's
+// `extern SYSTEM_SAVE_WORK* pSys;`, include/dvd.h's `extern cDvd Dvd;`) link as "_pSys"/"_Dvd". A
+// reinterpret through the real globals' own addresses sidesteps the alias, same layout-view intent
+// as the original (SysFlagsView/DvdFreeSizeView read only a struct's leading field(s)).
+#include "dvd.h"
+#define pSysView (reinterpret_cast<SysFlagsView*>(pSys))
+#define DvdView (*reinterpret_cast<DvdFreeSizeView*>(&Dvd))
+#else
+extern SysFlagsView* pSysView asm("pSys");
 extern DvdFreeSizeView DvdView asm("Dvd");
+#endif
 
 
 #define MEM_TAG_OK(tag) ((tag)[0] == 0 && (tag)[1] == 'M' && (tag)[2] == 'A' && (tag)[3] == 'D')

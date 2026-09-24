@@ -165,7 +165,17 @@ void cEmShield::beginEvent(u32 flag)
 // goes through a do-while(0) + void-returning alias: the loop notes give `&parts0->worldPos` a 5th
 // weighted ref (global-alloc priority above `w`: r26/r25) and the void result keeps `li r3,8`
 // ahead of the other argument `li`s inside the notes (u32 SndCall issues it last there).
+#ifdef TARGET_PC
+// The `asm("SndCall__FUsUsP3VeciiP5cUnit")` alias below binds to the vendor's original GNU v2
+// (pre-Itanium) mangled name for `SndCall`, used to force the void-returning call shape the
+// COMPILER-DIFF above documents. clang mangles the same declaration (include/snd.h) under the
+// Itanium ABI instead, so on this host the alias points at a symbol nothing defines; a plain call
+// to the real `SndCall` (discarding its `u32` return, same as the original's void-result trick)
+// sidesteps it.
+static inline void SndCallV(u16 blk, u16 no, Vec* pos, int id, int vol, cUnit* obj) { SndCall(blk, no, pos, id, vol, obj); }
+#else
 void SndCallV(u16, u16, Vec*, int, int, cUnit*) asm("SndCall__FUsUsP3VeciiP5cUnit");
+#endif
 // Weapon hit reaction (see the note above): plays the shield hit SE on the carrier, and by weapon
 // class either counts hits toward knocking off the hit plank (est 0x10/0x61, or 0x63 for parts 5,
 // the plank is scaled to 0 and its hit box disabled), breaks the whole shield on the fourth plank

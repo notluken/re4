@@ -158,7 +158,16 @@ public:
 void dispSaveInfo(int no, SaveInfo* info, int type, int broken);
 // cCard::exit passes the saved int width as a full word (`lwz`, not the `lhz 0x41a` narrowing a u16
 // parameter gets): int view of ScreenReSize.
+#ifdef TARGET_PC
+// The `asm("ScreenReSize")` alias below binds to the literal link-time name "ScreenReSize" with no
+// leading underscore -- correct for the original ELF/PowerPC target, but on Mach-O the real
+// `extern "C" void ScreenReSize(u16, u16)` (include/main_sub.h) links as "_ScreenReSize"; a plain
+// call to the real function (narrowing the same way the original int-view call site did) sidesteps
+// the alias, which exists only for the GameCube-target parameter-width COMPILER-DIFF above.
+static inline void ScreenReSizeI(int w, int h) { ScreenReSize((u16) w, (u16) h); }
+#else
 extern "C" void ScreenReSizeI(int w, int h) asm("ScreenReSize");
+#endif
 
 int isDbgInfoAlloc = 0;
 static int isDbgInfoCached = 0;
