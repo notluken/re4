@@ -391,3 +391,85 @@ code computes into -- that decision (adopt Aurora's `OSMemory` wholesale and ret
 Phase 2's own arena scheme accordingly, or keep Phase 2's arena and provide a `TARGET_PC` OSArena
 implementation of our own instead of linking Aurora's) is exactly the kind of blocker the
 coordinator's stop condition names. Not attempted further this pass.
+
+## 12. How to build and run (2026-09-24, tested verbatim in a scratch build dir)
+
+Everything below was run from a clean checkout state, in a throwaway `build-howto`/
+`build-tool-howto` pair (deleted afterward -- these are gitignored, not committed), on this
+machine (macOS, Apple clang + Homebrew LLVM, Apple Silicon). Re-run the whole sequence if in
+doubt; nothing here is inferred.
+
+### Prerequisites (Homebrew)
+
+```sh
+brew install cmake ninja llvm sdl3 libpng fmt zstd freetype xxhash
+```
+
+(`cmake` 4.4.3, `ninja` 1.13.2, `llvm` 23.1.1 tested; older/newer within reason should work, not
+verified.) Also needs `../aurora` cloned next to this checkout (`git clone <aurora repo> ../aurora`,
+pinned commit `9c0bf66f1ed3276b60ad1cd746e2fb48818a6298` as of this writing) and
+`orig/G4BE08/files/` present (the extracted disc tree -- never committed, see the port rules;
+get it the same way the byte-matching build's README describes).
+
+### 1. Build the cast-rewriter tool (once; only needs redoing if `tools/port/cast_rewriter/CastRewriter.cpp` changes)
+
+```sh
+cmake -S tools/port/cast_rewriter -B build-pc-tool -G Ninja \
+      -DCMAKE_PREFIX_PATH=$(brew --prefix llvm) -DCMAKE_BUILD_TYPE=Release
+cmake --build build-pc-tool
+```
+
+Produces `build-pc-tool/re4_cast_rewriter` (~55 MB). Needs Homebrew LLVM specifically -- Apple's
+bundled clang does not ship the libTooling headers/libs this links against.
+
+### 2. Configure and build `re4_boot`
+
+```sh
+cmake -S . -B build-pc-boot -G Ninja \
+      -DRE4_BUILD_BOOT=ON -DRE4_U32_32=ON \
+      -DRE4_CAST_REWRITER_BIN="$PWD/build-pc-tool/re4_cast_rewriter" \
+      -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-pc-boot --target re4_boot -j8
+```
+
+(`build-pc-boot` here is just this session's example name -- any directory works, gitignored
+either way.) First configure fetches Aurora's prebuilt Dawn/nod packages and builds Tracy/abseil/
+imgui from source (a few seconds); a clean `re4_boot` build (including Aurora and every `src/game`
+unit re4_boot links) took **~28 s** on this machine with `-j8`. `-DRE4_AURORA_DIR=<path>` defaults
+to `<repo>/../aurora` -- pass it explicitly if Aurora lives somewhere else. The resulting binary is
+`build-pc-boot/re4_boot` (~24 MB).
+
+### 3. Run it
+
+```sh
+./build-pc-boot/re4_boot orig/G4BE08/files
+# or: RE4_DVD_ROOT=orig/G4BE08/files ./build-pc-boot/re4_boot
+# or, with no argument/env var, it defaults to "orig/G4BE08/files" relative to the cwd
+```
+
+Expected output as of this session (section 11's blocker -- the process aborts, this is not yet a
+successful boot):
+
+```
+STUB: PSMTXIdentity() called
+re4_boot: DVD root=orig/G4BE08/files
+re4_boot: arena base=0x<some address> size=1073741824
+STUB: memclr_asm() called
+... more "STUB: ... called" lines (expected -- docs/port-boot.md section 7's stub survey) ...
+[info] [aurora::card] CARD API Initialized BUILT <build timestamp>
+Assertion failed: (newLo <= MEM1End && newLo >= MEM1Start), function OSSetArenaLo, file OSArena.cpp, line 27.
+```
+
+then the process aborts (`SIGABRT`). This is the current, known stopping point (section 11) --
+not a sign the build is broken.
+
+### 4. Get a backtrace
+
+```sh
+lldb --batch -o run -o "bt" -k "bt" -k "quit" -- ./build-pc-boot/re4_boot orig/G4BE08/files
+```
+
+`-o run` starts it, `-k bt`/`-o bt` print the backtrace whether it stops on the assert (the
+current case) or any other signal, `-k quit` exits lldb afterward instead of leaving it at an
+interactive prompt. Expect to land on `OSSetArenaLo` (section 11) unless something upstream of
+that has changed since this was written.
