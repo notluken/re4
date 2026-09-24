@@ -277,6 +277,11 @@ void systemStartInit()
     VISetPostRetraceCallback(postVSyncCallback);
     Dvd.Init();
     CardInit();
+#ifndef TARGET_PC
+    // GQR (paired-single quantization register) setup: real PPC hardware, no arm64 equivalent.
+    // Nothing on the host reads a GQR; skipped outright rather than stubbed (docs/port-boot.md
+    // section 4). No __LINE__/HALT()-dependent code follows before this file's next #line-tracked
+    // region, so the 2 lines this #ifndef/#endif adds are invisible to any embedded line number.
     asm("li 3, 4\n"
         "oris 3, 3, 4\n"
         "mtspr 914, 3\n"
@@ -292,6 +297,7 @@ void systemStartInit()
         :
         :
         : "r3");
+#endif
     SystemMemInit();
     if (pG->IsDevConsole == 1) {
         CardDbgCacheSet();

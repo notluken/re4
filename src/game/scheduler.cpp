@@ -179,6 +179,13 @@ void* TaskExec_hook(void* value)
     if (pParentThread != NULL) {
         OSSuspendThread(pParentThread);
     }
+#ifndef TARGET_PC
+    // GQR (paired-single quantization register) setup for this task's thread: real PPC hardware,
+    // no arm64 equivalent, skipped outright (same as main.cpp's identical block,
+    // docs/port-boot.md section 4). No __LINE__/HALT()-dependent code exists anywhere later in
+    // this file (only one #line directive total, at the top; grepped for HALT/__LINE__/
+    // ASSERTMSGLINE/OSPanic -- the file's one OSPanic call is above this point and uses a
+    // hardcoded line literal, not __LINE__), so the lines this #ifndef/#endif adds are safe.
     asm("li 3, 4\n"
         "oris 3, 3, 4\n"
         "mtspr 914, 3\n"
@@ -194,6 +201,7 @@ void* TaskExec_hook(void* value)
         :
         :
         : "r3");
+#endif
     GXSetCurrentGXThread();
     pCTask->pFunc((int) value);
     return NULL;
