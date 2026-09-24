@@ -522,3 +522,98 @@ missing-`#include` injection; reconciling rewritten casts with existing `Ptr32<T
 the ~3-5 sites where the two interact; a REL-side measurement (only `src/game` was rewritten and
 measured this session — `docs/port-boot.md` notes no REL is on the boot path, so this was the
 higher-priority half).
+
+## 10. Follow-up session (2026-09-24, continued): macro-body rewriting, per-file incrementality, a
+real host-side gap, and where the boot slice actually stands
+
+**Macro-body rewriting** (the coordinator's task 1): the tool now rewrites a locally-`#define`'d
+macro's *body* once (not per expansion) when the macro's spelling location is in the same `.cpp`/`.c`
+main file — `Loc.isMacroID()` + `SM.isWrittenInMainFile(SM.getSpellingLoc(Loc))`. Header macros
+(spelling location elsewhere) are still left alone (`SKIP macro-in-header`), per the coordinator's
+split. Two supporting fixes:
+- **Nested-cast composition, done properly this time**: the first cut only composed a cast that was
+  the *direct* subexpression of another; `RAW_U32(p, ofs)`'s `(u32*) ((u32) (p) + (ofs))` has the
+  inner cast as an operand of `+`, not a direct child, so it was missed and left as raw (still
+  narrowing) text inside the outer replacement. Fixed with a real recursive collector
+  (`collectNestedCasts`) that finds every topmost qualifying cast anywhere under a subexpression and
+  splices its composed replacement in by file offset (back-to-front, so earlier splices don't shift
+  later offsets) — `tryBuildCastReplacement`/`buildSubexprText`/`collectNestedCasts` in
+  `CastRewriter.cpp`.
+- **A newly found, unfixed gap: casts spelled with a literal host-native type (`(int)`, not the
+  `u32`/`s32` typedef) are invisible to this tool at *any* `RE4_U32_32` setting.** `int` is always 4
+  bytes on this host regardless of the macro; a narrowing `(int) somePointer` is a hard Sema error
+  even with `RE4_U32_32` OFF, so clang never builds a `CStyleCastExpr`/`CK_PointerToIntegral` node for
+  it (a `RecoveryExpr` instead) — the same "hard error means no AST node" fact that motivated running
+  the rewriter against the OFF compile command in the first place, except this category has no OFF
+  configuration that helps. Measured live: `src/game/sce_at.cpp`'s `TaskExec(1, (TaskFunc) sceInLock,
+  (int) w)`-shaped call-argument casts (7 sites in that file alone), `src/game/scheduler.cpp:205`'s
+  `pCTask->pFunc((int) value)`. **Not fixed this session** — would need either a source-level rename
+  to the `s32`/`u32` typedef (a real, remote-verified `src/` edit, mechanical but not attempted here)
+  or a preprocessing trick ahead of the rewriter's own parse; flagged for whoever continues.
+
+**A real, high-value header fix landed** (`include/global.h`, remote-verified): `PG_OFS(f)`'s
+null-pointer-idiom cast (`(u32) &((GlobalWork*) 0)->f`) forms a real (never-dereferenced) pointer
+expression whose *type* clang still flags as a narrowing pointer-to-integer cast on this host,
+independent of the value being a compile-time-safe small offset — the existing doc's "safe unchanged
+under TARGET_PC" was a value-correctness claim, not a "compiles cleanly" one, and `PG_OFS` is used by
+enough macros (every `SAVE_ITEM_*`, `EM_FLG_ROW`, ...) that this alone was the single highest-value
+site in the whole measurement. `TARGET_PC` branch: `(u32) offsetof(GlobalWork, f)` — identical value,
+no pointer ever formed, `<cstddef>` added under `TARGET_PC`. Cut `sce_at.cpp`'s own error count from
+27 to 13 in isolation.
+
+**Per-file incremental CMake wiring** (task 3): replaced the whole-tree `re4_rewrite_casts` custom
+target with one `add_custom_command` per source (`DEPENDS` the source, the rewriter binary, and
+`compile_commands.json`) — editing one file only regenerates that file's `build-pc/gen/` copy. This
+also fixed the two-pass bootstrapping problem from the previous session: `CMAKE_EXPORT_COMPILE_COMMANDS`
+writes `compile_commands.json` at Generate time, before ninja runs any build command, so the `-p`
+database the rewriter needs already exists on a single `cmake -S . -B ...` + `ninja` pass now.
+
+**A real bug caught before it shipped, twice, in this wiring**: (1) the rewriter's own exit code
+reflects whether its *parse* had zero diagnostics, not whether rewriting succeeded — real,
+pre-existing errors elsewhere in a file (unrelated undeclared identifiers, the `(int)`-cast gap above)
+made `re4_cast_rewriter` exit nonzero even though it wrote a useful `-o` file, so a plain
+`add_custom_command` made every such file's build step "FAILED" in ninja even though the rewritten
+copy was fine; fixed by wrapping in `bash -c '... ; test -f <output>'` so success is "was the output
+written", not the tool's own exit status. (2) Running the rewriter against **its own build tree's**
+`compile_commands.json` (`build-pc-u32on`, which bakes in `-DRE4_U32_32`) reproduces exactly the
+"hard Sema error, no AST node" problem the tool exists to avoid — measured directly: doing this
+produced visibly unrewritten-looking output and inflated the aggregate `src/game` error count from
+~500 to 1537. Fixed with an explicit trailing `--extra-arg=-URE4_U32_32` on every rewrite rule,
+regardless of which build tree invokes it (a later flag on the same command line overrides an earlier
+one, so this wins over whatever `-D` the tree's own compile command already carries).
+
+**Forced include** (task 2): `-include include/port/ptr32.h` added to `re4_game_all`'s compile
+options when `RE4_REWRITE_CASTS` is on (simplest of the two options the coordinator offered; not
+attempted per-file text insertion).
+
+**Measured, `src/game`, after all of the above (real Apple-clang `re4_game_all` build,
+`RE4_U32_32=ON`, clean `build-pc-u32on/gen/`)**: **504 errors** (`ninja re4_game_all -k 0`,
+default per-file error limit, so some files' true counts are still truncated at 20 — a lower bound,
+not exact) versus 592 before this session's rewriter existed at all, and versus the previous
+session's own 444 (whole-tree, hand-run, `-ferror-limit=0`, no `PG_OFS` fix yet). A hand-run,
+`-ferror-limit=0`, apples-to-apples re-measurement (same technique as before, `/usr/bin/c++` directly
+on freshly-generated `build-pc/gen/` output) gives **168-169** — the real build's 504 is inflated by
+an unresolved, unexplained discrepancy: **233 "use of undeclared identifier 'Debug_alloc'" errors**
+appear in the real CMake target that do not appear in the hand-run measurement on the identical
+generated files with (as far as checked) the identical flags. `Debug_alloc` is declared in
+`include/main_mem.h` and used inside `cManager<T>::arrayPush`, a template member only
+diagnosed at instantiation — **root cause not found this session** (candidate: some TU-order-
+dependent difference in whether/when that template gets instantiated between the two invocations;
+**TO VERIFY**), and *not* a cast-rewriter regression (it is an "undeclared identifier", unrelated to
+any pointer/integer cast). Whoever continues should treat 168-169 as the better lower bound for
+"real, cast-shaped errors remaining" and chase the `Debug_alloc` discrepancy as a separate, likely
+one-line (`#include "main_mem.h"` in `cManager.h`, not attempted this session — a `src/`/`include/`
+edit needing the same remote-verification treatment as `PG_OFS` got) fix.
+
+**Boot-path file spot-check** (task 4 prep, not the stub/exclude-list work itself — not reached this
+session): of `docs/port-boot.md`'s asm-flagged boot files, `exception.cpp`, `eprintf.cpp`, and
+`db_log.cpp` **already compile clean** under `RE4_U32_32=ON` with the current rewriter + `PG_OFS`
+fix — no stub needed for them beyond what already exists. `main.cpp` has one remaining error (a
+`mes.h` header-macro cast, transitively included — Phase 2 step 4 territory, not this session).
+`scheduler.cpp` and `sofdec.cpp` each have exactly one remaining error, both the `(int)`-literal-cast
+gap above. `dbmodule.cpp` has real Phase 5 paired-single asm (`invalid output constraint '=f'`,
+confirming docs/port-phase1-errors.md's existing flag) plus one `Ptr32<T>`-vs-raw-pointer cast
+mismatch. **Tasks 4 (boot-path asm stubs/exclude list) and 5 (re-measure + `re4_boot` link attempt)
+were not reached this session** — the rewriter-correctness work above (which the coordinator's task 1
+uncovered was needed) took the full session. Explicitly not started: any `src/port/stubs/` work, any
+`re4_boot` CMake target, any Aurora `add_subdirectory`, any link attempt.
