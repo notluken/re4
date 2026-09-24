@@ -229,8 +229,9 @@ inventory for phases 2-3 is written down. Now additionally true for the REL modu
 
 Full inventory, strategy, macOS-specific findings, decisions, and the step-by-step plan with
 acceptance criteria: **`docs/port-phase2.md`**. Summary: strategy D (compressed 32-bit handles
-relative to a host arena, `include/port/ptr32.h`'s `Ptr32<T>`), a build-time cast rewriter (design
-only so far) for the ~1,693 direct pointer<->integer casts outside the header macros, and a
+relative to a host arena, `include/port/ptr32.h`'s `Ptr32<T>`), a build-time cast rewriter
+(`tools/port/cast_rewriter/`, implemented — section 8 of `docs/port-phase2.md`) for the ~1,693 direct
+pointer<->integer casts outside the header macros, and a
 GameCube-compatible on-disc save format (no disc-format/memory-format split). Steps 1
 (`s32`/`u32` as 4-byte `int`/`unsigned int`, `RE4_U32_32` CMake option, off by default),
 2 (`include/port/ptr32.h` + `tests/port/test_ptr32.cpp`) and 3 (`src/port/arena.cpp`: the arena is a
@@ -248,31 +249,60 @@ static_asserts, all passing) are also done: `RE4_U32_32=ON` error counts fell fr
 throughout (one regression caught and fixed before commit — `docs/port-phase2.md`, "what nearly went
 wrong").
 
-### Phase 3 — endianness
+### First boot (reordered ahead of the remaining phases, 2026-09-24)
 
-GameCube is big-endian, arm64 is little-endian. **TO VERIFY**: which formats are read field-by-field
-versus mapped in place; the earlier survey only looked at code, not at data formats.
+Goal: reach the title screen as fast as possible, deferring everything not on that path. Full
+detail: **`docs/port-boot.md`** (call-graph inventory) and `docs/port-phase2.md` section 8 (rewriter
+design). Four steps, in order:
+
+- **(a) Cast rewriter** — `tools/port/cast_rewriter/` (libTooling, built against Homebrew LLVM;
+  Apple's bundled clang has no libTooling), driven by `tools/port/rewrite_casts.py`, wired into
+  `CMakeLists.txt` behind `RE4_REWRITE_CASTS` (implied by `RE4_U32_32`). Rewrites non-macro
+  `CK_PointerToIntegral`/`CK_IntegralToPointer` casts into `GC32()`/`GCPTR<T>()` under `build-pc/gen/`;
+  the macro family (`ARC_PTR`/`FlagChk`/...) stays hand-fixed (Phase 2 step 4, done).
+- **(b) All of `src/game` compiling with `RE4_U32_32=ON`** — units that genuinely need Phase 5's
+  paired-single/GQR asm get host stubs or C equivalents only where boot needs them; everything else
+  on that path is deferred. RELs stay deferred except whatever boot turns out to need (currently:
+  none — `docs/port-boot.md` section 1).
+- **(c) Endianness for boot-only formats** — the DVD size table, `CRoomInfo` (`roomInfo.dat`), and
+  the title archive's model BIN + TPL contents (`docs/port-boot.md` section 3); not every format in
+  `docs/port-phase2.md` section 1's table, just what boot touches.
+- **(d) Link and run** — one executable, Aurora for GX/PAD/DVD (from an extracted disc directory,
+  `orig/G4BE08/files`)/CARD, stubs for the rest of the SDK (OS threads/alarms/interrupts, ARAM, VI —
+  `docs/port-boot.md` section 2's table), run on an arena thread (`CreateArenaThread`) until the
+  first crash.
+
+Exit: the executable starts, runs the boot sequence, and reaches the title screen (or a first,
+diagnosable crash on the way).
+
+### Phase 3 — endianness (the rest)
+
+Whatever "first boot" above did not need: every other on-disc/relocated format in
+docs/port-phase2.md section 1's table. GameCube is big-endian, arm64 is little-endian.
 
 - Byte-swap at load time per format (one swapper per file type, next to its loader), not at every use.
-- Save data (CARD) needs a decision: keep GameCube-compatible big-endian or host-native.
+- Save data (CARD) needs a decision: keep GameCube-compatible big-endian or host-native (already
+  decided GameCube-compatible for the format itself, docs/port-phase2.md section 4 — this phase is
+  the swap-at-load-time mechanics, not the format decision).
 
 Exit: each loaded format has a swapper with a test that round-trips a real file from `orig/`.
 
-### Phase 4 — link and boot
+### Phase 4 — REL modules
 
 - RELs linked statically into the executable; replace the REL loader (`OSLink`) with a table of the
   modules' prolog/epilog/unresolved entry points.
-- Aurora for GX, PAD, DVD (reading from an extracted disc directory), CARD.
-- Stubs for everything else (OS threads/alarms onto host threads/timers, ARAM, VI).
+- Every REL module (`em*`/`pl*`/`wep*`/`st*`/`Sscrn`/`Tools`/`t_*`) compiling and linking, not just
+  the boot-path subset "first boot" above needed (which was none).
 
-Exit: the executable starts, runs the boot sequence and reaches the title screen, even without sound.
+Exit: a room's REL modules load and run in-process, no `OSLink` left.
 
 ### Phase 5 — subsystems
 
 - Sound: the `snd_*` driver targets the DSP and ARAM; rewrite the output stage on a host audio API
   (CoreAudio, or SDL if Aurora already uses it). ADX streams decoded on the host.
 - FMV: CRI SFD/ADX, which needs a host decoder (or skip the FMVs at first).
-- Paired-single / GQR math units: C equivalents under `TARGET_PC`.
+- Paired-single / GQR math units: C equivalents under `TARGET_PC`, for every remaining unit (first
+  boot only did the ones actually on its path).
 
 Exit: a room is playable with graphics, input and sound.
 
