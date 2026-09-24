@@ -1156,3 +1156,97 @@ it is expected to spin/hang there, not progress to a frame. No window render, no
 the real render units into the boot link, the GX/VI SDK parity table, and wiring VI/GX frame
 presentation through Aurora are still open (docs/port-phase3.md section 9's list, coordinator's
 Phase 4 ask).
+
+## 26. Global TARGET_PC/RE4_U32_32, cross-TU layout guards, main_sub.cpp un-excluded (2026-09-24)
+
+Coordinator follow-up to section 25's fix, same theme: make the whole *class* of cross-TU layout
+bug impossible, not just this one instance.
+
+**Global compile definitions**: `CMakeLists.txt` now sets `TARGET_PC` (and, conditionally,
+`RE4_U32_32`) once, via `add_compile_definitions()` right after the `option()` declarations, instead
+of every target relisting them (`RE4_GAME_DEFINES`, `re4_port`'s own list). This also reaches
+Aurora's `add_subdirectory()` (`RE4_BUILD_BOOT`) -- confirmed intentional, not incidental: Aurora's
+own `include/dolphin/types.h` has the identical `#ifdef TARGET_PC` branch (fixed-width `<stdint.h>`
+types), so Aurora's own compiled objects were using 8-byte `u32`/`s32` throughout *before* this
+change, while every game/port TU used 4-byte -- the same bug, one level up, at every Dolphin-shaped
+struct crossing the game<->Aurora boundary. Fallout from turning this on: `src/port/dvd.cpp`'s
+`<aurora/dvd.h>` wants `int64_t`/`uint8_t`/`int32_t` from its own `#include <dolphin/types.h>`, but
+this repo's own `include/` is searched first for that target, so the angle-bracket include
+resolved to *this* repo's `dolphin/types.h` (no `<stdint.h>`) instead of Aurora's -- fixed with an
+explicit `#include <cstdint>` before the Aurora header (one line, `src/port/dvd.cpp`). Both build
+trees rebuilt clean from scratch after; `ctest` 4/4 (`RE4_U32_32=ON`) / 3/3 (`OFF`);
+`re4_game_all -k 0`'s failing-file set unchanged (33 files, diffed directly, not just counted).
+
+**Cross-TU static_assert layout guards** (the actual ask: "so any size disagreement fails the
+build"): `include/port/layout_asserts.h`, force-included (`-include`, `CMakeLists.txt`) into every
+`re4_port` and `re4_boot_game` TU, `static_assert`s `sizeof()` for `OSContext`/`OSThread`/`OSMutex`/
+`OSMessageQueue`/`DVDFileInfo`/`DVDCommandBlock`/`TASK`/`cDvdQueue` against the one authoritative
+number per config (`RE4_U32_32` ON vs. the default OFF -- both real, both get their own literal;
+confirmed via a throwaway probe compiled with this repo's exact flags, not derived by hand). GX
+objects (`GXTexObj`/`GXTlutObj`/`GXColor`/`GXFifoObj`/`GXRenderModeObj`) are checked the same way
+but in a *separate* standalone executable (`tests/port/gx_layout_asserts.cpp`, added to the existing
+`re4_port_static_asserts` target) instead of the force-included header: force-including
+`<dolphin/gx.h>` into every game TU broke `include/gx.h`'s own paired-single-write macros
+(`GXPosition3f32` et al. redefinition errors) for any file that also does its own `#include "gx.h"`
+-- confirmed the hard way, reverted to the safer standalone-TU pattern `gen_static_asserts.py`
+already established for on-disc structs. One more real bug found by this exercise, not by inspection:
+a quoted `#include "dvd.h"` from inside `include/port/` resolves relative to that directory first,
+finding `include/port/dvd.h` (a different, port-specific header) instead of the game's
+`include/dvd.h` (`cDvdQueue`) -- fixed with an explicit `../dvd.h`. Verified: `re4_boot` links and
+runs to the same frontier as before (`ctest` 4/4, `re4_game_all -k 0` unchanged).
+
+**main_sub.cpp un-excluded** (`Render_before`/`Render_init`/`Render_done`/`Render_swap`/
+`Render_checkBlurPermission`, previously stubbed): its three remaining `RE4_U32_32=ON` compile
+errors were all the same "real host pointer cast to a 4-byte int, truncated" class this whole port
+already has a fix for (`re4_port::GC32()`) -- `include/sce_sys.h`'s `emDeadRow()`, and two spots in
+`DrawTpl()` (`src/game/main_sub.cpp`) casting `tpl`/`hdr` (plain pointers, not `Ptr32<T>` fields) to
+`u32`. Fixed with the standard `#ifdef TARGET_PC` `GC32()` branch, no `#else` change (byte-identical
+original build, remote-verified: `dtk shasum` 0 non-OK lines, `asmcheck.py --all` TOTAL 231
+unchanged). Removing it from `cmake/boot_exclude.txt` surfaced ~20 previously-unreached undefined
+symbols (nothing had ever called into main_sub.cpp's body before) -- real ones (`OSLink`/`OSUnlink`/
+`OSInitStopwatch`-family/`VISetBlack`/`VISetNextFrameBuffer`/`VIGetNextField`/`SceSys`/
+`cSceSys::checkCTaskRange`) got new hand-written stubs (`src/port/stubs/manual_stubs.cpp`,
+`stub_common.h` gained the headers they need); ~20 *stale* generated stubs for symbols main_sub.cpp
+now defines for real (`Render_init`/`_before`/`_done`/`_swap`, `Rmode`, `ScreenShotTriggerType`,
+timing/scissor/screenshot helpers) were removed from `generated_c_stubs.cpp`/
+`generated_cpp_stubs.cpp` to clear the resulting duplicate-symbol link errors.
+
+**Verified end to end**: `re4_boot` re-run reaches the identical frontier as before this pass --
+`Render_before()`/`Render_init()` now run for real (no longer print `STUB: ... called`), `Render()`
+itself is still a stub (`trans.cpp` stays excluded, see below), and the process reaches `DrawOTag`
+in the frame loop exactly like before (sometimes an Aurora `[fatal] GXBegin: called without matching
+GXEnd`, sometimes the already-documented garbage-`pOt` `EXC_BAD_ACCESS` -- both are the *same*,
+already-known "nothing populates a real OT" gap, not a new regression; confirmed by re-running
+several times). No screenshot -- nothing renders yet.
+
+**`trans.cpp` (Render()) not un-excluded this pass**: assessed its `RE4_U32_32=ON` errors past the
+`-ferror-limit` cutoff -- two classes. (1) The same `PTR_INVALID`/`PTR_INVALID2` macro-driven
+pointer-cast-truncation errors as main_sub.cpp's, fixable the same way. (2) Real PPC paired-single
+(`psq_l`/`psq_st`) inline asm for the skinning/weight-blend math (`invalid output constraint '=f'`),
+which needs genuine `TARGET_PC` C equivalents, not a mechanical fix -- and skinning math is exactly
+the kind of code where a subtly-wrong C rewrite would silently corrupt geometry with no way to
+verify against a real frame yet (the render pipeline that would let you *see* the bug doesn't exist
+yet -- circular). Deliberately not attempted this pass rather than guessed at; flagged for whoever
+picks up Phase 4's asm-equivalents work with the exact error classes above.
+
+**GX/VI parity vs. Aurora** (spot-checked, not exhaustive): `aurora_gx` implements a large, real GX
+surface -- everything `main_sub.cpp`'s `DrawTpl()`/`DrawTexture()` call (`GXInitTexObj`/
+`GXInitTexObjCI`/`GXInitTlutObj`/`GXLoadTlut`/`GXLoadTexObj`/`GXSetChanCtrl`/`GXSetTevOrder`/
+`GXSetBlendMode`/...) is a real symbol, not a stub (`GXSetTexCoordGen` looked missing from `nm` at
+first -- false alarm, it is a `static inline` header wrapper around the real `GXSetTexCoordGen2`,
+no symbol needed). `aurora_vi` is far thinner: real window/mode management (`VIInit`/`VIConfigure`/
+`VIConfigurePan`/`VIFlush`/`VISetWindowSize`/`VISetWindowFullscreen`/...) but **no**
+`VISetBlack`/`VISetNextFrameBuffer`/`VIGetNextField`/`VIWaitForRetrace`/`VISetPostRetraceCallback` --
+exactly the raw per-frame presentation entry points the game's own frame loop needs, all still
+logging stubs (`STUB: ... called`, some pre-existing, `VISetBlack`/`VISetNextFrameBuffer`/
+`VIGetNextField` newly added this pass for main_sub.cpp). Wiring these for real (present a frame,
+drive `VIWaitForRetrace` from Aurora's own vsync/window loop so the game's retrace callback fires)
+is the actual remaining work for "Aurora opens a window" -- not attempted this pass, correctly
+scoped as its own follow-up given `Render()` itself still produces no real geometry to show in that
+window yet.
+
+Coordinator instruction going forward, not yet applied retroactively: commit + push (with remote
+matching-build verification for anything touching `src/`/`include/` outside `src/port/`/
+`include/port/`) as work lands, not only at session end -- done for every commit this pass
+(`c5864124`, `606a4708`, `4ac0b070`, `07c179c9`; the `main_sub.cpp` un-exclude was remote-verified
+before merging to `port/macos-arm64`: `dtk shasum` 0 non-OK, `asmcheck.py --all` TOTAL 231).
