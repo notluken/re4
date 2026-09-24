@@ -35,6 +35,15 @@
 #include "flr_at.h"
 #include "rnd.h"
 
+// asm("" : "+f"(x)) below only steers GameCube scheduling (an empty template: no instruction), and
+// is a no-op under TARGET_PC. Defined here (ahead of this unit's single #line rebasing directive)
+// so its use site keeps its exact line, and every line after it keeps its #line-derived number.
+#ifdef TARGET_PC
+#define ASM_BARRIER_F(x) ((void) 0)
+#else
+#define ASM_BARRIER_F(x) asm("" : "+f"(x))
+#endif
+
 // Room 1-1d (D:/Bio4/Prog/r11d.cpp): the two sisters (the big one on the balcony object, the
 // little one with her own motion), the iron door key, the closet hides, the show view, the enemy
 // reset waves, the thunder and the battle stream.
@@ -418,7 +427,7 @@ extern "C" void r11d_execHide_main(int mode, u32 objId)
         SndCall(6, 0x14, &pSUB->pos, 0, 0, 0);
         for (;;) {
             door->pParts->ang.x -= spd;
-            asm("" : "+f"(spd)); // COMPILER-DIFF: candidate #9
+            ASM_BARRIER_F(spd); // COMPILER-DIFF: candidate #9
             spd += add;
             if (door->pParts->ang.x < lim) {
                 break;
