@@ -72,15 +72,33 @@ Each phase ends with the original build still at 115/115 OK (Docker, clean `buil
 
 Exit: every push gets an automatic byte-identity check.
 
-### Phase 1 — a host build that compiles
+### Phase 1 — a host build that compiles (first slice done 2026-09-24)
 
-- Clone Aurora into `../aurora`; pin a commit.
-- `CMakeLists.txt` (top level, ignored by `configure.py`) building `src/game` with clang for
-  `arm64-apple-macos`, `-DTARGET_PC`. Exclude the Nintendo SDK and CRI units (Aurora and host
-  replacements take their place), the sound DSP driver and the asm-bodied units.
-- Headers first: `include/` types (`u32`, pointer-sized fields, `#pragma pack`, MWCC/GCC extensions)
-  made host-clean behind `TARGET_PC`.
-- Collect the real error list; do not guess its size.
+- **Aurora**: cloned into `../aurora`, pinned at `9c0bf66f1ed3276b60ad1cd746e2fb48818a6298` (main,
+  2026-09-23). `cmake -S . -B build -DAURORA_ENABLE_TESTS=OFF -DAURORA_ENABLE_EXAMPLES=OFF` then
+  `cmake --build build -j4` succeeds standalone on this host (Apple clang 17, CMake 4.4.3):
+  Dawn resolves to a prebuilt package (`dawn-darwin-arm64.tar.gz`, provider `package`, no local Dawn
+  build), nod likewise prebuilt; SDL3 resolves to the system install (Homebrew). Configure ~10 s,
+  full build (`aurora_gx`/`aurora_gd`/`aurora_pad`/...) a few minutes; total checkout + build tree
+  160 MB. Not yet wired into the game-code CMake build (that's Phase 4, GX/PAD/DVD/CARD).
+- **`CMakeLists.txt`** (top level, ignored by `configure.py`/`ninja`; build tree `build-pc/`,
+  gitignored): `re4_game_core` (OBJECT library, 8 representative units: `model.cpp` object chain,
+  `light.cpp` manager consumer, `math_sub.cpp`/`math_support.c` math, `dvd.cpp`/`read.cpp` loader,
+  `cString.cpp` utility, `item.cpp` pool) and `re4_game_all` (every other `src/game/*.c(pp)` except
+  the two whole-function-asm units, for the error inventory only). Same include paths and version
+  defines `configure.py` uses for the ProDG game units, `-DTARGET_PC` added.
+- **Headers**: seven fixes applied, all behind `TARGET_PC`, all "one fix unblocks many units" —
+  `cManager.h`/`esp.h`/`card.h`/`cam_extra.h`'s placement/member `operator new`/`delete` were only
+  valid deallocation functions because `unsigned int` happens to equal `size_t` on the GameCube
+  target; spelled as `std::size_t` for the host. Same in `main_mem.cpp` for the game's *replacement*
+  global `operator new`/`new[]`. `joy.h`'s own `size_t`-mismatched `memcpy` redeclaration dropped in
+  favour of `<cstring>`. `math_sub.h`'s single-instruction `fabs` swapped for `__builtin_fabsf`. Plus
+  60 mechanical `asm(".section ...")` alignment pragmas (small-data/rodata/bss layout for the ProDG
+  linker, no host meaning) `#ifndef TARGET_PC`-gated.
+- **Result**: `re4_game_core` compiles clean except `math_sub.cpp` (paired-single asm) and
+  `model.cpp` (pointer-to-int casts) — both genuine Phase 2/5 material, not header bugs.
+  `re4_game_all`: **308 / 351 units (~88%) compile clean.** Full categorized inventory of the other
+  43: `docs/port-phase1-errors.md`.
 
 Exit: `src/game` compiles (not links) on macOS arm64; the error inventory for phases 2-3 is written down.
 
