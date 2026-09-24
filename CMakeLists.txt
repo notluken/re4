@@ -374,7 +374,12 @@ if (RE4_BUILD_BOOT)
   set_source_files_properties("${CMAKE_BINARY_DIR}/gen/src/game/main.cpp" PROPERTIES
     COMPILE_DEFINITIONS "main=main_game")
 
-  add_library(re4_boot_stubs STATIC src/port/stubs/generated_stubs.cpp)
+  add_library(re4_boot_stubs STATIC
+    src/port/stubs/generated_c_stubs.cpp
+    src/port/stubs/generated_cpp_stubs.cpp
+    src/port/stubs/manual_stubs.cpp
+    src/port/stubs/host_new_delete.cpp
+  )
   target_include_directories(re4_boot_stubs PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
   target_compile_definitions(re4_boot_stubs PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_boot_stubs PRIVATE ${RE4_GAME_OPTIONS})
