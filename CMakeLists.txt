@@ -307,3 +307,85 @@ if (RE4_U32_32)
   target_compile_options(re4_port_static_asserts PRIVATE ${RE4_GAME_OPTIONS})
   add_test(NAME re4_port_static_asserts COMMAND re4_port_static_asserts)
 endif()
+
+# --- re4_boot: "first boot" milestone (docs/port.md) -- one executable, real host entry point,
+# src/game minus cmake/boot_exclude.txt's still-failing units, Aurora for GX/PAD/DVD/CARD/VI/OS,
+# a stub library for whatever the linker still can't find. Aim: LINK, then run once against
+# orig/G4BE08/files and see where it dies (docs/port-boot.md's call chain). Not wired into the
+# default build (RE4_PC_BUILD_ALL_GAME's re4_game_all etc. above are unaffected either way):
+# opt-in via RE4_BUILD_BOOT, off by default (pulls in Aurora's own dependency tree -- Dawn/nod/
+# SDL3 -- which is heavy for a target most of this repo's work does not need).
+option(RE4_BUILD_BOOT "Add the re4_boot executable (first-boot milestone, docs/port.md)" OFF)
+if (RE4_BUILD_BOOT)
+  if (NOT RE4_U32_32)
+    message(FATAL_ERROR "RE4_BUILD_BOOT needs RE4_U32_32=ON (the boot-path units only compile with it)")
+  endif()
+
+  set(RE4_AURORA_DIR "${RE4_ROOT}/../aurora" CACHE PATH "Path to the Aurora checkout (docs/port.md Phase 1)")
+  if (NOT EXISTS "${RE4_AURORA_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR "RE4_BUILD_BOOT: ${RE4_AURORA_DIR} is not an Aurora checkout")
+  endif()
+  set(AURORA_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+  set(AURORA_ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+  add_subdirectory("${RE4_AURORA_DIR}" aurora_build EXCLUDE_FROM_ALL)
+
+  # cmake/boot_exclude.txt: one path (relative to repo root) per line, blank lines and #-comments
+  # ignored -- units that do not yet compile with RE4_U32_32=ON, reviewed and categorized by why in
+  # the file itself (docs/port-phase2.md section 9/10's error breakdown), excluded rather than
+  # hacked around per the coordinator's instruction.
+  file(STRINGS "${RE4_ROOT}/cmake/boot_exclude.txt" RE4_BOOT_EXCLUDE_RAW)
+  set(RE4_BOOT_EXCLUDE "")
+  foreach(_line IN LISTS RE4_BOOT_EXCLUDE_RAW)
+    string(STRIP "${_line}" _line)
+    if (_line STREQUAL "" OR _line MATCHES "^#")
+      continue()
+    endif()
+    list(APPEND RE4_BOOT_EXCLUDE "${RE4_ROOT}/${_line}")
+  endforeach()
+
+  set(RE4_BOOT_SOURCES ${RE4_GAME_ALL_SOURCES}) # already rewritten (build-pc/gen/...) when
+                                                 # RE4_REWRITE_CASTS is on, which RE4_U32_32=ON implies
+  list(REMOVE_ITEM RE4_BOOT_SOURCES ${RE4_BOOT_EXCLUDE})
+  # RE4_GAME_ALL_SOURCES holds gen/ paths, but boot_exclude.txt is written in terms of the real
+  # src/game/ paths (reviewable without knowing about build-pc/gen/); also strip by that name.
+  set(RE4_BOOT_SOURCES_FILTERED "")
+  foreach(_src IN LISTS RE4_BOOT_SOURCES)
+    get_filename_component(_name "${_src}" NAME)
+    set(_excluded FALSE)
+    foreach(_ex IN LISTS RE4_BOOT_EXCLUDE)
+      get_filename_component(_exname "${_ex}" NAME)
+      if (_name STREQUAL _exname)
+        set(_excluded TRUE)
+      endif()
+    endforeach()
+    if (NOT _excluded)
+      list(APPEND RE4_BOOT_SOURCES_FILTERED "${_src}")
+    endif()
+  endforeach()
+
+  add_library(re4_boot_game OBJECT ${RE4_BOOT_SOURCES_FILTERED})
+  target_include_directories(re4_boot_game PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
+  target_compile_definitions(re4_boot_game PRIVATE ${RE4_GAME_DEFINES})
+  target_compile_options(re4_boot_game PRIVATE ${RE4_GAME_OPTIONS} -include ${RE4_ROOT}/include/port/ptr32.h)
+  # main.cpp's own `main()` becomes `main_game()` at compile time for this target only (src/port/
+  # boot_main.cpp is re4_boot's real host entry point) -- a symbol rename via -D, not a source edit,
+  # so re4_game_all's own copy of the same file (error-inventory target, unaffected) still has a
+  # plain `main()`.
+  set_source_files_properties("${CMAKE_BINARY_DIR}/gen/src/game/main.cpp" PROPERTIES
+    COMPILE_DEFINITIONS "main=main_game")
+
+  add_library(re4_boot_stubs STATIC src/port/stubs/generated_stubs.cpp)
+  target_include_directories(re4_boot_stubs PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
+  target_compile_definitions(re4_boot_stubs PRIVATE ${RE4_GAME_DEFINES})
+  target_compile_options(re4_boot_stubs PRIVATE ${RE4_GAME_OPTIONS})
+
+  add_executable(re4_boot src/port/boot_main.cpp $<TARGET_OBJECTS:re4_boot_game>)
+  target_include_directories(re4_boot PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
+  target_compile_definitions(re4_boot PRIVATE ${RE4_GAME_DEFINES})
+  target_compile_options(re4_boot PRIVATE ${RE4_GAME_OPTIONS})
+  target_link_libraries(re4_boot PRIVATE
+    re4_port
+    re4_boot_stubs
+    aurora_os aurora_vi aurora_gx aurora_pad aurora_dvd aurora_card aurora_mtx aurora_si aurora_core
+  )
+endif()

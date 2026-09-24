@@ -1,0 +1,52 @@
+# Phase "first boot" (docs/port.md): src/game units that do not yet compile with RE4_U32_32=ON,
+# excluded from the re4_boot link target rather than hacked around (coordinator's instruction).
+# Regenerate by hand from `cmake --build build-pc-u32on --target re4_game_all -- -k 0` and grepping
+# FAILED lines -- not run automatically, since the point is a reviewed, explicit list, not a moving
+# target. Categorized by why, from docs/port-phase2.md section 9/10's error breakdown:
+#
+# Phase 5 (real PPC paired-single/GQR asm, invalid register constraints on arm64):
+src/game/at_mod.cpp
+src/game/cam_qfps.cpp
+src/game/db_cam.cpp
+src/game/dbmodule.cpp
+src/game/esp04.cpp
+src/game/esp08.cpp
+src/game/esp12.cpp
+src/game/esp16.cpp
+src/game/espgen02.cpp
+src/game/Espgen42.cpp
+src/game/espgen45.cpp
+src/game/math_sub.cpp
+src/game/objRobo.cpp
+src/game/pendulum.cpp
+src/game/pl_wep.cpp
+src/game/sce_at.cpp
+src/game/shadow.cpp
+src/game/shape.cpp
+src/game/trans.cpp
+
+# Ptr32<T>/array-pointee/Sema interaction bugs (Phase 2 step 5 follow-up, not Phase 5):
+src/game/cloth.cpp
+src/game/Espgen43.cpp
+
+# Remaining direct/macro pointer<->integer casts, not yet hand-fixed (Phase 2 step 4 candidates,
+# same shape as the PG_OFS/FlagXor fixes already landed -- just not reached this session):
+src/game/act_btn.cpp
+src/game/datactrl.cpp
+src/game/esp0a.cpp
+src/game/game.cpp
+src/game/main_sub.cpp
+src/game/mercenaries.cpp
+src/game/objRocket.cpp
+src/game/pl_ashley.cpp
+src/game/pl_class.cpp
+src/game/pl_leon.cpp
+src/game/pl_sub.cpp
+src/game/read.cpp
+src/game/sce_com.cpp
+src/game/sce_sys.cpp
+src/game/scroll.cpp
+
+# Two whole-function-asm units, excluded from re4_game_all itself already (never attempted here):
+src/game/memset_2.cpp
+src/game/yz2asm.cpp

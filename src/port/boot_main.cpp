@@ -1,0 +1,60 @@
+// re4_boot's host entry point (docs/port.md, "First boot" milestone, step (d)).
+//
+// Not the game's own main() (src/game/main.cpp) -- this is the *host process* entry point. It
+// initializes the compressed-handle arena (docs/port-phase2.md strategy D), then runs the game's
+// real main() on a thread whose stack is carved from the arena (CreateArenaThread), since no
+// game-visible pointer may point at the host main thread's own stack (include/port/arena.h's rule).
+#ifdef TARGET_PC
+
+#include "port/arena.h"
+#include "port/ptr32.h"
+
+#include <cstdio>
+
+extern "C" int main_game(); // src/game/main.cpp's `main()`, renamed at link time (see CMakeLists.txt:
+                             // re4_boot can't have two `main`s, and the vendor's own main() has the
+                             // real boot sequence in it unchanged -- renaming the *symbol*, not the
+                             // source, is done via `-Dmain=main_game` on this one translation unit's
+                             // compile of src/game/main.cpp, not a source edit).
+
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+namespace {
+
+std::atomic<bool> g_gameThreadDone{false};
+
+void* GameThreadEntry(void*)
+{
+    main_game(); // never expected to return in practice (src/game/main.cpp's main() is an infinite
+                 // frame loop) -- this is just the "if it somehow does" case.
+    g_gameThreadDone.store(true);
+    return nullptr;
+}
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+    re4_port::InitArena(); // aborts internally on failure (see include/port/arena.h)
+    std::fprintf(stderr, "re4_boot: arena base=%p size=%zu\n", re4_port::GetArenaBase(),
+                 re4_port::GetArenaSize());
+
+    // CreateArenaThread is detached (include/port/arena.h) -- no join primitive is exposed yet, so
+    // the host main thread just waits here. Real synchronization/shutdown is Phase 4/5 material;
+    // this milestone only needs the process to stay alive long enough to observe where the game
+    // thread crashes (run under lldb, which halts the whole process on the signal regardless of
+    // which thread it happens on).
+    std::size_t stack_size = re4_port::GetArenaSize() / 4; // leave room for the game's own heap use
+    if (!re4_port::CreateArenaThread(0, stack_size, GameThreadEntry, nullptr)) {
+        std::fprintf(stderr, "re4_boot: CreateArenaThread failed\n");
+        return 1;
+    }
+    while (!g_gameThreadDone.load()) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+    return 0;
+}
+
+#endif // TARGET_PC
