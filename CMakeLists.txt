@@ -284,6 +284,10 @@ if (RE4_PC_BUILD_TESTS)
   add_executable(test_arena tests/port/test_arena.cpp)
   target_link_libraries(test_arena PRIVATE re4_port)
   add_test(NAME test_arena COMMAND test_arena)
+
+  add_executable(test_be tests/port/test_be.cpp)
+  target_link_libraries(test_be PRIVATE re4_port)
+  add_test(NAME test_be COMMAND test_be)
 endif()
 
 # --- re4_port_static_asserts: offsetof() checks for Phase 2 step 5's Ptr32<T>-converted on-disc
