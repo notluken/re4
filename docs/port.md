@@ -72,7 +72,7 @@ Each phase ends with the original build still at 115/115 OK (Docker, clean `buil
 
 Exit: every push gets an automatic byte-identity check.
 
-### Phase 1 — a host build that compiles (first slice done 2026-09-24)
+### Phase 1 — a host build that compiles (2026-09-24, two slices)
 
 - **Aurora**: cloned into `../aurora`, pinned at `9c0bf66f1ed3276b60ad1cd746e2fb48818a6298` (main,
   2026-09-23). `cmake -S . -B build -DAURORA_ENABLE_TESTS=OFF -DAURORA_ENABLE_EXAMPLES=OFF` then
@@ -82,25 +82,85 @@ Exit: every push gets an automatic byte-identity check.
   full build (`aurora_gx`/`aurora_gd`/`aurora_pad`/...) a few minutes; total checkout + build tree
   160 MB. Not yet wired into the game-code CMake build (that's Phase 4, GX/PAD/DVD/CARD).
 - **`CMakeLists.txt`** (top level, ignored by `configure.py`/`ninja`; build tree `build-pc/`,
-  gitignored): `re4_game_core` (OBJECT library, 8 representative units: `model.cpp` object chain,
-  `light.cpp` manager consumer, `math_sub.cpp`/`math_support.c` math, `dvd.cpp`/`read.cpp` loader,
-  `cString.cpp` utility, `item.cpp` pool) and `re4_game_all` (every other `src/game/*.c(pp)` except
-  the two whole-function-asm units, for the error inventory only). Same include paths and version
-  defines `configure.py` uses for the ProDG game units, `-DTARGET_PC` added.
-- **Headers**: seven fixes applied, all behind `TARGET_PC`, all "one fix unblocks many units" —
-  `cManager.h`/`esp.h`/`card.h`/`cam_extra.h`'s placement/member `operator new`/`delete` were only
-  valid deallocation functions because `unsigned int` happens to equal `size_t` on the GameCube
-  target; spelled as `std::size_t` for the host. Same in `main_mem.cpp` for the game's *replacement*
-  global `operator new`/`new[]`. `joy.h`'s own `size_t`-mismatched `memcpy` redeclaration dropped in
-  favour of `<cstring>`. `math_sub.h`'s single-instruction `fabs` swapped for `__builtin_fabsf`. Plus
-  60 mechanical `asm(".section ...")` alignment pragmas (small-data/rodata/bss layout for the ProDG
-  linker, no host meaning) `#ifndef TARGET_PC`-gated.
+  gitignored; `CMAKE_EXPORT_COMPILE_COMMANDS ON` for clangd, not committed — see the file's header
+  comment for how to point an editor at it): four targets, `re4_game_core` (8 representative
+  `src/game` units: `model.cpp` object chain, `light.cpp` manager consumer, `math_sub.cpp`/
+  `math_support.c` math, `dvd.cpp`/`read.cpp` loader, `cString.cpp` utility, `item.cpp` pool),
+  `re4_game_all` (every other `src/game/*.c(pp)` except the two whole-function-asm units),
+  `re4_rel_all` (every REL module unit — `em*`/`pl*`/`wep*`/`st*`/`Sscrn`/`Tools`/`t_*`, plus the
+  shared `st/`, `wep/` sources — from `cmake/gen_rel_sources.py`, which reads
+  `config/G4BE08/{config.yml,modules.py}` the same way `configure.py`'s own REL object loop does).
+  The last two are error-inventory-only (`-- -k 0`). Same include paths and version defines
+  `configure.py` uses for the ProDG game units, `-DTARGET_PC` added.
+- **The `Tools`/`tools` APFS fold, concretely**: three filenames exist in both `src/Tools/` (the
+  "Tools" REL module's own 3-line wrappers) and `src/tools/` (shared bodies compiled into the `t_*`
+  tool modules) — `t_prim.cpp`, `t_util.cpp`, `tools.cpp`. On a case-insensitive filesystem they are
+  the same directory entry, so reading `src/Tools/t_prim.cpp` on this host silently returns whichever
+  content last got checked out — currently the `src/tools/` (shared-body) bytes, which is *wrong* for
+  the `Tools` module and is exactly why `git status` always shows those 3 paths modified (pre-existing,
+  documented in section 1; never stage them). `cmake/gen_rel_sources.py` excludes the `Tools`-module
+  copies of these 3 units rather than guessing which content is on disk (see its docstring); every
+  other unit, including the correctly-resolving `src/tools/` shared copies used by `t_camera`/
+  `t_emlist`/..., is unaffected, since no other filename collides. One real edit was needed in the
+  shared `src/tools/t_prim.cpp` itself (a `.section` pragma, see below) — made and verified through
+  the lowercase path only, `git add src/tools/t_prim.cpp` explicitly, never the `Tools/` spelling.
+- **Headers/sources fixed this round**, all behind `TARGET_PC`, chosen the same way as before (each
+  either unblocks many units or is a one-line mechanical pattern):
+  - `cManager.h`/`esp.h`/`card.h`/`cam_extra.h`/`main_mem.cpp`/`esp.cpp`: placement/member/replacement
+    `operator new`/`delete` re-spelled with `std::size_t` (only valid deallocation functions because
+    `unsigned int` happens to equal `size_t` on the GameCube target).
+  - `joy.h`/`db_toolbase.h`/`db_widget.h`: dropped `size_t`-mismatched `memcpy`/`strlen`
+    redeclarations in favour of `<cstring>`.
+  - `math_sub.h`'s single-instruction `fabs` → `__builtin_fabsf`; `dbg_tool.h`'s `asm("li %0,0")`
+    (COMPILER-DIFF #13, a pure zero-register scheduling trick, not hardware) → a plain `= 0`
+    initializer — the only two asm bodies judged "small and obviously equivalent" this round.
+  - `dbg_var.h`: `cVarLoop`'s out-of-class members call `cVarRange<T>`'s members unqualified, which
+    GCC 2.95 resolves into the dependent base at first-phase lookup (non-conformant) but ISO two-phase
+    lookup (clang) rejects; qualified with `this->` via a macro that is empty for the original target.
+  - `t_esp.cpp`'s `operator new(unsigned n) asm("__builtin_new")` (a documented COMPILER-DIFF-adjacent
+    alias trick binding to the compiler's builtin-new symbol): host branch drops the asm-label, takes
+    `std::size_t`, forwards to `::operator new`.
+  - `xml.cpp`/`main_mem.cpp`/`r332.cpp`: `strstr`/`strrchr` results assigned to `char*` — the GCC
+    2.95/MSL libc's single non-const-correct overload always returned `char*`; libc++ has the
+    standard const-correct pair. Host-only wrapper functions (`strstr_host`/`strrchr_host`, `#define`d
+    over the plain name for the rest of the file) restore the old behaviour.
+  - `emwindow.cpp`: missing `<cstring>` (reached transitively on the original target, not on host).
+  - `motion.cpp`: one `__attribute__((section(".sdata")))` (Mach-O needs `"segment,section"`) dropped
+    under `TARGET_PC`, same family as the next point.
+  - 64 mechanical `asm(".section .sdata|.rodata|.bss|.data ...")` alignment pragmas across
+    `src/game/*.cpp` and the REL sources (small-data/rodata/bss/data layout for the ProDG linker, no
+    host meaning) `#ifndef TARGET_PC`-gated.
+  - `-Wno-address-of-temporary` added to every target's compile options: `&((Vec){...})`
+    compound-literal-address idiom (GNU C, several `em*`/`wep*` units) is legal for GCC 2.95 and alive
+    for the enclosing full expression; clang's default diagnostic for it is a hard error, not a
+    warning, hence the flag rather than a source change.
 - **Result**: `re4_game_core` compiles clean except `math_sub.cpp` (paired-single asm) and
   `model.cpp` (pointer-to-int casts) — both genuine Phase 2/5 material, not header bugs.
-  `re4_game_all`: **308 / 351 units (~88%) compile clean.** Full categorized inventory of the other
-  43: `docs/port-phase1-errors.md`.
+  `re4_game_all`: **312 / 351 units (~89%) compile clean**, 39 fail. `re4_rel_all`: **264 / 302 units
+  (~87%) compile clean**, 38 fail (out of 305 REL units total; 3 skipped, see the Tools/tools point
+  above). Full categorized inventory of both remainders, with every deferral's reasoning:
+  `docs/port-phase1-errors.md`.
 
-Exit: `src/game` compiles (not links) on macOS arm64; the error inventory for phases 2-3 is written down.
+**Phase 1 exit** (all four conditions now hold):
+1. `src/game` compiles (not links) on macOS arm64 for a representative slice (`re4_game_core`, 6/8
+   units clean) and the wide sweep (`re4_game_all`, 312/351).
+2. Every REL module compiles for at least its own unit boundaries where the source is host-clean
+   (`re4_rel_all`, 264/302; the `Tools`-module APFS-fold exclusion is the only unit skipped outright,
+   not attempted and failed).
+3. Every remaining failure is categorized in `docs/port-phase1-errors.md` with a named cause and an
+   explicit phase: **Phase 2** (pointer-to-int/int-to-pointer casts and struct-size assumptions in
+   loaded/relocated data — `model.cpp`, `sce_at.cpp`, `sce_sys.cpp`, `st/em_wrap.cpp`, the
+   `0x320 - sizeof(cModel)` padding units, ...), **Phase 5** (real PPC paired-single/GQR asm —
+   `math_sub.cpp`'s `SQRTF`/`SINF`/`COSF`, `dbmodule.cpp`'s `PSQ_L_S16`/`PSQ_L_U8_TO` family,
+   `em2d.cpp`'s `register ... asm("fr0")`, ...), or **later, unscoped** (the four newlib libc
+   reimplementations `printf.c`/`fprintf.c`/`sprintf.c`/`sscanf.c`, which need a real libc-shim
+   decision, and the two SDK-shaped call sites `AddOtWorldPos`/`VISetPostRetraceCallback` that are
+   Aurora's/Phase 4's job).
+4. Nothing in this slice hacked around a Phase 2/3/5 problem to make a unit compile: every asm/cast
+   left failing is left failing, with its reasoning on record instead.
+
+Exit (original wording, still true): `src/game` compiles (not links) on macOS arm64; the error
+inventory for phases 2-3 is written down. Now additionally true for the REL modules.
 
 ### Phase 2 — 64-bit pointers in loaded data
 
