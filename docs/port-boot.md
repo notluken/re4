@@ -275,3 +275,119 @@ explicit init-order fence (a priority attribute, or moving Aurora's problematic 
 static-init entirely) so the game's own subsystems are guaranteed to construct before any
 `operator new` call reaches them. Not attempted this pass, per the "don't fix beyond the first
 crash unless trivial" instruction.
+
+## 9. Split allocator (2026-09-24, fixes section 8's crash)
+
+Design (`include/port/alloc.h`, `src/port/alloc.cpp`, `src/game/main_mem.cpp`'s `TARGET_PC`
+branch):
+
+- `operator new`/`new[]`: game heap (`mem_calloc`) only when `re4_port::ShouldUseGameHeap()`
+  (`IsGameThread() && HeapsReady()`); otherwise `std::malloc`. `IsGameThread()` is a
+  `thread_local` flag set once by `re4_port::MarkCurrentThreadGame()`, called from
+  `CreateArenaThread`'s new trampoline (`src/port/arena.cpp`) before the caller's own start
+  function runs -- so only threads started that way are ever "the game" for allocation purposes.
+  `HeapsReady()` is an `std::atomic<bool>` set by `re4_port::MarkHeapsReady()`, called from
+  `SystemMemInit()` right after `Heap[0]` exists (before that point even the game thread must use
+  malloc, since there is no game heap yet).
+- `operator delete`/`delete[]`: routed by *pointer identity*
+  (`re4_port::IsArenaPointer`, address falls inside `GetArenaBase()`/`GetArenaSize()`), not by
+  thread or by how the pointer was allocated -- everything `mem_calloc` ever hands out lives
+  inside the embedded arena by construction. A debug-only (`#ifndef NDEBUG`) check aborts if an
+  arena pointer is ever freed off the game thread (the OSAlloc-based heap is not thread-safe, so
+  a cross-thread free would be a real, if rare, bug on its own).
+- Sized/aligned/nothrow `operator new`/`delete` overloads: **not added this pass** (not needed to
+  reach the next blocker, see section 10; TO VERIFY whether libc++/Aurora code reachable later
+  ever calls one of these -- if so, they need the same two rules).
+- Host libraries (Aurora, SDL, libc++ internals) never run on a thread `MarkCurrentThreadGame()`
+  touched, so their allocations always take the `malloc` path by construction -- no extra guard
+  needed for "host code never gets game-heap memory" beyond the thread check itself.
+
+Verified: fixes section 8's pre-main crash (confirmed by rerunning the same `lldb` command -- see
+section 10, the process now gets past `OSInit()`/Aurora's static initializers and into
+`SystemMemInit()` before it hits a new, unrelated blocker). Default host build (`RE4_U32_32=OFF`)
+unaffected: `re4_game_core` still has only the same two pre-existing failures
+(`math_sub.cpp`/`model.cpp`), `ctest` 2/2 passed. `main_mem.cpp`'s vendor-tree edit remote-verified
+(commit `d4476310`) -- see section 11.
+
+## 10. DVD root configuration (2026-09-24, plumbing only -- not reachable yet)
+
+`re4_port::InitDvdRoot(argc, argv)` (`include/port/dvd_root.h`, `src/port/dvd_root.cpp`), called
+first thing in `boot_main.cpp`'s `main()`: resolves `argv[1]`, else `$RE4_DVD_ROOT`, else
+`orig/G4BE08/files`, and logs it (`re4_boot: DVD root=...`). Not wired any further than storage --
+boot does not reach `cDvd::Init()` yet (section 11's blocker is earlier), and wiring it properly
+surfaces a second, separate design question worth flagging now rather than guessing at: Aurora's
+own DVD backend (`aurora_dvd_open(const char* disc_path)`, `lib/dolphin/dvd/dvd.cpp` in the Aurora
+checkout) reads through the `nod` library, which expects a **real GC/Wii disc image**
+(`.iso`/`.gcm`), not an extracted `files/`+`sys/` tree -- but this repo's own convention
+(docs/port.md section 1, and the "never commit orig/, the ISO..." port rule) is to work from the
+extracted tree, not a committed or even locally-required disc image. Reconciling those two -- synthesize
+a disc image from the extracted tree at configure time, or write a host DVD backend that reads the
+extracted tree directly and bypasses `nod`/`aurora_dvd_open` entirely -- is a design decision, not
+attempted this pass.
+
+## 11. MEM1/arena blocker (2026-09-24, stopped here)
+
+Ran under `lldb --batch -o run -o bt -k bt -k quit` after section 9's fix:
+
+```
+STUB: PSMTXIdentity() called
+re4_boot: DVD root=orig/G4BE08/files
+re4_boot: arena base=0x100d38000 size=1073741824
+STUB: memclr_asm() called
+STUB: OSGetFontEncode() called
+STUB: OSInitFont() called
+STUB: OSGetConsoleType() called
+STUB: OSSetErrorHandler() called
+STUB: DBIsDebuggerPresent() called
+STUB: OSInitAlarm() called
+STUB: systemVISetBlack() called
+STUB: VIWaitForRetrace() called
+STUB: VISetPostRetraceCallback() called
+STUB: ADXGC_SetupDvdFs() called
+STUB: OSReport() called
+STUB: OSGetConsoleSimulatedMemSize() called
+[info] [aurora::card] CARD API Initialized BUILT <Sep 24 2026 12:47:29>
+Assertion failed: (newLo <= MEM1End && newLo >= MEM1Start), function OSSetArenaLo, file OSArena.cpp, line 27.
+
+* thread #2, stop reason = hit program assert
+  frame #4: OSSetArenaLo(newLo=0x1016ac140) at OSArena.cpp:27
+  frame #5: SystemMemInit() at main_mem.cpp:111
+  frame #6: ::systemStartInit() at main.cpp:612
+  frame #7: main_game() at main.cpp:73
+  frame #8: (anonymous namespace)::GameThreadEntry(...) at boot_main.cpp:36
+  frame #9: re4_port::(anonymous namespace)::ThreadTrampoline(...) at arena.cpp:109
+  frame #10: libsystem_pthread.dylib`_pthread_start + 136
+```
+
+**Milestone reached**: past `OSInit()` and every Aurora/host C++ static initializer, into
+`systemStartInit()`, as far as the *second* line of `SystemMemInit()` (`main_mem.cpp:111`,
+`SysMem.arena_lo = (u32) OSGetArenaLo();` -- the crash is actually one step later, inside
+`OSInitAlloc`'s call chain reaching `OSSetArenaLo`, `main_mem.cpp:136`, not literally line 111;
+the reported frame is the enclosing function).
+
+**Diagnosis**: this is a real, load-bearing implementation Aurora provides (`libaurora_os`'s
+`lib/dolphin/os/OSArena.cpp` -- `OSGetArenaLo/Hi`, `OSSetArenaLo/Hi`, `OSAllocFromArenaLo/Hi`),
+*not* one of this session's stubs -- it linked because Aurora satisfies it, per the "don't stub
+what Aurora already implements" rule. Its `OSSetArenaLo`/`OSSetArenaHi` assert the new value falls
+within `[MEM1Start, MEM1End)`, two globals only `AuroraOSInitMemory()` sets
+(`lib/dolphin/os/OSMemory.cpp`), and only if `aurora::g_config.mem1Size > 0` --  which nothing in
+`re4_boot` sets, so `MEM1Start`/`MEM1End` are still null when `SystemMemInit()` runs, and the
+assert fires on the very first non-null value.
+
+Setting `mem1Size` is not simply "the missing call", though -- it exposes a second, deeper
+architecture question, the actual reason this needs a design decision rather than a local fix:
+Aurora's `AllocMEM1()` on non-Windows (`lib/dolphin/os/OSMemory.cpp`, the `#else` branch) is a
+plain `calloc(1, size)` -- an ordinary host heap pointer, with no guarantee of fitting in 32 bits,
+no relationship at all to this repo's own Phase 2 compressed-handle arena
+(`include/port/arena.h`, `re4_port::g_base`/`GetArenaBase()`). The crash's own `newLo` value
+(`0x1016ac140`) is in fact this session's *own* arena base (`0x100d38000` from the log line just
+above it) plus a small offset -- i.e. the game code's `(u32) OSInitAlloc(...)`/`(void*) arenaLo`
+narrowing-then-widening round trip is, by coincidence of this run's ASLR placement, producing an
+address that happens to look arena-relative, not because the two schemes are actually reconciled.
+Two independent "how does a GC 32-bit address become a host pointer" mechanisms (this repo's
+`Ptr32<T>`/arena, and Aurora's `OSBaseAddress`/`MEM1Start`-relative one) cannot both be live at
+once without deciding which owns the address space `SystemMemInit()`'s `SysMem`/`Heap[]` game
+code computes into -- that decision (adopt Aurora's `OSMemory` wholesale and retire/adapt
+Phase 2's own arena scheme accordingly, or keep Phase 2's arena and provide a `TARGET_PC` OSArena
+implementation of our own instead of linking Aurora's) is exactly the kind of blocker the
+coordinator's stop condition names. Not attempted further this pass.
