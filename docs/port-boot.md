@@ -2634,3 +2634,83 @@ card prompt to reach `title.dat`/font-bearing content.
   keyboard mapping + scripted input (touches outside `src/port`/`include/port`, needs the remote
   round trip before landing on `port/macos-arm64`)
 - `src/game/title.cpp`: early `cMes.gameInit()` call (same remote-verification requirement)
+
+**Correction (2026-09-25, next session)**: the `title.cpp` early-bind commit above was later reverted
+(`41c024cd`, "wrong table, not needed -- real fix is snd.cpp") -- this file was never updated to say
+so until now. Section 39 below is the real, current state.
+
+## 39. Coordinator correction: the "6.8 KB card-heap shortfall" was NOT fixed by the `IdUnit`/
+    `DatTblEntry` Ptr32<T> commits; root cause found and fixed (2026-09-25)
+
+`docs/port.md`/this file's own section 37 both implied the card-heap shortfall (`CardID::init`'s
+`m_IdSave.gameInit(0x100)`, `IDSystem::unitPtr(...): Not found` afterward) was resolved once
+`IdUnit`/`DatTblEntry` got `Ptr32<T>` (commits `462359aa`/`f5e1d5dc`). Re-running `re4_boot` at that
+HEAD reproduces the exact same failure: `alloc[13800]:free[11d40] id_sys.cpp(66)` -- the *request*
+is now the correct, GC-matching `0x13800` (256 * `sizeof(IdUnit)`, confirming `IdUnit`'s own size is
+fixed), but the heap still comes up short by `0x1AC0` (6,848 bytes, i.e. exactly "~6.8 KB").
+
+**Not a struct-size bug.** Temporary instrumentation (every `mem_alloc`/`mem_calloc` call logged
+with heap/size/free-after, `RE4_PORT_MEM_TRACE=1`, reverted before landing -- not part of any
+commit) traced heap 11 (`cDataSwap::SwapOut`'s temporary swap-in heap the card screen borrows) from
+its creation through the failing call. `getUseMemSize()`'s own capacity formula is pure literal
+constants plus a real DVD file size -- no `sizeof()` anywhere -- so the heap's total capacity is
+identical GC vs host by construction; `workAlloc()`'s allocations inside it are also all literal
+sizes. The free-space trace showed something else instead: a repeating, per-frame cluster of
+`operator new` calls (~13 allocations, ~0x4780 bytes total) landing in heap 11 *while* the DVD read
+for `idpath` was still in flight (`TaskSleep(1)` polling `Dvd.ReadCheck()`), oscillating between a
+"high" free-space point (~0x15220, comfortably above the needed 0x13800) and a "low" point
+(~0x11c60, below it) -- and `CardID::init`'s `m_IdSave.gameInit()` call happened to run at exactly
+the low point of that cycle, not the high one.
+
+Backtracing the largest allocation in that cluster (`size=0x3300`) found the real culprit:
+`aurora::gfx::begin_frame()` (called every frame from `re4_port::BeginGxFrame()` <-
+`Render_before()` <- `main_game()`'s own frame loop) allocates its own internal renderer state
+(command/resource pools for Aurora's host GPU backend -- no GameCube equivalent exists) via plain
+`new`, on the **game thread**, synchronously, inline -- exactly the one case
+`include/port/alloc.h`'s split-allocator design (section 9 above) didn't cover: its own doc
+explicitly says "host libraries never run on a thread `MarkCurrentThreadGame()` touched, so their
+allocations always take the malloc path by construction" -- true for Aurora's *background* threads,
+false for Aurora's GX frame calls, which this port deliberately calls straight from the game
+thread's own per-frame code. `IsGameThread() && HeapsReady()` was therefore true, and every one of
+Aurora's own per-frame bookkeeping allocations was silently being carved out of the tiny, exactly-
+budgeted GameCube-sized heaps instead of the host's `malloc` -- permanently consuming real
+GC-memory-map budget for something that does not exist on real hardware at all.
+
+**Fix**: `re4_port::HostAllocScope` (`include/port/alloc.h`/`src/port/alloc.cpp`), a thread_local
+nesting depth counter; `ShouldUseGameHeap()` now also requires depth `== 0`. `src/port/vi.cpp`'s
+`BeginGxFrame()`/`EndGxFrame()` each hold one for the duration of `aurora_begin_frame()`/
+`aurora_end_frame()`. Entirely inside `src/port`/`include/port` -- no remote verification round
+trip needed per the port rules. Verified: heap-11 allocation count for one representative run fell
+from 706 to 184; `id_sys.cpp(66)`'s allocation now succeeds (`ok=1 free=0x1a60` after satisfying the
+`0x13800` request); `IDSystem::unitPtr(...): Not found` no longer appears anywhere in the log. Host
+default build unaffected (`re4_game_all -k 0`: same 33 failing files; `ctest` 5/5). Commit
+`53d6cfd3`.
+
+**Screenshot, honestly described, before and after the fix**: identical in both cases -- a debug
+overlay (not the title screen), a green mark and dark-navy bars at the left edge, a lavender bar at
+the right edge, and **legible orange debug text** reading `SndCall : blk 0 No.5 Illegal SE No.`
+plus a grey monospace dump of `SS/eng/title.dat`'s block table (hex offsets/sizes) -- font glyphs
+render correctly here (a real, previously-undocumented improvement over every earlier screenshot in
+this file, all of which showed only placeholder colour bars, no text) -- but this is still a debug
+view, not the title screen itself, and fixing the heap shortfall changed nothing about what is on
+screen (expected: the shortfall was silently harming a background allocation's bookkeeping, not
+blocking or altering this screen's own control flow).
+
+**Current blocker (not chased further this pass, budget)**: the process keeps running steadily,
+still showing this same debug overlay, past the point the trace runs stop. Whatever route reaches
+the real title screen (font/model/texture rendering from `title.dat`, per section 3's format table)
+has not been reached yet; the `SndCall : blk 0 No.5 Illegal SE No.` line is itself the sound driver
+rejecting a bad sound-effect index (Phase 5 territory, `SndInit()` stub-related, docs/port.md) and
+may or may not be gating anything past it -- **TO VERIFY**.
+
+**Tooling landed this pass**: `tools/port/gen_layout_report.py` (docs/port-layout-parity.md) -- the
+"cheap" struct-size parity tool (coordinator item B): no cross-compilation, reuses the same
+`(0xNN byte...)` doc comments `tools/port/gen_static_asserts.py` already trusts as GC ground truth,
+generates one host probe TU, and reports every mismatch with a best-effort cause. First run: 35
+candidate types, 19 match, 16 mismatch (mostly un-ported native pointer fields; one, `ID_DATA`,
+unexplained and worth a follow-up look -- derives from `cCoord`, +16 bytes on host). Scoped to
+structs whose doc comment sits immediately above the type (conservative, to avoid misattributing a
+containing struct's byte count to a member type -- caught and fixed one such false positive,
+`LifeMeter`, during this pass); does not yet cover every struct in the tree the way the full,
+cross-compiled-against-the-real-SN-toolchain version would -- that heavier tool (item B's "later")
+was not attempted this pass.
