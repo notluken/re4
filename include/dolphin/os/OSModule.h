@@ -53,7 +53,16 @@ struct OSModuleLink {
 };
 
 struct OSModuleInfo {
-    OSModuleID id;         // unique identifier for the module
+    // TARGET_PC: `OSModU32`, not the plain-`u32` `OSModuleID` typedef -- read straight off a
+    // big-endian REL file's header on this little-endian host, exactly like every other field in
+    // this struct (already `OSModU32`), so it needs the same swap-on-access treatment; left as
+    // plain `OSModuleID` this comes through as e.g. `0x4a000000` instead of `74` (confirmed live:
+    // `re4_port::OSLink()`'s own registry lookup, src/port/rel.cpp, failing to find a module this
+    // port had actually built and registered, docs/port-boot.md). `OSModuleID` itself (used as an
+    // ordinary parameter/local type elsewhere, e.g. `OSLink()`'s own signature) is intentionally
+    // left a plain `u32` -- only this one on-disc field changes type. GameCube-matching builds (no
+    // TARGET_PC) are unaffected: `OSModU32` is plain `u32` there too.
+    OSModU32 id;         // unique identifier for the module
     OSModuleLink link;     // doubly linked list of modules
     OSModU32 numSections;       // # of sections
     OSModU32 sectionInfoOffset; // offset to section info table
