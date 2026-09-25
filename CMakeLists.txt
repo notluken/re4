@@ -285,6 +285,7 @@ add_library(re4_port STATIC
   src/port/dvd_root.cpp
   src/port/fiber.cpp
   src/port/os_thread.cpp
+  src/port/trans_skin.cpp
 )
 target_include_directories(re4_port PUBLIC ${RE4_GAME_INCLUDES})
 # TARGET_PC/RE4_U32_32 are global (add_compile_definitions() near the top of this file) -- see
@@ -332,6 +333,16 @@ if (RE4_PC_BUILD_TESTS)
   target_compile_definitions(test_math_sub PRIVATE ${RE4_GAME_DEFINES} TARGET_PC)
   target_compile_options(test_math_sub PRIVATE ${RE4_GAME_OPTIONS})
   add_test(NAME test_math_sub COMMAND test_math_sub)
+
+  # test_trans_skin: src/port/trans_skin.cpp, the TARGET_PC C port of src/game/trans.cpp's
+  # CalcSk1_x/CalcSk1_x2/setupGQR6 (docs/port-boot.md section 46). Links src/port/trans_skin.cpp
+  # directly (not the whole re4_port static lib, and not trans.cpp itself, which needs
+  # RE4_U32_32/the cast rewriter and pulls in dozens of unrelated symbols) plus its own LCGetBase()
+  # stub -- see tests/port/test_trans_skin.cpp's own comment.
+  add_executable(test_trans_skin src/port/trans_skin.cpp tests/port/test_trans_skin.cpp)
+  target_include_directories(test_trans_skin PRIVATE ${RE4_GAME_INCLUDES} ${CMAKE_CURRENT_SOURCE_DIR}/tests/port)
+  target_compile_definitions(test_trans_skin PRIVATE ${RE4_GAME_DEFINES})
+  add_test(NAME test_trans_skin COMMAND test_trans_skin)
 endif()
 
 # --- re4_port_static_asserts: offsetof() checks for Phase 2 step 5's Ptr32<T>-converted on-disc
