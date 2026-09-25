@@ -533,7 +533,12 @@ if (RE4_BUILD_BOOT)
   # single add_custom_command (see that script's own header comment for why: expressing the same
   # two-phase `ld -r` through CMake OBJECT libraries/generator expressions alone was tried first and
   # is far more fragile than one driver script this build just shells out to).
-  set(RE4_REL_MODULES st1_0)
+  set(RE4_REL_MODULES st1_0 wep02)
+  # Fed to re4_port (arena.cpp's InitArena(), layout invariant #4) as RE4_REL_MODULE_LIST so that
+  # target's own per-module section check (`__r_<mod>_d/_b/_ro`) covers every module in this list
+  # with no per-module edit there -- see arena.cpp's own comment.
+  string(REPLACE ";" "," RE4_REL_MODULES_CSV "${RE4_REL_MODULES}")
+  target_compile_definitions(re4_port PRIVATE RE4_REL_MODULE_LIST="${RE4_REL_MODULES_CSV}")
   execute_process(COMMAND xcrun --show-sdk-path OUTPUT_VARIABLE RE4_REL_SYSROOT
                    OUTPUT_STRIP_TRAILING_WHITESPACE)
   execute_process(COMMAND /opt/homebrew/opt/llvm/bin/clang -print-resource-dir

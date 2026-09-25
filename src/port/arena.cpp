@@ -38,7 +38,18 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <thread>
+
+// CMakeLists.txt feeds this as a comma-separated list of every module in RE4_REL_MODULES (empty
+// string default here for any target that doesn't set it, e.g. a plain re4_port build with
+// RE4_BUILD_BOOT off) -- see InitArena()'s layout invariant #4 below and this repo's own
+// generalization note (was a fixed "st1_0" literal; now driven from the same list CMakeLists.txt
+// already threads through tools/port/build_rel_module.py, so adding a module there needs no
+// further edit here).
+#ifndef RE4_REL_MODULE_LIST
+#define RE4_REL_MODULE_LIST ""
+#endif
 
 namespace re4_port {
 
@@ -137,6 +148,19 @@ void CheckGameSection(const char* sectname)
     }
 }
 
+// Layout invariant #4's own loop body, factored out of InitArena() so it can walk
+// RE4_REL_MODULE_LIST's comma-separated module names generically (see that macro's own comment).
+void CheckRelModuleSections(const char* mod)
+{
+    char sect[32];
+    std::snprintf(sect, sizeof(sect), "__r_%s_d", mod);
+    CheckGameSection(sect);
+    std::snprintf(sect, sizeof(sect), "__r_%s_b", mod);
+    CheckGameSection(sect);
+    std::snprintf(sect, sizeof(sect), "__r_%s_ro", mod);
+    CheckGameSection(sect);
+}
+
 } // namespace
 
 void InitArena()
@@ -191,12 +215,18 @@ void InitArena()
     // Layout invariant #4 (docs/port-boot.md's REL plan): every statically-linked REL module's own
     // data/bss/rodata sections (tools/port/gen_rel_module.py's per-module `#pragma clang section`,
     // named `__r_<mod>_d`/`_b`/`_ro` -- short because Mach-O caps section names at 16 characters).
-    // Absent for a module not yet built (CheckGameSection's own "nothing to check" rule) -- adding a
-    // module to CMakeLists.txt's `RE4_REL_MODULES` list is enough for its own sections to start
-    // being checked here too, no further change needed per module.
-    CheckGameSection("__r_st1_0_d");
-    CheckGameSection("__r_st1_0_b");
-    CheckGameSection("__r_st1_0_ro");
+    // Absent for a module not yet built (CheckGameSection's own "nothing to check" rule). Driven
+    // from RE4_REL_MODULE_LIST (CMakeLists.txt, same source as RE4_REL_MODULES) so adding a module
+    // to that one CMake list is enough for its own sections to start being checked here too -- no
+    // per-module edit in this file.
+    {
+        char list[256];
+        std::snprintf(list, sizeof(list), "%s", RE4_REL_MODULE_LIST);
+        char* save = nullptr;
+        for (char* mod = strtok_r(list, ",", &save); mod != nullptr; mod = strtok_r(nullptr, ",", &save)) {
+            CheckRelModuleSections(mod);
+        }
+    }
 
     // Layout invariant #2: the arena starts inside the fixed-GC-address budget.
     std::uint32_t arenaGC = GC32(s_arena);
