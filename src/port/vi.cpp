@@ -48,6 +48,36 @@ std::atomic<bool> g_black{false};
 // per-frame cost: once true it stays true for the rest of the process.
 std::atomic<bool> g_windowReady{false};
 
+// Serializes the game thread's active GX-frame span (aurora_begin_frame()..aurora_end_frame(), i.e.
+// BeginGxFrame()..EndGxFrame() below) against the host main thread's aurora_update() calls in
+// RunPresentLoop(). Found necessary live: aurora_update() processes SDL window events synchronously,
+// including a resize (SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED -- fires once, early, as macOS settles the
+// real content-view size a few frames after the window opens) that calls into Aurora's
+// resize_swapchain()/clear_caches(), which synchronizes with (drains) Aurora's own asynchronous
+// "render worker" thread and then clears its bind-group cache. That drain only waits for whatever
+// was already queued for the worker at the moment it runs -- it has no way to know the game thread
+// (a second, independent real host thread in this port's design, unlike Aurora's own single-
+// game-thread assumption) is concurrently inside gx::render() doing a bind_group_ref() cache HIT
+// (reusing a still-cached id, no recreation) and about to hand a new frame packet to that same
+// worker referencing that id. If the resize's clear_bind_group_cache() lands in the gap between that
+// hit and the new packet actually being enqueued, the worker later calls find_bind_group() on an id
+// that no longer exists -- "get_bind_group: failed to locate ..." fatal, confirmed live by tracing
+// bind_group_ref/clear_bind_group_cache/find_bind_group frame numbers and thread names (the crash
+// itself stacks through aurora::gfx::render_worker, not the game thread). Root cause is the same
+// class already documented for the GX FIFO worker (docs/port-boot.md section 43) and the
+// begin_frame/window-ready race (section 44): Aurora's internal handshakes assume one thread drives
+// both window events and GX submission; this port deliberately splits them across two. Holding this
+// mutex for the whole game-thread GX-frame span, and around each aurora_update() call, makes the two
+// mutually exclusive so a resize (or any other Aurora-internal synchronize()+cache-clear sequence)
+// can never race a not-yet-enqueued draw the way it did here -- no Aurora patch needed, this is
+// purely about which of the port's own two threads may run Aurora entry points at a given moment.
+std::mutex g_gxHostMutex;
+// Held by BeginGxFrame() and released by EndGxFrame() -- these are two separate calls from two
+// separate call sites (src/game/main_sub.cpp's Render_before()/Render_swap()) on the same (game)
+// thread, so the lock has to outlive the function that acquires it; thread_local because only the
+// game thread ever calls either function (same rule as t_gxFrameActive above).
+thread_local std::unique_lock<std::mutex> t_gxHostLock(g_gxHostMutex, std::defer_lock);
+
 // Advances virtual time by exactly one retrace, synchronously, on the calling (game) thread: bumps
 // the counter/field, then invokes the registered pre/post callbacks directly (safe here the same
 // way DrainPendingCallbacks() already is -- only ever called from the one real thread that is
@@ -223,6 +253,11 @@ void BeginGxFrame()
                            "open -- see aurora-patches/0007)");
     }
 
+    // Acquired AFTER the window-ready wait above, never before: RunPresentLoop() (host thread) is
+    // what actually creates the window during that wait window (its own aurora_update()/
+    // aurora_initialize() calls), and holding g_gxHostMutex earlier would deadlock against
+    // RunPresentLoop()'s own lock around aurora_update() below.
+    t_gxHostLock.lock();
     re4_port::HostAllocScope hostAlloc;
     t_gxFrameActive = aurora_begin_frame();
     if (!t_gxFrameActive) {
@@ -250,6 +285,12 @@ void EndGxFrame()
         re4_port::HostAllocScope hostAlloc; // see BeginGxFrame()
         aurora_end_frame();
         t_gxFrameActive = false;
+    }
+    // Release g_gxHostMutex unconditionally, matching BeginGxFrame()'s unconditional lock() above
+    // (t_gxFrameActive only gates the aurora_end_frame() call itself, not the lock span -- a frame
+    // discarded for lacking a session, section above, still held the lock the whole time).
+    if (t_gxHostLock.owns_lock()) {
+        t_gxHostLock.unlock();
     }
 }
 
@@ -318,12 +359,21 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
 
     bool exiting = false;
     while (!exiting && !shouldExit->load()) {
-        const AuroraEvent* event = aurora_update();
-        while (event != nullptr && event->type != AURORA_NONE) {
-            if (event->type == AURORA_EXIT) {
-                exiting = true;
+        {
+            // See g_gxHostMutex's own comment (above BeginGxFrame()/EndGxFrame()): aurora_update()
+            // can process a window event (resize) that synchronizes with and clears Aurora's
+            // internal caches -- must not run concurrently with the game thread's active GX-frame
+            // span. Scoped to just this call (not the whole iteration, i.e. not held across the
+            // pacing sleep below) so the host thread never holds it longer than Aurora's own entry
+            // point actually needs.
+            std::lock_guard<std::mutex> gxHostLock(g_gxHostMutex);
+            const AuroraEvent* event = aurora_update();
+            while (event != nullptr && event->type != AURORA_NONE) {
+                if (event->type == AURORA_EXIT) {
+                    exiting = true;
+                }
+                ++event;
             }
-            ++event;
         }
         if (exiting) {
             break;
