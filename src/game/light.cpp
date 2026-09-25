@@ -21,6 +21,9 @@
 #include "cam_ctrl.h"
 #include "pendulum.h"
 #include "trans.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
 // game/trans.cpp texture LOD / TEV scale settings
 // trans.cpp; uninitialised there, so not in trans.h (a header extern reorders trans.cpp's .bss / .sbss)
@@ -1527,12 +1530,19 @@ cLightEnv* cLit::getCut(u16 no)
 {
     cLightEnv* cut;
 
+    // On-disc, big-endian (Phase 3, docs/port-phase3.md): the cut offset table right after this
+    // header is raw file data, read here through a plain pointer cast rather than a named struct
+    // field, so it needs its own TARGET_PC swap (BE<u32> would need a named field to attach to).
+#ifdef TARGET_PC
+    re4_port::BE<u32>* ofs = (re4_port::BE<u32>*) (this + 1);
+#else
     u32* ofs = (u32*) (this + 1);
+#endif
 
     if (no >= CutNum || ofs[no] == 0) {
         return 0;
     }
-    cut = (cLightEnv*) ((u8*) this + ofs[no]);
+    cut = (cLightEnv*) ((u8*) this + (u32) ofs[no]);
     if (!VALID_PTR(cut)) {
         return 0;
     }

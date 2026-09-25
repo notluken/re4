@@ -8,6 +8,9 @@
 #include "db_log.h"
 #include "main_mem.h"
 #include "lightPath.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
 class cModel;
 class cEm;
@@ -213,9 +216,15 @@ struct cLightEnv {
 };
 
 // Light data file (.lit): cut offset table, then the cuts.
+// On-disc, big-endian (Phase 3, docs/port-phase3.md): CutNum is BE<u16> under TARGET_PC; Version/
+// nMaxLight are single bytes (no swap needed either way).
 class cLit {
 public:
+#ifdef TARGET_PC
+    re4_port::BE<u16> CutNum;  // 0x00
+#else
     u16 CutNum;          // 0x00
+#endif
     u8 Version;        // 0x02
     u8 nMaxLight;      // 0x03
     // 0x04: u32[nCut] byte offset of each cut from the file start (0 = none)
