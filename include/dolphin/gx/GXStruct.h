@@ -32,8 +32,24 @@ typedef struct _GXColorS10 {
     s16 r, g, b, a;
 } GXColorS10;
 
+// GXTexObj/GXTlutObj are opaque to the game on real hardware -- 32 and 12 bytes there, respected
+// unchanged below for the matching build. Aurora's host-side reinterpretation (GXTexObj_/
+// GXTlutObj_, ../aurora/lib/gfx/texture.hpp) needs more room per object than real GX hardware ever
+// did (a cached host pointer, width/height, a texture-cache id, ...) -- Aurora's OWN copy of this
+// exact header (../aurora/include/dolphin/gx/GXStruct.h) already widens these two under TARGET_PC
+// for exactly that reason; this repo's copy did not, and because this repo's include/ is searched
+// before Aurora's own (src/port/dvd.cpp's comment on the same shadowing effect), game code was
+// still compiling against the narrow, real-hardware size here -- a real, silent buffer overflow
+// (GXInitTexObj/GXInitTexObjCI writing up to sizeof(GXTexObj_) into a `GXTexObj fontTexObj;` that
+// was really only 32 bytes) found live with lldb (docs/port-boot.md): `obj.width()` read back
+// wrong on Aurora's own FIFO thread even though the value passed into GXInitTexObj was confirmed
+// correct at the call site. Mirrors Aurora's own header exactly, so both sides finally agree.
 typedef struct _GXTexObj {
+#ifdef TARGET_PC
+    u32 dummy[16];
+#else
     u32 dummy[8];
+#endif
 } GXTexObj;
 
 typedef struct _GXLightObj {
@@ -45,7 +61,11 @@ typedef struct _GXTexRegion {
 } GXTexRegion;
 
 typedef struct _GXTlutObj {
+#ifdef TARGET_PC
+    u32 dummy[10];
+#else
     u32 dummy[3];
+#endif
 } GXTlutObj;
 
 typedef struct _GXTlutRegion {

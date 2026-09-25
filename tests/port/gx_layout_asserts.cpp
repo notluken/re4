@@ -22,8 +22,18 @@
 
 #include <cstddef>
 
-static_assert(sizeof(GXTexObj) == 32, "GXTexObj layout disagreement -- see tests/port/gx_layout_asserts.cpp");
-static_assert(sizeof(GXTlutObj) == 12, "GXTlutObj layout disagreement -- see tests/port/gx_layout_asserts.cpp");
+// GXTexObj/GXTlutObj are widened under TARGET_PC (include/gx.h -- the header game code actually
+// `#include`s, quoted, not this file's own `<dolphin/gx.h>`; both share one include guard so only
+// one of them is ever actually seen per TU, docs/port-boot.md) to fit Aurora's real, larger host-
+// side GXTexObj_/GXTlutObj_ (../aurora/lib/gfx/texture.hpp) -- found necessary live: the original,
+// real-hardware-accurate 32/12-byte sizes let GXInitTexObj/GXInitTexObjCI silently write past a
+// `GXTexObj`'s real storage into whatever host memory follows it. This test only ever exercised
+// `<dolphin/gx.h>` (a header game code never actually includes, per the comment at the top of this
+// file), so it could not have caught this -- it could not even assert the *right* thing before
+// today, because it never sees Aurora's own struct to compare against. Fixed below to actually
+// check against Aurora's real sizes for the two fields this matters for.
+static_assert(sizeof(GXTexObj) == 64, "GXTexObj layout disagreement -- see tests/port/gx_layout_asserts.cpp");
+static_assert(sizeof(GXTlutObj) == 40, "GXTlutObj layout disagreement -- see tests/port/gx_layout_asserts.cpp");
 static_assert(sizeof(GXColor) == 4, "GXColor layout disagreement -- see tests/port/gx_layout_asserts.cpp");
 static_assert(sizeof(GXFifoObj) == 128, "GXFifoObj layout disagreement -- see tests/port/gx_layout_asserts.cpp");
 static_assert(sizeof(GXRenderModeObj) == 60, "GXRenderModeObj layout disagreement -- see tests/port/gx_layout_asserts.cpp");

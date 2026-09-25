@@ -17,6 +17,27 @@ typedef struct {
     s16 r, g, b, a;
 } GXColorS10;
 
+// GXTexObj/GXTlutObj are opaque to the game on real hardware -- 32 and 12 bytes there, respected
+// unchanged below for the matching build. Aurora's host-side reinterpretation (GXTexObj_/
+// GXTlutObj_, ../aurora/lib/gfx/texture.hpp) needs more room per object than real GX hardware ever
+// did (a cached host pointer, width/height, a texture-cache id, ...) -- Aurora's own copy of
+// dolphin/gx/GXStruct.h already widens these two under TARGET_PC for exactly that reason, and this
+// repo's own copy of that same file (include/dolphin/gx/GXStruct.h) now mirrors it -- but this
+// file's own duplicate definitions (this comment's own header explains why the duplicate exists:
+// dolphin/gx.h cannot be compiled by ProDG/GCC, sharing the same include guard) shadow that one for
+// every game TU that `#include "gx.h"` instead (all of them -- confirmed by grep), so the same fix
+// has to be repeated here or it never takes effect. Found live with lldb: `GXInitTexObj`/
+// `GXInitTexObjCI` writing up to sizeof(GXTexObj_) into a `GXTexObj fontTexObj;` that was really
+// only 32 bytes here -- a real, silent buffer overflow.
+#ifdef TARGET_PC
+typedef struct {
+    u32 dummy[16];
+} GXTexObj;  // 0x40 under TARGET_PC (Aurora's GXTexObj_, ../aurora/lib/gfx/texture.hpp), 0x20 real
+
+typedef struct {
+    u32 dummy[10];
+} GXTlutObj;  // 0x28 under TARGET_PC (Aurora's GXTlutObj_), 0x0C real
+#else
 typedef struct {
     u32 dummy[8];
 } GXTexObj;  // 0x20
@@ -24,6 +45,7 @@ typedef struct {
 typedef struct {
     u32 dummy[3];
 } GXTlutObj;  // 0x0C
+#endif
 
 typedef struct {
     u32 dummy[16];
