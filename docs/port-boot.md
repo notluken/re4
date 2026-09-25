@@ -2854,3 +2854,126 @@ bug changed what code runs (much further into `CardMainTask`) but not yet what i
 `cUnit`/`cCoord` layout (`Ptr32`-ifying `pNext`/`pParent`, deciding the vptr-width question), and
 the title screen itself -- all still open from section 40, now genuinely reachable next since this
 session's blocker is gone.
+
+## 42. `math_sub.cpp` un-excluded (frsqrte/paired-single sincos/fcmpu ported), `trans.cpp` correctly
+    stays excluded, `cUnit`/`cCoord` rule recorded, and the REAL current blocker found: a missed
+    wakeup in Aurora's GX FIFO worker handshake (2026-09-25, same day as section 41)
+
+**math_sub.cpp** (docs/port.md's task list item): all four real-asm functions
+(`SQRTF`/`SINF`/`COSF`/`LIMIT_ANGLE`) now have `#ifdef TARGET_PC` C equivalents, `#else` keeping the
+original asm byte-for-byte for the matching build. `SQRTF`: `1.0f/sqrtf(x)` (arm64-native, more
+accurate than real `frsqrte`'s own ESTIMATE) as the seed for the SAME explicit Newton-Raphson
+refinement the vendor's asm performs afterward (`r = r*(1.5 - 0.5*x*r*r)`, transcribed operation-
+for-operation, not algebraically simplified) -- not a Dolphin-style bit-exact `frsqrte` lookup
+table, on the reasoning that one full NR iteration on an already-more-accurate seed converges to the
+same float-precision result regardless of the seed's own error, and no established caller depends
+on real hardware's specific rounding (**TO VERIFY** if a future desync traces here).
+`SINF`/`COSF`/`LIMIT_ANGLE`: `LIMIT_ANGLE` is an exact branch-for-branch C transcription of the
+vendor's `fcmpu`/`fsubs`/`fadds` loop (no precision or behavior difference possible -- plain
+single-precision compare/add/subtract, identical on arm64); `SINF`/`COSF` substitute libm's
+`sinf`/`cosf` on the same `LIMIT_ANGLE`-wrapped input, documented as an accepted approximation of
+the vendor's own paired-single degree-9 minimax polynomial (not reproduced lane-for-lane: it is a
+compensated-summation trick for PS throughput/precision, not two different functions, and there is
+no arm64 paired-single unit to model it on). Caught one real bug while testing: `COSF`'s first draft
+substituted `cosf(x)` on the already-shifted-by-PI/2 input `x`, which is wrong -- the vendor's own
+comment ("cos(x) by the same series") means `COSF` computes cos via the identity
+`cos(t) = sin(t + PI/2)`, so the substitute must call `sinf`, not `cosf`, on the shifted `x`; a new
+test (`tests/port/test_math_sub.cpp`, links `src/game/math_sub.cpp` directly with minimal `abort()`-
+on-call stand-ins for the other functions' dependencies -- `PSMTX*`/`PSVEC*`/`mem_alloc`/`pLog`,
+never actually invoked) caught it immediately via the `sin^2+cos^2==1` identity check, `ctest` 6/6.
+Un-excluded from `cmake/boot_exclude.txt`; 21 now-redundant generated stubs (`SQRTF`, `SINF`,
+`COSF`, `LIMIT_ANGLE`, and 17 other `math_sub.cpp` functions the old stub generator had covered
+while the file was excluded) removed from `src/port/stubs/generated_{c,cpp}_stubs.cpp` by hand (a
+duplicate-symbol link error otherwise). **Remote-verified**: 115/115 SHA-1 OK, `asmcheck.py --all`
+TOTAL 231 unchanged. Host default build: `re4_game_all -k 0` now 32 failing files (down from 33 --
+`math_sub.cpp` itself no longer one of them). Commit `1ac7bd04`, fast-forwarded from
+`port/wip-phase1` onto `port/macos-arm64` and pushed. `re4_boot` still runs steadily afterward
+(reaches the same point as before -- see below); "PrimBuffer OVERFLOW" does not appear in any run
+this session (**TO VERIFY** whether it ever did after section 39/40's heap fix, independent of this
+math_sub.cpp change).
+
+**trans.cpp**: the boot-prompt's assumption ("the only real asm is in math_sub") does not hold --
+checked by actually trying to compile it under `RE4_U32_32`/`TARGET_PC`. Two classes of error:
+tractable ones (two `Ptr32<u8>` assignment-from-`void*` bugs in the already-TARGET_PC-guarded
+`CalcTplAddrC8`, fixable by casting to `u8*` instead of `void*`; two `(WeightExt*)`/`(Weight*)` casts
+from a `Ptr32<u8>` field needing the same treatment as every other cast_rewriter-flagged site) --
+and a genuinely different, deeper class: whole-function real PPC asm that reads/writes the
+GameCube's *locked cache* as a fixed hardware address (`0xE0000000`+offset) treated as a `Mtx`
+scratch array -- `CalcSk1_x`/`CalcSk1_x2` (the vertex-skinning inner loop proper, paired-single
+loads straight from that address), plus `MakeWeightPalette`/`MakeWeightPaletteExt`'s
+`PSQ_L_U8_TO`/`PSMTXReorder`-into-locked-cache, and `setupGQR6`'s `mtspr`. `src/game/pendulum.cpp`
+(already excluded, separately) hits the identical `0xE0000000` pattern, confirming this is not a
+one-off. Left excluded, with the exclude-list comment now explaining why (not just "asm"): porting
+this needs a real design decision (model the locked cache as an ordinary host buffer, then rewrite
+the skinning kernels in portable C against it) that is cross-cutting across at least two files, not
+a local, mechanical fix like `math_sub.cpp` was -- belongs in its own session, per the same judgment
+call section 40 already made about `cUnit`/`cCoord`.
+
+**`cUnit`/`cCoord` layout**: the rule is now written down, not just the diagnosis --
+docs/port-layout-parity.md's new "`cUnit`/`cCoord`: the rule for a polymorphic base..." section.
+Short version: `pNext`/`pParent` become `Ptr32<T>` (mechanical, same as every other row in that
+doc's mismatch table); the vtable pointer stays host-width, full stop, no compressed-vptr scheme;
+every literal-GameCube-`sizeof()` computation touching one of these types must switch to host
+`sizeof(T)` under `TARGET_PC` (`cManager<T>`'s own pools already do, verified by inspection; nothing
+else swept this session). Not implemented (still needs its own session, per section 40) -- this
+session only turned the open question into an executable rule.
+
+**Where the boot process actually is now, per-frame (the coordinator's specific question)**: added a
+temporary trace (`RE4_PORT_TRACE_TITLE=1`, `Title_task()`'s own `for(;;)` loop logging
+`w->Rno0`/`w->Rno1` every pass; reverted before landing, not part of any commit) and ran with
+`RE4_PORT_FIXED_VI=1` for determinism. Result: **`Title_task` prints its trace line exactly ONCE,
+ever** (`Rno0=0`, i.e. `titleInit` about to run for the first time) -- across a 40-second real run,
+it is never scheduled a second time. This means the state-machine question ("does it proceed to
+title.dat and the draw, or wait on input/fade/a DVD read") does not yet have an answer at the
+`Title_task` level: the whole game thread is frozen even earlier, one level below any task's own
+logic.
+
+**Root cause, found with `sample`/`lldb` and confirmed with a minimal, reverted instrumentation
+patch to `../aurora/lib/gx/fifo.cpp` (not committed anywhere; this repo's own port rules keep Aurora
+changes in `tools/port/aurora-patches/`, and this was a throwaway diagnostic, reverted byte-for-byte
+before finishing -- `git status` in `../aurora` is clean)**: the game thread is parked forever inside
+`aurora::gx::fifo::drain()` (called from `GXDrawDone()` <- `Render_done()` <- `main_game()`'s own
+frame loop, `main.cpp:147` -- i.e. this is the FIRST real GX command-buffer drain of the session, not
+anything title-specific), waiting on `sProcessed.wait(processed, acquire)` for a target that never
+arrives. The separate "Aurora FIFO processor" worker thread is simultaneously idle, parked in
+`sWorkerWake.wait(event, acquire)` -- it has no more work queued from its own point of view. Added
+prints (`fprintf` in `drain()`/`wake_worker()`/`worker_main()`) caught the actual sequence on a live
+run: `drain()` stores the new `sPublished` target, calls `wake_worker()` (`fetch_add` on
+`sWorkerWake` + `notify_all()`) -- and the worker's own trace shows it read `published=0` (the OLD
+value, pre-store) on its immediately-preceding loop iteration, then printed "about to wait" and
+blocked, **and never printed anything again for the rest of the run**: no "woke from wait", no
+second loop iteration, no processing. This is a real missed wakeup at the `std::atomic<uint32_t>::
+wait()`/`notify_all()` boundary (libc++, Darwin's `__ulock_wait`/`__ulock_wake` underneath) --
+`atomic::wait(old)` is specified to recheck the current value itself before blocking (so a `notify`
+that lands between the caller's stale read and the actual `wait()` syscall should not be
+missable), so either there is a genuine bug in this specific libc++/Darwin combination's 32-bit
+`atomic::wait`, or a subtler ordering issue in Aurora's own handshake this session did not fully
+resolve. **Not chased further (budget, and this is exactly a "don't blame Aurora without a minimal
+repro" situation now WITH a minimal, reproducible repro in hand, ready for a focused session)**:
+candidate next steps, none attempted here: (a) a standalone minimal-repro test of
+`std::atomic<uint32_t>::wait`/`notify_all` alone (no GX/Aurora code at all) on this exact toolchain/
+OS to confirm or rule out a genuine platform bug; (b) switching `aurora::gx::fifo`'s
+`kProcessingMode` from `ProcessingMode::Thread` to `ProcessingMode::Drain` (synchronous, no separate
+worker thread, no wait/notify at all) as a `tools/port/aurora-patches/`-tracked patch, IF (a)
+confirms this is a platform primitive issue rather than something fixable in Aurora's own handshake
+logic. This is a real, reproducible, previously-undiagnosed blocker -- distinct from, and reached
+only because of, section 41's `ThreadExitException` fix (the game thread now runs far enough to hit
+its first real GX drain at all).
+
+**Screenshot, honestly described** (`RE4_PORT_SCREENSHOT`, realtime, 6s in, `RE4_PORT_FIXED_VI` not
+set): identical to every prior screenshot in this file -- the same debug overlay (dashed line,
+`08010000` label, green mark, dark-navy/lavender bars, `C6E420`/`C7E420` hex labels, plain digits
+bottom-left), not the title screen. Consistent with the finding above: this is the one frame the
+renderer produced before the FIFO drain deadlock freezes the game thread, so every screenshot taken
+after that point (regardless of real elapsed time) necessarily shows the same static image.
+
+**Verified / not broken**: host default build `re4_game_all -k 0` still 32 failing files (same set
+as this section's own math_sub.cpp change, i.e. no NEW regressions from the trans.cpp investigation
+or the layout-parity doc work, both of which touched no compiled code); `ctest` 6/6. The Aurora
+diagnostic patch was reverted before any of this session's `re4_boot` rebuilds that produced a
+screenshot or a commit -- no diagnostic-only code is in any binary referenced above.
+
+**Not reached this pass (budget)**: the actual FIFO missed-wakeup fix (needs the minimal-repro step
+above first), `trans.cpp`'s locked-cache design decision, `cUnit`/`cCoord`'s actual code change, and
+the title screen itself -- all now blocked on the FIFO deadlock above rather than on section 41's
+`ThreadExitException` (fixed) or `math_sub.cpp`'s exclusion (fixed).
