@@ -4,6 +4,9 @@
 // tracking that re-programs the AX voices' loop / end addresses as the ring advances (loop back
 // to the top, loop to the stream's loop point, or run out at the end).
 #include "snd_drv.h"
+#ifdef TARGET_PC
+#include "port/arq_raw.h"
+#endif
 
 // Issues the next asynchronous DVD read (read_cnt pending blocks) into the MRAM buffer slot
 // read_blk; at the end of the data a looping stream (flag 4) rewinds to the block holding the
@@ -111,6 +114,22 @@ void cb_dvd_read_end(s32 result, DVDFileInfo* info)
 
 // ARQ callback: advances the ARAM ring slot; while buffering (before ready) the last slot filled
 // marks the stream ready (status 2), else another read is requested.
+// TARGET_PC: same real-host-pointer-vs-GC-handle callback-argument fix as src/game/dvd.cpp's
+// trans2aram_cb (include/dolphin/ar.h's ARQCallback comment) -- `task` is widened and
+// reinterpreted through re4_port::RawArqPtr() (include/port/arq_raw.h), a plain function rather
+// than a cast, so the build's cast-rewriter never "corrects" it back into a wrong
+// re4_port::GCPTR() translation.
+#ifdef TARGET_PC
+void cb_aram_dma_end(unsigned long task)
+{
+    ARQRequest* req;
+    SND_STR_WORK* str;
+    int i;
+    s8 last;
+
+    req = re4_port::RawArqPtr<ARQRequest>(task);
+    str = NULL;
+#else
 void cb_aram_dma_end(u32 task)
 {
     ARQRequest* req;
@@ -120,6 +139,7 @@ void cb_aram_dma_end(u32 task)
 
     req = (ARQRequest*) task;
     str = NULL;
+#endif
     for (i = 0; i < SND_STR_MAX; i++) {
         str = &Snd_str_work[i];
         if (str->flag & 0x1) {

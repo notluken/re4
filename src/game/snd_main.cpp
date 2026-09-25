@@ -52,7 +52,14 @@ void snd_work_clear(void)
 }
 
 // t_movie/snd_test defines its own static cb_dma_end; the header must not declare this one.
+// TARGET_PC: widened to match the real ARQCallback (include/dolphin/ar.h) -- see
+// src/game/dvd.cpp's trans2aram_cb for the full reasoning (this file's own callback never
+// dereferences its argument as a pointer, so only the signature needs to change here).
+#ifdef TARGET_PC
+void cb_dma_end(unsigned long task);
+#else
 void cb_dma_end(u32 task);
+#endif
 
 // Uploads 256 zero bytes to the ARAM base (the silent sample every idle voice points at) and
 // waits for the DMA.
@@ -73,10 +80,17 @@ void zero_buff_clear(void)
 }
 
 // ARQ callback: the zero-table upload finished.
+#ifdef TARGET_PC
+void cb_dma_end(unsigned long task)
+{
+    Snd_ctrl_work.dma_busy = 0;
+}
+#else
 void cb_dma_end(u32 task)
 {
     Snd_ctrl_work.dma_busy = 0;
 }
+#endif
 
 // AX audio-frame callback (every 5 ms): voice manager, stream refill, MIDI sequencer, then the
 // SDK per-frame services; counts Snd_ctrl_work.frame.

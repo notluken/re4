@@ -783,7 +783,13 @@ void str_recovery_check(SND_STR_WORK* str);
 void Snd_str_dvd_read_sub(SND_STR_WORK* str);
 void Snd_str_aram_dma_sub(SND_STR_WORK* str);
 void cb_dvd_read_end(s32 result, DVDFileInfo* info);
+// TARGET_PC: widened to match the real ARQCallback (include/dolphin/ar.h) -- see
+// src/game/dvd.cpp's trans2aram_cb for the full reasoning.
+#ifdef TARGET_PC
+void cb_aram_dma_end(unsigned long task);
+#else
 void cb_aram_dma_end(u32 task);
+#endif
 void Snd_str_get_now_play_nbl(SND_STR_WORK* str);
 void str_ax_voice_to_next_block(SND_STR_WORK* str);
 void str_ax_voice_loop_to_top(SND_STR_WORK* str);

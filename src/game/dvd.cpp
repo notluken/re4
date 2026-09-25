@@ -297,9 +297,19 @@ FileTblEntry FileTbl[] = {
 
 extern "C" {
 void ADXGC_SetupDvdFs(int mode);   // lib/adx_sugc.c (the CRI headers are not in include/)
+// TARGET_PC: widened to match the real ARQCallback (include/dolphin/ar.h) these two are actually
+// registered as -- see trans2aram_cb's own definition, below, for the full reasoning.
+#ifdef TARGET_PC
+void trans2aram_cb(unsigned long req);
+#else
 void trans2aram_cb(u32 req);
+#endif
 void dvdread_callback(s32 result, DVDFileInfo* fi);
+#ifdef TARGET_PC
+void aram_cb(unsigned long req);
+#else
 void aram_cb(u32 req);
+#endif
 void readcancel_cb(s32 result, DVDCommandBlock* cb);
 }
 
@@ -402,6 +412,18 @@ int DvdReadN(const char* name, void* dst, int a, int b, int c, int mode, const c
 
 // Exchanges `size` bytes between MRAM and ARAM in 64 KB pieces through the DVD scratch buffers
 // (synchronous DMAs), after letting a running read finish its current piece.
+// TARGET_PC, NOT YET FIXED (documented, not guessed -- not reached by any run this pass): this
+// still passes `(u32) DVD_BUFF`/`(u32) DVD_BUFF2` into `Aram.DmaTransReq()` below, which the cast
+// rewriter turns into a compressed `re4_port::GC32()` handle -- the same "Aurora dereferences this
+// argument as a real host pointer, not a GC handle" mismatch just fixed for `trans2aram`/
+// `trans2aram_cb` above (include/dolphin/ar.h's ARQCallback comment), one hop further away:
+// `AramReq::src`/`dst` (include/dvd.h) are themselves plain `u32` fields, so even a `RawArqAddr()`-
+// style fix at this call site would still lose the pointer's high bits the moment
+// `cAram::DmaTransReq()` stores it, before `cAram::DmaTrans()` ever reaches `ARQPostRequest()`.
+// Fixing this for real needs `AramReq::src`/`dst` (and `DmaTransReq`/`DmaTrans`'s own parameter
+// types) widened under TARGET_PC, not just this call site -- left for whoever reaches this path
+// next (SubScreenGameInit()'s later `MemorySwap(wk->pBuf, SS_ARAM, SS_ARAM_SIZE)`, sscrn.cpp), so
+// it can be verified against a real run instead of guessed here.
 void MemorySwap(void* mram, u32 aram, u32 size)
 {
     u8* p;
@@ -444,6 +466,39 @@ void cDvdQueue::trans2mram(void* buf, u32 addr, u32 size)
 }
 
 // ARQ callback: the queue's MRAM -> ARAM DMA finished (clears busy bit 0x01000000).
+// TARGET_PC: see include/dolphin/ar.h's ARQCallback comment -- Aurora hands this a real, full-
+// width host pointer to the ARQRequest (confirmed live with lldb: `request=0x100d35378`), not a
+// GameCube-style 32-bit address, so the parameter is widened to match (a `u32` here would silently
+// truncate it, the confirmed root cause of a SIGSEGV loading rel/Sscrn.rel) and reinterpreted with
+// a plain function (never a cast the build's cast-rewriter could "correct" back into a wrong
+// re4_port::GC32()/GCPTR() translation -- this value already IS the real pointer, no translation
+// needed). `r->owner` is untouched/still goes through GCPTR: unlike `arq_req` itself, `owner` was
+// written by our own `trans2aram()` below as a genuine compressed GC handle (`GC32(this)`) that
+// only this port's own code ever reads back, never dereferenced by Aurora as a host pointer, so
+// its existing translation was already correct. Non-TARGET_PC branch byte-identical to the
+// original.
+#ifdef TARGET_PC
+// A plain memcpy-based type pun, not a cast: unlike a real `reinterpret_cast`/C-style cast (which
+// the tool's AST visitor rewrites into GCPTR() no matter where it textually appears -- confirmed
+// live: an earlier version of this helper used `reinterpret_cast<ARQRequest*>(arqReq)` and the
+// rewriter "fixed" it anyway, still adding g_base and still crashing), this has no cast expression
+// anywhere in it for the rewriter to find.
+static inline ARQRequest* RawArqReq(unsigned long arqReq)
+{
+    ARQRequest* p;
+    memcpy(&p, &arqReq, sizeof(p));
+    return p;
+}
+
+void trans2aram_cb(unsigned long arq_req)
+{
+    ARQRequest* r = RawArqReq(arq_req);
+    cDvdQueue* q = (cDvdQueue*) r->owner;
+
+    q->m_be_flag &= ~0x01000000;
+    q->aramSize += r->length;
+}
+#else
 void trans2aram_cb(u32 arq_req)
 {
     ARQRequest* r = (ARQRequest*) arq_req;
@@ -452,8 +507,37 @@ void trans2aram_cb(u32 arq_req)
     q->m_be_flag &= ~0x01000000;
     q->aramSize += r->length;
 }
+#endif
 
 // Part transfer: DMAs the read piece from the DVD buffer to its ARAM destination.
+// TARGET_PC: `buf` (the real MRAM/DVD-scratch-buffer side of this MRAM_TO_ARAM transfer) is passed
+// straight through as the real host pointer it already is -- Aurora's ARQPostRequest dereferences
+// this argument directly as a host address (`(u8*)(uintptr_t)source`, ../aurora/lib/dolphin/
+// AR.cpp), so it must NOT go through this port's usual GC32() compression (which would hand
+// Aurora a small, unmapped-looking address instead of `buf` itself). `RawArqAddr()` is a plain
+// function, not a cast, so the build's cast-rewriter (which only rewrites cast expressions) leaves
+// it alone. `this`/`addr` are untouched: `this` (the `owner` argument) is only ever read back by
+// this port's own code (see trans2aram_cb above), and `addr` is already a plain ARAM byte offset on
+// both targets, never a pointer.
+#ifdef TARGET_PC
+// Same memcpy-based type pun as RawArqReq above, for the same reason (a real cast here gets
+// "fixed" back into GC32() by the rewriter regardless of where it textually sits).
+static inline unsigned long RawArqAddr(const void* p)
+{
+    unsigned long v;
+    memcpy(&v, &p, sizeof(v));
+    return v;
+}
+
+void cDvdQueue::trans2aram(void* buf, u32 addr, u32 size)
+{
+    u32 n = ALIGN32(size);
+
+    DCFlushRange(buf, n);
+    m_be_flag |= 0x01000000;
+    ARQPostRequest(&m_ArqReq, (u32) this, ARQ_TYPE_MRAM_TO_ARAM, 1, RawArqAddr(buf), addr, n, trans2aram_cb);
+}
+#else
 void cDvdQueue::trans2aram(void* buf, u32 addr, u32 size)
 {
     u32 n = ALIGN32(size);
@@ -462,6 +546,7 @@ void cDvdQueue::trans2aram(void* buf, u32 addr, u32 size)
     m_be_flag |= 0x01000000;
     ARQPostRequest(&m_ArqReq, (u32) this, ARQ_TYPE_MRAM_TO_ARAM, 1, (u32) buf, addr, n, trans2aram_cb);
 }
+#endif
 
 // DVD callback: the queue's read finished (clears 0x02000000); result -3 = cancelled (0x100000),
 // other negatives = read error (0x200000).
@@ -1104,6 +1189,20 @@ AramReq* cAram::pullAramQueue(int* id)
 }
 
 // ARQ callback: marks the request done and frees the current pointer.
+// TARGET_PC: same real-host-pointer-vs-GC-handle callback-argument fix as trans2aram_cb above
+// (include/dolphin/ar.h's ARQCallback comment) -- `arq_req` is widened and reinterpreted through a
+// plain function, never a cast, so the build's cast-rewriter never "corrects" it back into a wrong
+// re4_port::GCPTR() translation. `->owner` is untouched: written as a genuine compressed GC handle
+// by `cAram::DmaTrans` below (`GC32(pQueue)`), only ever read back by this port's own code.
+#ifdef TARGET_PC
+void aram_cb(unsigned long arq_req)
+{
+    AramReq* r = (AramReq*) RawArqReq(arq_req)->owner;
+
+    r->be_flag |= 0x04000000;
+    Aram.pCur_queue = 0;
+}
+#else
 void aram_cb(u32 arq_req)
 {
     AramReq* r = (AramReq*) ((ARQRequest*) arq_req)->owner;
@@ -1111,6 +1210,7 @@ void aram_cb(u32 arq_req)
     r->be_flag |= 0x04000000;
     Aram.pCur_queue = 0;
 }
+#endif
 
 // Posts the request to the ARQ; with wait spins until done and frees the slot.
 void cAram::DmaTrans(AramReq* pQueue, int mode)
