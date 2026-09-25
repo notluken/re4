@@ -173,6 +173,30 @@ void InitArena()
     // not just this file's own s_bssProbe.
     CheckGameSection("__re4gdata");
     CheckGameSection("__re4gbss");
+    // ... and, found while wiring the first REL module (docs/port-boot.md's REL plan): the
+    // `#pragma clang section data/bss=` force-include does NOT catch every compiler-EMITTED global
+    // in a TU it covers -- a function-local static's dynamic-initialization guard variable
+    // (`__ZGVZ...`), and (separately, in ordinary game/REL code) vtables/RTTI, land in the
+    // conventional `__DATA,__data`/`__const` regardless of an active section pragma (confirmed:
+    // `nm -m` on a REL module's own combined object showed exactly such a guard variable in
+    // `__DATA,__data`, not the module's own named section). Those conventional sections still end
+    // up inside the valid window in practice (this fix's own CMakeLists.txt reordering did not
+    // special-case them, it just changed which object introduces `__DATA,__data` first), but that
+    // was never a checked invariant -- only assumed. Check it directly, generically (no per-module
+    // attribution possible or needed: this is exactly the same conventional section every TU that
+    // doesn't force-include a `#pragma clang section data/bss` pragma already uses).
+    CheckGameSection("__data");
+    CheckGameSection("__common");
+
+    // Layout invariant #4 (docs/port-boot.md's REL plan): every statically-linked REL module's own
+    // data/bss/rodata sections (tools/port/gen_rel_module.py's per-module `#pragma clang section`,
+    // named `__r_<mod>_d`/`_b`/`_ro` -- short because Mach-O caps section names at 16 characters).
+    // Absent for a module not yet built (CheckGameSection's own "nothing to check" rule) -- adding a
+    // module to CMakeLists.txt's `RE4_REL_MODULES` list is enough for its own sections to start
+    // being checked here too, no further change needed per module.
+    CheckGameSection("__r_st1_0_d");
+    CheckGameSection("__r_st1_0_b");
+    CheckGameSection("__r_st1_0_ro");
 
     // Layout invariant #2: the arena starts inside the fixed-GC-address budget.
     std::uint32_t arenaGC = GC32(s_arena);
