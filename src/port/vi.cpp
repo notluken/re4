@@ -78,6 +78,26 @@ std::mutex g_gxHostMutex;
 // game thread ever calls either function (same rule as t_gxFrameActive above).
 thread_local std::unique_lock<std::mutex> t_gxHostLock(g_gxHostMutex, std::defer_lock);
 
+// Drops g_gxHostMutex (if this thread holds it) for the scope's lifetime and retakes it after.
+// Used around the game thread's waits for a retrace: the tick is produced by RunPresentLoop() on
+// the host main thread, which must take g_gxHostMutex for aurora_update() first.
+struct ReleaseGxHostLockWhileWaiting
+{
+    bool held = t_gxHostLock.owns_lock();
+    ReleaseGxHostLockWhileWaiting()
+    {
+        if (held) {
+            t_gxHostLock.unlock();
+        }
+    }
+    ~ReleaseGxHostLockWhileWaiting()
+    {
+        if (held) {
+            t_gxHostLock.lock();
+        }
+    }
+};
+
 // Advances virtual time by exactly one retrace, synchronously, on the calling (game) thread: bumps
 // the counter/field, then invokes the registered pre/post callbacks directly (safe here the same
 // way DrainPendingCallbacks() already is -- only ever called from the one real thread that is
@@ -171,6 +191,9 @@ void VIWaitForRetrace(void)
         return;
     }
     {
+        // The retrace tick comes from RunPresentLoop() on the host main thread, which needs
+        // g_gxHostMutex for aurora_update(); holding it across this wait deadlocks both threads.
+        ReleaseGxHostLockWhileWaiting unlocked;
         std::unique_lock<std::mutex> lock(g_mutex);
         u32 start = g_retraceCount.load();
         g_cv.wait(lock, [start] { return g_retraceCount.load() != start; });
@@ -304,6 +327,13 @@ void PumpPendingVICallbacks()
         // VIWaitForRetrace(), or those spins would never terminate in fixed mode.
         TickOneRetraceNow();
         return;
+    }
+    // main.cpp's vsync busy-wait calls this in a tight loop while the game thread may still hold
+    // g_gxHostMutex from BeginGxFrame(); give the host main thread a window to run aurora_update()
+    // and produce the tick the spin is waiting for, or neither thread ever advances.
+    if (t_gxHostLock.owns_lock()) {
+        ReleaseGxHostLockWhileWaiting unlocked;
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
     DrainPendingCallbacks();
 }
