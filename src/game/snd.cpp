@@ -93,26 +93,24 @@ void SndInit()
 {
 #ifdef TARGET_PC
     // Sound is Phase 5 (docs/port-boot.md), no Aurora/host backend exists yet for any of AX/ADX/
-    // mwPly -- every SDK call below this point is a logging stub. The GCPTR/GC32 routing itself is
-    // correct here (SND_DATA_TOP's fixed 0x80xxxxxx literals do compress/decompress through the
-    // arena like any other GameCube address, verified with lldb -- docs/port-boot.md section 14);
-    // what crashes is the deeper sound-file-format parsing this reads into, real ARAM/DSP-format
-    // work with no host equivalent yet, not a missed pointer conversion. Stub to "sound off" for
-    // first boot, same as SofdecInit()/init_dbmodule() just below it are already deferred.
-    // Sound-off audit (docs/port-phase3.md): SndMem stays all-zero (never populated below), and
-    // most of this file already treats an all-zero SndMem/pSnd defensively (sndExistCheck/
-    // GetSeAtPtr/etc. gate on pSnd->blk_flag or a null header, which a zeroed struct naturally
-    // fails, matching a real "nothing loaded" state). str_flag is one such existing vendor-provided
-    // gate (SndStrReq's "SND: No STR Header." branch) that defaults to 1 (its file-scope
-    // initializer) -- set it to 0 here so that gate does what it was built for instead of being
-    // silently bypassed. The handful of call sites with NO such existing gate (they unconditionally
-    // dereference a SndMem table this stub never populates) are stubbed individually where they are
-    // defined, not patched around here: SndBgmTblInit, SndDoorSeLoad, SndBgmTblSet, SndBlkInit,
-    // SndBgmLoad, SndDriverInit, SndSystemReset.
+    // mwPly -- ARAM setup, the per-block MRAM parsing (`Snd_str_blk_init`) and the driver start
+    // below are real ARAM/DSP-format work with no host equivalent yet, so those specific calls stay
+    // stubbed out (guarded individually below, not with a single early `return`). But the plain DVD
+    // reads and address arithmetic in between are neither: they are ordinary file-length-driven
+    // pointer arithmetic over the arena, already proven safe elsewhere (CoreDataRead, docs/port-
+    // boot.md section 36) -- and they are the *only* code, anywhere in src/game, that ever binds
+    // `SndMem.sub_adr` (docs/port-boot.md section 39's trace: `cCard::initSub()`, src/game/card.cpp,
+    // is real vendor code that needs it to bind the card screen's own message table, `MesData.ptr[0]
+    // = pSubData->ofs[1] + pSubData`, unrelated to `MessageControl::gameInit()`/`pG->pCore`). Running
+    // this part for real, in place, is what makes that real vendor binding fire in time -- on real
+    // hardware for the same reason: `SndInit()` runs synchronously inside `systemStartInit()`,
+    // strictly before `TaskSchedulerInit()`'s tasks (including the card task) ever get a first turn,
+    // so there never was a race there to begin with. `str_flag` is still forced to 0 below,
+    // unconditionally, regardless of the real read's own result -- every other "sound off" gate this
+    // stub already relies on (docs/port-phase3.md) keeps working exactly as before; only the one
+    // real field `cCard::initSub()` needs is now genuinely populated.
     pSnd = &Snd;
     memclr_asm(pSnd, sizeof(SndWork));
-    str_flag = 0;
-    return;
 #endif
     int len;
     int r;
@@ -120,9 +118,11 @@ void SndInit()
     int i;
 
     pSnd = &Snd;
+#ifndef TARGET_PC
     ARInit(aram_buf, 3);
     ARAlloc(0x6FC000);
     ARQInit();
+#endif
     memclr_asm(pSnd, sizeof(SndWork));
 
 #line 120 SND_FILE
@@ -131,7 +131,9 @@ void SndInit()
     adr = SND_DATA_TOP + ALIGN32(len);
     for (i = 0; i < 2; i++) {
         SndMem.str_file[i] = (SndStrFile*) (SND_DATA_TOP + ((u32*) SND_DATA_TOP)[i]);
+#ifndef TARGET_PC
         Snd_str_blk_init(i, SndMem.str_file[i]);
+#endif
     }
 
     SndMem.bgm_file = (u32*) adr;
@@ -168,8 +170,12 @@ void SndInit()
     Dvd.ReadCheck(r, &len, 0, 0);
     SndMem.sub_end = SndMem.sub_adr + len;
 
+#ifdef TARGET_PC
+    str_flag = 0;
+#else
     SndDriverInit();
     pSys->SndMode = Snd_get_sound_mode();
+#endif
 }
 
 // Game start: clears the sound work, sets the MRAM / ARAM allocation tops for enemy blocks and BGM,
