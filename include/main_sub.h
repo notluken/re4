@@ -27,8 +27,34 @@ extern void* pFrame_buff[2];
 extern void* pCurrent_buff;
 
 // A linked REL's prolog / epilog: the header stores offsets that OSLink turns into addresses.
+#ifdef TARGET_PC
+// OSLink() is a stub on this host (src/port/stubs/manual_stubs.cpp) -- no REL module is ever really
+// relocated, so `(m)->prolog`/`(m)->epilog` are still raw, un-relocated file offsets, not valid code
+// addresses. Route through re4_port::RelEntry() (include/port/rel.h) for a log message, then
+// evaluate to a captureless no-op lambda (implicitly convertible to `TaskFunc`/`void (*)()`, the
+// same type the vendor's macro produced) instead of ever jumping into that offset.
+#include "port/rel.h"
+#define DLL_PROLOG(m) ((re4_port::RelEntry((m), 0)), +[]() {})
+#define DLL_EPILOG(m) ((re4_port::RelEntry((m), 1)), +[]() {})
+#else
 #define DLL_PROLOG(m) ((void (*)()) (m)->prolog)
 #define DLL_EPILOG(m) ((void (*)()) (m)->epilog)
+#endif
+
+// A raw REL data-section size field (module bssOffset-style pattern: `*(u32*) (data + 4)`,
+// src/game/read.cpp's readEmData/PlDataRead/ReadWepData), read straight out of an on-disc REL
+// buffer that this port never byte-swaps as a whole (Phase 4+ territory -- CLAUDE.md's "REL
+// fixups" row). On this little-endian host that raw big-endian u32 needs exactly one swap at the
+// point it's read, the same single-purpose fix include/port/be.h documents for every other on-disc
+// integer field; kept as its own macro (not BE<T>, which wraps a *stored* field, not a one-off
+// `*(u32*)ptr` expression) so the three read.cpp call sites stay one-line edits with stable line
+// numbers (read.cpp has #line directives reproducing the vendor's HALT()/assert line numbers --
+// CLAUDE.md).
+#ifdef TARGET_PC
+#define REL_READ_OFFSET32(p) (__builtin_bswap32(*(u32*) (p)))
+#else
+#define REL_READ_OFFSET32(p) (*(u32*) (p))
+#endif
 
 // game/main_sub.cpp
 int Render_checkBlurPermission();

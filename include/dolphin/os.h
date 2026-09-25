@@ -9,6 +9,17 @@
 #define __declspec(attr)  // Metrowerks keyword (weak symbols); GCC has none
 #endif
 
+// OSModule.h hoisted above this file's own `extern "C" {` (not inside it, even though OSModule.h
+// brackets its own body with `#ifdef __cplusplus extern "C" { ... } #endif` and so needs no help
+// from this file to get C linkage): under TARGET_PC, OSModule.h's REL-header field types pull in
+// include/port/be.h's `BE<T>` template (port step 1, docs/port-boot.md) before opening its own
+// extern "C", and a template can never have C language linkage (ill-formed, `templates must have
+// C++ linkage` -- confirmed the hard way) -- including it from inside THIS file's still-open
+// extern "C" would nest it one level deeper and hit exactly that error, regardless of OSModule.h's
+// own internal wrapping. GameCube-matching builds are unaffected (OSModule.h's internal `extern
+// "C"` still applies either way; only the textual include point moved).
+#include <dolphin/os/OSModule.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -20,7 +31,6 @@ typedef u32 OSTick;
 #include <dolphin/os/OSCache.h>
 #include <dolphin/os/OSContext.h>
 #include <dolphin/os/OSInterrupt.h>
-#include <dolphin/os/OSModule.h>
 #include <dolphin/os/OSThread.h>
 #include <dolphin/os/OSMutex.h>
 #include <dolphin/os/OSFont.h>

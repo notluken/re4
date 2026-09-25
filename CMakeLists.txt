@@ -286,6 +286,7 @@ add_library(re4_port STATIC
   src/port/fiber.cpp
   src/port/os_thread.cpp
   src/port/trans_skin.cpp
+  src/port/rel.cpp
 )
 target_include_directories(re4_port PUBLIC ${RE4_GAME_INCLUDES})
 # TARGET_PC/RE4_U32_32 are global (add_compile_definitions() near the top of this file) -- see

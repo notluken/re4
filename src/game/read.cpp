@@ -444,7 +444,7 @@ int readEmData(ReadModule* m, int id, void* addr, u32 size)
         newSize = len;
     }
     if (e->dll != 0) {
-        pModule = (void*) (*(u32*) ((u8*) pArc + 4) + (u32) pArc);
+        pModule = (void*) (REL_READ_OFFSET32((u8*) pArc + 4) + (u32) pArc);
         dataSize = (u32) pModule - (u32) pArc;
         bssSize = len - dataSize;
         if (addr == NULL && dataSize < size) {
@@ -684,7 +684,7 @@ void ReadPlayerData(int type, int costume)
     if (dll != 0) {
         ReleasePlData();
         pArc = (void*) PL_DATA_ADDR;
-        pModule = (OSModuleHeader*) (*(u32*) (data + 4) + (u32) data);
+        pModule = (OSModuleHeader*) (REL_READ_OFFSET32(data + 4) + (u32) data);
         dataSize = (u32) pModule - (u32) data;
         bssSize = size - dataSize;
         size = dataSize;
@@ -946,7 +946,7 @@ void ReadWepData(u32 no, u32 type)
         HALT();
     }
     pG->pWep = (PlArc*) info.addr[0][0];
-    pModule = (OSModuleHeader*) (*(u32*) (data + 4) + (u32) data);
+    pModule = (OSModuleHeader*) (REL_READ_OFFSET32(data + 4) + (u32) data);
     size = (u32) pModule - (u32) data;
     bssSize = total - size;
     if (!BitChk16(WepReadModule.flag, 2)) {
