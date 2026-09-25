@@ -1,0 +1,29 @@
+diff --git a/lib/dolphin/AR.cpp b/lib/dolphin/AR.cpp
+index ab9306b..161550c 100644
+--- a/lib/dolphin/AR.cpp
++++ b/lib/dolphin/AR.cpp
+@@ -84,6 +84,24 @@ u32 ARGetSize(void) { return aurora::g_config.mem2Size; }
+ #endif
+ void ARQPostRequest(ARQRequest* request, u32 owner, u32 type, u32 priority, uintptr_t source, uintptr_t dest,
+                     u32 length, ARQCallback callback) {
++  // re4-port: the real hardware SDK (src/lib/arq.c's own ARQPostRequest) stores every one of its
++  // arguments onto `*request` before doing anything else, since the real completion (a hardware
++  // interrupt, __ARQInterruptServiceRoutine) reads them back later from that same request object --
++  // games are written expecting `request->owner`/`length`/etc. to already hold what they just
++  // passed in by the time their callback runs. This synchronous stand-in used to skip all of that
++  // and go straight to the memcpy + callback, leaving every field at whatever was already in that
++  // memory (stack/heap garbage, or a stale previous request) -- a real game (Resident Evil 4's own
++  // `trans2aram_cb`/`aram_cb`, src/game/dvd.cpp) reading `request->owner` back out of its callback
++  // then dereferences garbage. Populate the fields the same order/shape the real SDK does.
++  request->next = nullptr;
++  request->owner = owner;
++  request->type = type;
++  request->priority = priority;
++  request->source = static_cast<u32>(source);
++  request->dest = static_cast<u32>(dest);
++  request->length = length;
++  request->callback = callback;
++
+   // Emulate ARAM DMA transfers using memcpy.
+   // type 0 = MRAM -> ARAM, type 1 = ARAM -> MRAM
+   if (type == ARAM_DIR_MRAM_TO_ARAM) {
