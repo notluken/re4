@@ -27,6 +27,9 @@
 #include "trans.h"
 #include "sce_sys.h"
 #include "yz2code.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
 extern "C" {
 extern void* EmInitFunc;                  // game/em.cpp (set by the enemy dll prolog)
@@ -52,11 +55,20 @@ struct ReadFile {
 };
 
 // Archive header behind GetDataExt: count, three words, offsets, then 4-byte tags.
+// On-disc, big-endian (Phase 3, docs/port-phase3.md) -- num/ofs are BE<u32> under TARGET_PC; the
+// 4-byte tag bytes right after the offset table (walked as raw u8*, not through this struct) need
+// no swap either way.
+#ifdef TARGET_PC
+#define DXH_BE_U32 re4_port::BE<u32>
+#else
+#define DXH_BE_U32 u32
+#endif
 struct DataExtHeader {
-    u32 num;      // 0x00
+    DXH_BE_U32 num;      // 0x00
     u32 pad_4[3];
-    u32 ofs[1];   // 0x10
+    DXH_BE_U32 ofs[1];   // 0x10
 };
+#undef DXH_BE_U32
 
 extern "C" {
 void decodeData();
@@ -1015,7 +1027,11 @@ void* GetDataExt(void* pData, const char* pName, int no)
         p += 4;
         if (p[0] == pName[0] && p[1] == pName[1] && p[2] == pName[2]) {
             if (cnt == no) {
+#ifdef TARGET_PC
+                return (void*) ((u32) h->ofs[i] + (u32) pData);
+#else
                 return (void*) (*(u32*) (i * 4 + (u32) pData + 0x10) + (u32) pData);
+#endif
             }
             cnt++;
         }
