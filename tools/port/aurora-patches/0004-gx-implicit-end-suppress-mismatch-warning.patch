@@ -1,0 +1,53 @@
+diff --git a/lib/dolphin/gx/GXVert.cpp b/lib/dolphin/gx/GXVert.cpp
+index 60fc188..888e548 100644
+--- a/lib/dolphin/gx/GXVert.cpp
++++ b/lib/dolphin/gx/GXVert.cpp
+@@ -10,6 +10,19 @@ bool sInBegin = false;
+ // GX_AUTO: offset of the u32 byte-length placeholder to patch in GXEnd
+ u32 sBeginSizeOffset = 0;
+ bool sBeginAuto = false;
++// re4-port: true while GXEnd() is being invoked *implicitly* from pre_begin() below (a real game
++// closing one fixed-count primitive by starting the next, never calling GXEnd() itself -- see
++// pre_begin()'s own comment). In that case the FIFO bytes counted between the two GXBegin() calls
++// legitimately include every state-change write the caller made in between (texture/matrix/TEV
++// loads for the *next* draw, e.g. mes.cpp's per-glyph `setAttribute()` between two un-ended
++// GXBegin(..., 4) quads) -- real vertex data plus real state data, correctly interleaved, not a
++// missed or malformed vertex write. The "bytes not evenly divisible by vertex count" check below
++// has no way to separate the two (Aurora's own comment: "best-effort ... without processing the
++// FIFO for vtxFmt changes"), so it produces a false positive here specifically -- confirmed by
++// tracing this exact call shape, not assumed. Suppressed only for the implicit-close path; a
++// direct GXEnd() call from the caller still gets the real check, since there every byte in range
++// is genuinely part of that one primitive's vertex stream.
++bool sImplicitEnd = false;
+ } // namespace
+ 
+ extern "C" void GXEnd();
+@@ -26,6 +39,7 @@ void pre_begin() {
+   // that real-hardware behavior instead of asserting -- this emulation's own sInBegin/GXEnd
+   // bookkeeping is software-only state real hardware has no equivalent restriction for.
+   if (sInBegin) {
++    sImplicitEnd = true;
+     GXEnd();
+   }
+ 
+@@ -94,14 +108,18 @@ void GXEnd() {
+     if (sBeginAuto) {
+       aurora::gx::fifo::patch_u32(sBeginSizeOffset, bytesWritten);
+       sBeginAuto = false;
+-    } else if (sBeginNVerts > 0 && bytesWritten > 0) {
++    } else if (sBeginNVerts > 0 && bytesWritten > 0 && !sImplicitEnd) {
+       // We don't know the vertex size without processing the FIFO for vtxFmt changes
+-      // so this is just a best-effort check to find obvious issues
++      // so this is just a best-effort check to find obvious issues. Only meaningful when this
++      // GXEnd() is the caller's own explicit call (see sImplicitEnd's own comment above) -- an
++      // implicit close from the next GXBegin() may legitimately have real state-change bytes
++      // mixed in, which would make this check fire on entirely valid data.
+       if (bytesWritten % sBeginNVerts != 0) {
+         Log.warn("GXEnd: vertex data not evenly divisible: {} bytes for {} vertices", bytesWritten, sBeginNVerts);
+       }
+     }
+     sInBegin = false;
++    sImplicitEnd = false;
+     aurora::gx::fifo::finish_draw();
+   }
+ }
