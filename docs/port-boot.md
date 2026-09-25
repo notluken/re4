@@ -2389,3 +2389,113 @@ before or after the message tables are bound, since that answers whether the fix
 `main.cpp`'s boot sequence (call something earlier) or confirms `game.cpp` needs to be un-excluded
 next (a real, separate unit of work: the `mem_alloc(size, ..., a, b)` scoping bug above, plus
 `game.cpp`'s own pointer-truncation cast sites, neither trivial).
+
+## 37. Coordinator follow-up: real card path fixed (no more phantom "no card"), MesData.ptr[0]
+    traced to source (game.cpp confirmed NOT the fix), a host-only crash guard, new steady-state
+    blocker past it (2026-09-25)
+
+Coordinator asked four things: (1) why the card error path is taken at all -- fix it to see a real
+card; (2) trace, don't guess, where the card message table comes from; (3) if it needs game.cpp,
+bring game.cpp in; (4) continue toward title.dat/fonts.
+
+### 1. Root cause found and fixed: `CARDInit(nullptr, nullptr)` builds an empty card path
+
+`src/game/card.cpp`'s `CardInit()` called Aurora's real `CARDInit(const char* game, const char*
+maker)` with both null (section 13's fix only addressed the *arg-count* mismatch, not what to pass).
+Read Aurora's own `../aurora/lib/dolphin/card.cpp` directly: `get_card_region(gameName)` returns
+`nullptr` outright when `gameName == nullptr`, and `get_card_full_path()` returns `""` when its
+`region` is null -- so both card slots' paths were always empty, `CARD_READY()` was always false,
+every probe genuinely found "no card", and `cCard::errorDisp()`'s path was always taken by
+construction, not because that path itself was ever buggy.
+
+**Fixed** two ways, both real, nothing invented: (a) `CardInit()` now reads the actual game/maker
+code from `DVDGetCurrentDiskID()` -- populated for real from the mounted disc image's own header
+the moment `re4_port::InitDvd()` opens it (`aurora_dvd_open()`, confirmed by reading
+`../aurora/lib/dolphin/dvd/dvd.cpp`'s `s_diskID` assignment), so this works for whatever disc is
+mounted, not a literal hardcoded for this one image. (b) new `include/port/card.h`/
+`src/port/card.cpp`, `re4_port::InitCardDir()`: resolves `$RE4_CARD_DIR` else
+`~/Library/Application Support/re4-port/card`, creates it, calls Aurora's `CARDSetBasePath()` --
+called before `CARDInitPC()` runs, per Aurora's own "before `CARDInit()`" ordering requirement.
+Never touches `orig/`.
+
+**Verified**: the log now reads `Slot A Mount` (previously always `Slot A Unmount`, no probe ever
+found anything), and the game moves on to `cCard::createSysfile()` (a real, further-along vendor
+state: "no system file on this fresh card, offer to create one") instead of the earlier no-card
+`errorDisp()` -- confirms a real, formatted GCI-folder card is now genuinely found and mounted.
+Remote-verified (touches `src/game/card.cpp`, outside `src/port`/`include/port`): 115/115 SHA-1 OK,
+`asmcheck.py --all` TOTAL 231 unchanged (`docker` run on `100.90.198.42`). Default host build
+unaffected: `re4_game_all -k 0` still 33 failing files (same set), `ctest` 5/5.
+
+### 2. `MesData.ptr[0]`, traced exhaustively: only bound by `game.cpp`, which itself doesn't run
+    this early -- game.cpp is confirmed NOT sufficient to fix this crash
+
+Grepped every `MesData`/`setPtr`/`ptr[` reference across the entire `src/game` tree (not a
+sample): the *only* code that ever binds `MesData.ptr[0]` to the core text table (`ofs_28`) is
+`MessageControl::gameInit()` and `roomInit()` (`src/game/mes.cpp`, both real, already compiled).
+Both are called only from `game.cpp`'s own `gameInit()` (`cMes.gameInit()`, "Rno0==0: game start")
+and `roomInit()` -- i.e. `game.cpp`, still excluded. But tracing further: `game.cpp`'s `gameInit()`
+only ever runs inside `GameTask` (`game.cpp`'s own per-frame `Rno0` state machine), and `GameTask`
+itself is only ever started by `title.cpp`'s `titleExit()` (`TaskChain(GameTask, 0)`, the very last
+line of that function) -- reached only after the player has picked something from the title menu
+(new game / continue / debug start), confirmed by reading `titleExit()`'s own body (sets
+`G_ROOM_ID`/player position from the chosen menu entry first). Meanwhile the memory-card
+first-check (`CardFirstCheck()`, this crash's call site) runs within the first couple of frames of
+boot -- `Render_init()` (`systemStartInit()`) starts `tvModeCheckTask`, whose state machine reaches
+`tvModeExit() -> CardFirstCheck()` almost immediately when `VIGetDTVStatus()` returns 0 (no
+progressive-capable display detected; our own stub also returns 0) -- i.e. **before** `Title_task`
+even exists, let alone before the player has reached the title menu. **Conclusion, evidence-based,
+not assumed**: un-excluding `game.cpp` would not, by itself, fix this crash -- the code that binds
+`MesData.ptr[0]` genuinely does not run this early in the vendor's own control flow either. The
+coordinator's "if it needs game.cpp" premise does not hold for this specific crash; forcing
+`game.cpp` in here would have been chasing the wrong fix.
+
+Whether real hardware also reads `ptr[0]` as null at this exact point and simply tolerates the
+resulting `tbl[lang+1]` read (GameCube low physical memory has real, if unrelated, contents there,
+unlike this host's genuinely-unmapped address 0) is **TO VERIFY** -- would need real hardware or a
+cycle-accurate emulator trace to settle, not available here; not asserted as fact, only offered as
+the most plausible explanation for why a shipped, extensively-tested title would not crash on its
+own first boot.
+
+### 3. Host-only crash guard (not a `game.cpp` fix) landed instead, verified to work
+
+Two small `TARGET_PC`-only guards, `src/game/mes.cpp` (real vendor file, `#ifdef` pattern already
+established throughout this port): `MessageData::getAddr()` returns `NULL` immediately when
+`ptr[data_type]` is still null (instead of dereferencing it), and `Message::move()` returns
+immediately when `m_pMes` is `NULL` (the same null table surfaces there too, one frame later, once
+`Message::init()`'s own existing fallback-and-log path, real vendor code, unchanged, leaves it
+unset). Both documented inline as a host-safety stopgap for the still-open "TO VERIFY" above, not a
+claim about vendor logic. Bytes unchanged for the real target (branch does not exist there).
+
+**Verified**: `re4_boot` no longer crashes here at all -- `Message::init() Msg[44] Address Error`
+prints (the vendor's own existing error log, now actually reachable+harmless) and the process
+settles into a steady, non-crashing, ~100% CPU per-frame loop (confirmed twice, `ps` samples 15s
+apart, `STAT RN` both times, log output stable) -- past every crash this whole effort has hit so
+far. Default host build unaffected (`re4_game_all -k 0` still 33 failing, `ctest` 5/5).
+
+### 4. Screenshot, honestly described; new blocker (steady loop, no crash) not resolved this pass
+
+`boot_37.png` (scratchpad): near-black window; two thin dark-navy vertical bars at the left edge
+(a small green mark at the very top of the left one); a pale lavender vertical bar at the right
+edge; five short horizontal **orange** bar segments about a third of the way down (a new colour --
+every prior screenshot in this whole effort showed grey/pale-purple bars only) -- still the debug
+log's placeholder-bar rendering (`pLog->disp()`, no font texture bound yet, matching every prior
+finding on that point), not the title screen, no glyph shapes.
+
+**New blocker, not root-caused this pass (budget)**: the process now runs steadily at ~100% CPU
+with no further log growth for 15+ real seconds and no crash -- the same "real, paced-looking loop"
+signature sections 34/35 both hit and both turned out to be a real bug once investigated (a
+scheduler deadlock, then a busy-wait that never pumped a callback). Leading, unverified hypothesis
+(**TO VERIFY**, not chased this pass): `cCard::createSysfile()`'s own state machine (reached per
+section 1 above) is a real yes/no confirmation prompt ("create a system file?") that waits for a
+pad button press to advance -- if this port's `PadInit()`/pad-read stub never delivers a real
+button edge, this would be a genuine, correctly-diagnosed "waiting for input that never comes," not
+a hang bug, consistent with the coordinator's own item about phantom/absent button presses. Not
+confirmed by reading `createSysfile()`'s actual body this pass.
+
+### Commits this pass
+
+- `18f30dca` -- `card.cpp`/`CMakeLists.txt`/`include/port/card.h`/`src/port/card.cpp`: real disc
+  game/maker code + port-owned card directory (touches outside `src/port`/`include/port`,
+  remote-verified: 115/115 OK, asmcheck TOTAL 231 unchanged)
+- (pending) -- `mes.cpp`: host-only null-table crash guards (touches outside `src/port`/
+  `include/port`, needs the same remote round trip before landing on `port/macos-arm64`)

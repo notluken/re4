@@ -285,6 +285,23 @@ struct MesTblBlock {
 // 4 ...) for the current language; NULL when out of range.
 u16* MessageData::getAddr(int no, int data_type)
 {
+#ifdef TARGET_PC
+    // docs/port-boot.md section 37: `ptr[data_type]` genuinely reads back null here at least once
+    // during boot (the memory-card first-check, `cardMesSet()`, reached within the first couple of
+    // frames -- well before `game.cpp`'s `gameInit()`/`roomInit()`, the only vendor code that ever
+    // binds `ptr[0]`, which this repo's own source tracing confirms only run once the player picks
+    // something from the title menu, never during pure boot-to-title). Exhaustively grepped every
+    // `MesData`/`setPtr`/`ptr[` reference in src/game -- no other vendor call site binds it earlier.
+    // Whether real hardware's low physical memory (address 0 has real, if unrelated, contents
+    // there rather than being unmapped the way this host's address 0 is) makes this same
+    // `tbl[lang+1]` read merely garbage instead of a hard fault is **TO VERIFY** (would need real
+    // hardware or a cycle-accurate emulator trace, not available here) -- not asserted as fact.
+    // Bytes for the real target are unchanged (this branch does not exist there); this is a
+    // host-only crash guard, not a claim about the vendor's own logic.
+    if (ptr[data_type] == NULL) {
+        return NULL;
+    }
+#endif
     u32* tbl = (u32*) ptr[data_type];
     MesTblBlock* blk = (MesTblBlock*) ((u8*) tbl + tbl[lang + 1]);
 
@@ -783,6 +800,14 @@ void Message::move()
     int ret;
     int code;
 
+#ifdef TARGET_PC
+    // See MessageData::getAddr()'s TARGET_PC branch (docs/port-boot.md section 37): when the
+    // message table wasn't bound, Message::init() already logged "Address Error" and left m_pMes
+    // NULL -- nothing to advance/render this frame, same host-only crash guard, not vendor logic.
+    if (m_pMes == NULL) {
+        return;
+    }
+#endif
     if (!(be_flag & 2) && (m_attr & 0x80)) {
         be_flag &= ~1;
         m_state &= ~1;
