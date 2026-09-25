@@ -30,6 +30,8 @@
 #include "port/lowmem.h"
 #include "port/ptr32.h"
 
+#include <mach-o/getsect.h>
+#include <mach-o/ldsyms.h>
 #include <pthread.h>
 
 #include <chrono>
@@ -98,6 +100,43 @@ void CheckInWindow(const char* what, const void* addr)
 int s_bssProbe;
 void SomeFunctionProbe() {}
 
+// Layout invariant #3 (include/port/game_section.h): every game-TU global -- not just this file's
+// own probe -- must have landed in [__re4low, arena start) with GC32() >= 0x80000000. Checked via
+// the real Mach-O section, not assumed from where lowmem.cpp sits on the link line: `getsectiondata`
+// finds `__DATA,__re4gdata`/`__DATA,__re4gbss` in the running image (already slide-adjusted) and this
+// verifies the whole section's address range, not just one probe variable inside it. A section that
+// is absent (nullptr/size 0 -- e.g. a test binary that never links any `re4_boot_game` TU) is not an
+// error here; nothing to check.
+void CheckGameSection(const char* sectname)
+{
+    unsigned long size = 0;
+    std::uint8_t* addr = getsectiondata(&_mh_execute_header, "__DATA", sectname, &size);
+    if (addr == nullptr || size == 0) {
+        return;
+    }
+    CheckInWindow(sectname, addr);
+    CheckInWindow(sectname, addr + size - 1);
+
+    std::uint32_t startGC = GC32(addr);
+    if (startGC < 0x80000000u) {
+        std::fprintf(stderr,
+                     "InitArena: game section __DATA,%s (%p, GC 0x%08x) is BELOW lowmem (GC "
+                     "0x80000000) -- a game global is not representable as a valid GameCube handle; "
+                     "check that lowmem.cpp is still first on re4_boot's link line and that "
+                     "include/port/game_section.h's data/bss pragmas are still force-included first "
+                     "(docs/port-boot.md section 28)\n",
+                     sectname, addr, startGC);
+        std::abort();
+    }
+    if (addr + size > reinterpret_cast<std::uint8_t*>(s_arena)) {
+        std::fprintf(stderr,
+                     "InitArena: game section __DATA,%s (%p, size 0x%lx) overruns the arena start "
+                     "(%p) -- it must land entirely between __re4low and __re4arena\n",
+                     sectname, addr, size, static_cast<void*>(s_arena));
+        std::abort();
+    }
+}
+
 } // namespace
 
 void InitArena()
@@ -129,6 +168,11 @@ void InitArena()
                      bssGC);
         std::abort();
     }
+
+    // Layout invariant #3: every game-TU global (include/port/game_section.h's __re4gdata/__re4gbss),
+    // not just this file's own s_bssProbe.
+    CheckGameSection("__re4gdata");
+    CheckGameSection("__re4gbss");
 
     // Layout invariant #2: the arena starts inside the fixed-GC-address budget.
     std::uint32_t arenaGC = GC32(s_arena);

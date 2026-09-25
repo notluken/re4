@@ -481,13 +481,31 @@ if (RE4_BUILD_BOOT)
   target_compile_options(re4_boot_stubs PRIVATE ${RE4_GAME_OPTIONS})
 
   # src/port/lowmem.cpp and src/port/game_stack.cpp listed FIRST (docs/port-boot.md section 28) --
-  # ld orders same-segment sections by first appearance among the *directly listed* link inputs, so
-  # this keeps `__re4low` (then `__re4stack`) ahead of every other object's `.data`/`.bss`/`.common`,
-  # and ahead of `__re4arena` (which stays last -- it lives inside the re4_port static library,
-  # linked after every source listed directly here).
-  add_executable(re4_boot src/port/lowmem.cpp src/port/game_stack.cpp src/port/boot_main.cpp
+  # ld orders same-segment sections by first appearance among the *directly listed* link inputs --
+  # BUT that "first appearance" is in the actual link command CMake/Ninja generates, which is NOT
+  # the textual order of add_executable()'s own argument list once an OBJECT library
+  # ($<TARGET_OBJECTS:...>) is mixed in: CMake's Ninja generator always emits a target's
+  # OBJECT-library-derived objects before its own directly-compiled sources in the link line,
+  # regardless of where the generator expression sits among the other arguments (confirmed by
+  # inspecting `build.ninja`'s own `build re4_boot:` line -- every `re4_boot_game.dir/*.o` precedes
+  # every `re4_boot.dir/*.o`, even though `src/port/lowmem.cpp` is listed textually first above).
+  # That reordering is exactly what put every ordinary game global's `.data`/`.bss` (this file's own
+  # `#pragma clang section data/bss` custom sections, include/port/game_section.h) ahead of
+  # `__re4low` -- the layout invariant `src/port/arena.cpp`'s `InitArena()` exists to catch.
+  #
+  # Fix: give `src/port/lowmem.cpp` the same "OBJECT library" treatment as `re4_boot_game`, so it
+  # participates in the same reordering-immune mechanism instead of losing to it. Multiple
+  # `$<TARGET_OBJECTS:...>` generator expressions preserve their OWN relative order (confirmed the
+  # same way): listing `re4_boot_lowmem` before `re4_boot_game` here keeps `__re4low` first.
+  add_library(re4_boot_lowmem OBJECT src/port/lowmem.cpp)
+  target_include_directories(re4_boot_lowmem PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
+  target_compile_definitions(re4_boot_lowmem PRIVATE ${RE4_GAME_DEFINES})
+  target_compile_options(re4_boot_lowmem PRIVATE ${RE4_GAME_OPTIONS})
+
+  add_executable(re4_boot $<TARGET_OBJECTS:re4_boot_lowmem> $<TARGET_OBJECTS:re4_boot_game>
+    src/port/game_stack.cpp src/port/boot_main.cpp
     src/port/mem1.cpp src/port/dvd.cpp src/port/vi.cpp src/port/gx_wgfifo.cpp src/port/card.cpp
-    src/port/pad_input.cpp src/port/screenshot.cpp $<TARGET_OBJECTS:re4_boot_game>)
+    src/port/pad_input.cpp src/port/screenshot.cpp)
   target_include_directories(re4_boot PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
   target_compile_definitions(re4_boot PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_boot PRIVATE ${RE4_GAME_OPTIONS})

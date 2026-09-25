@@ -19,6 +19,24 @@
 #define RE4_PORT_GAME_SECTION_H
 
 #ifdef TARGET_PC
+// __re4gdata/__re4gbss (docs/port-boot.md section 28, GC-faithful layout invariant): ld64's
+// __DATA-segment output order puts the conventional __data section ahead of ANY custom section
+// regardless of link order (measured: with `src/port/lowmem.cpp` first on `re4_boot`'s link line,
+// `__DATA,__re4low` still lands AFTER `__DATA,__data` -- __objc_selrefs, __data, __re4low,
+// __thread_vars/__thread_data/__thread_bss, __bss, __common, __re4stack, __re4arena, in that exact
+// otool -l order), so every ordinary initialized game global (e.g. mercenaries.cpp's
+// `int ComboTimerFlash = 120;`) got a GC32() address BELOW 0x80000000 -- not representable as a
+// valid GameCube handle at all. Moving game-TU initialized data and BSS into their OWN named
+// sections sidesteps ld64's special-cased ordering for the conventional __data/__bss names: custom
+// sections order by first appearance among the directly-listed link inputs (the same rule
+// `__re4low`/`__re4arena` already rely on, lowmem.cpp's own comment), and since every
+// `re4_boot_game` TU is linked (as `$<TARGET_OBJECTS:re4_boot_game>`) strictly after
+// `src/port/lowmem.cpp` on `re4_boot`'s link line, `__re4gdata`/`__re4gbss`'s first use always comes
+// after `__re4low`'s. `src/port/arena.cpp`'s `InitArena()` verifies this held, at startup, with
+// `getsectiondata()` rather than assuming it.
+#pragma clang section data="__DATA,__re4gdata"
+#pragma clang section bss="__DATA,__re4gbss"
+
 // The trailing `,regular,pure_instructions` is load-bearing, not decorative: without it ld64 does
 // not recognize `__re4game` as a code section (it only infers that from the conventional
 // `__text`'s name otherwise) and silently skips generating compact-unwind/`__unwind_info` entries
