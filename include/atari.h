@@ -8,6 +8,9 @@
 #include "at_sub.h"
 #include "at_sub2.h"
 #include "main_mem.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
 class cModel;
 class cAtariInfo;
@@ -43,11 +46,26 @@ public:
 };
 
 // Scenario collision data file (SAT): counts, then the vertex, face normal, edge, polygon and
-// block tables back to back (cSat::operator= computes the table pointers).
+// block tables back to back (cSat::operator= computes the table pointers). On-disc, big-endian
+// (Phase 3, docs/port-phase3.md) -- every plain integer field here was raw until this pass, so
+// `cSat::operator=`'s `vertex_num = f->m_nVertex;`-style copies fed every table-pointer computation
+// (norm_p/edge_p/poly_p/block_p) a garbage count, corrupting `cSat::blockInit`'s block-chain walk
+// downstream ("cSat::blockInit() INVALID PTR" -- found live tracing the R120 room's collision init).
 class cSatFile {
 public:
     u8 m_Version;           // 0x00  0xFF for a file (a cSatHeader has bit7 set instead)
     u8 x1;
+#ifdef TARGET_PC
+    re4_port::BE<u16> m_nVertex;     // 0x02
+    re4_port::BE<u16> m_nNormal;     // 0x04
+    re4_port::BE<u16> m_nEdge;       // 0x06
+    re4_port::BE<u16> x8;
+    re4_port::BE<u16> m_nPolygon;       // 0x0A  polygon total (< 0x2000)
+    re4_port::BE<u16> m_nFloor;          // 0x0C  polygon groups: [0, nA), [nA, nA + nB), the last nC (cSatMgr::disp)
+    re4_port::BE<u16> m_nSlope;          // 0x0E
+    re4_port::BE<u16> m_nWall;          // 0x10
+    re4_port::BE<u16> m_nBlock;         // 0x12
+#else
     u16 m_nVertex;     // 0x02
     u16 m_nNormal;     // 0x04
     u16 m_nEdge;       // 0x06
@@ -57,6 +75,7 @@ public:
     u16 m_nSlope;          // 0x0E
     u16 m_nWall;          // 0x10
     u16 m_nBlock;         // 0x12
+#endif
     // 0x14: Vec vtx[nVertex]; Vec nrm[nNormal]; Vec edge[nEdge]; AtPoly poly[nPoly]; cSatBlock blocks
 
     Vec* getVertexPtr();
@@ -68,7 +87,11 @@ class cSatHeader {
 public:
     u8 m_Version;           // 0x00  bit7 set
     u8 pad_1[3];
+#ifdef TARGET_PC
+    re4_port::BE<u32> ofs[0];      // 0x04
+#else
     u32 ofs[0];      // 0x04
+#endif
 
     cSatFile* getSat(int no);
 };
@@ -76,23 +99,48 @@ public:
 // Spatial partition of a SAT: an XZ box holding polygon indices, or (flag bit0) a child block
 // chain in place of the indices. `next` is stored as a relative offset in the file
 // (cSat::blockInit turns it into a pointer).
+#ifdef TARGET_PC
+// On-disc big-endian f32 triplet (docs/port-phase3.md), same shape as id_sys.h's BeVec but declared
+// locally (atari.h does not otherwise depend on id_sys.h): cSatBlock::min/m_Size are read straight
+// off the room's SAT archive with no separate byte-swap pass.
+struct SatVec {
+    re4_port::BE<f32> x, y, z;
+    operator Vec() const { return Vec{ (f32) x, (f32) y, (f32) z }; }
+    // createSat2/createSat3/createSat4 (game/atari.cpp) build a cSatBlock from a runtime Vec --
+    // dead-stripped on the real target (their tables/strings stayed in .rodata only), but this
+    // TARGET_PC build still compiles every function, used or not.
+    SatVec& operator=(const Vec& v) { x = v.x; y = v.y; z = v.z; return *this; }
+};
+#endif
+
 class cSatBlock {
 public:
+    // Previously left plain Vec (raw, unswapped), same bug class as cSatFile above.
+#ifdef TARGET_PC
+    SatVec min;         // 0x00  box minimum (y unused)
+    SatVec m_Size;        // 0x0C  box size
+    re4_port::BE<u16> m_nFloor;          // 0x18  indices of group A (floors: flag 0x40 checks [0, n0 + n1))
+    re4_port::BE<u16> m_nSlope;          // 0x1A  group B
+    re4_port::BE<u16> m_nWall;          // 0x1C  group C (walls: flag 0x80 checks [n0 + n1, n0 + n1 + n2))
+    re4_port::BE<u16> m_Flag;        // 0x1E  bit0: `idx` holds a child cSatBlock
+#else
     Vec min;         // 0x00  box minimum (y unused)
     Vec m_Size;        // 0x0C  box size
     u16 m_nFloor;          // 0x18  indices of group A (floors: flag 0x40 checks [0, n0 + n1))
     u16 m_nSlope;          // 0x1A  group B
     u16 m_nWall;          // 0x1C  group C (walls: flag 0x80 checks [n0 + n1, n0 + n1 + n2))
     u16 m_Flag;        // 0x1E  bit0: `idx` holds a child cSatBlock
+#endif
     // Relocated by cSat::blockInit (docs/port-phase2.md "the inventory"): Ptr32<T> under TARGET_PC.
     // Between two #line directives with no __LINE__/HALT() call in that span (checked), so inserting
     // this comment and the #else branch here shifts nothing that matters.
 #ifdef TARGET_PC
     re4_port::Ptr32<cSatBlock> m_pList; // 0x20
+    re4_port::BE<u16> idx[0];      // 0x24  polygon indices
 #else
     cSatBlock* m_pList; // 0x20
-#endif
     u16 idx[0];      // 0x24  polygon indices
+#endif
 
     int lineOverlap(Vec* center, Vec* w, Vec* v);
     int hitCheckSphere(Vec* pos0, Vec* pos1, f32 radius);

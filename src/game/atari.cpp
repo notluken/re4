@@ -793,7 +793,11 @@ int blkPolySphereCkCore(cSat* pAt, cSatBlock* pBlock, Vec* pos0, Vec* pos1, f32 
     int start;
     int end;
     int i;
+#ifdef TARGET_PC
+    re4_port::BE<u16>* idx;
+#else
     u16* idx;
+#endif
 
     if (flag & SAT_CK_FLOOR) {
         start = 0;
@@ -951,7 +955,11 @@ int blkPolyLineCkCore(cSat* pAt, cSatBlock* pBlock, Vec* pos0, Vec* pos1, int fl
     int start;
     int end;
     int n;
+#ifdef TARGET_PC
+    re4_port::BE<u16>* idx;
+#else
     u16* idx;
+#endif
 
     if (flag & SAT_CK_FLOOR) {
         start = 0;
@@ -1234,9 +1242,15 @@ int cSatFile::dataCheck()
 // SAT `no` of a multi-SAT archive (offset table after the header).
 cSatFile* cSatHeader::getSat(int no)
 {
+#ifdef TARGET_PC
+    re4_port::BE<u32>* tbl = ofs;
+
+    return (cSatFile*) ((u8*) this + (u32) tbl[no]);
+#else
     u32* tbl = ofs;
 
     return (cSatFile*) ((u8*) this + *(u32*) (no * 4 + (u32) tbl));
+#endif
 }
 
 // The three builders below with precomputed normals were dead-stripped by the linker; their
