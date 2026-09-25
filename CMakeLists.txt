@@ -283,6 +283,7 @@ add_library(re4_port STATIC
   src/port/arena.cpp
   src/port/alloc.cpp
   src/port/dvd_root.cpp
+  src/port/fiber.cpp
   src/port/os_thread.cpp
 )
 target_include_directories(re4_port PUBLIC ${RE4_GAME_INCLUDES})
@@ -313,6 +314,15 @@ if (RE4_PC_BUILD_TESTS)
   add_executable(test_be src/port/lowmem.cpp tests/port/test_be.cpp)
   target_link_libraries(test_be PRIVATE re4_port)
   add_test(NAME test_be COMMAND test_be)
+
+  add_executable(test_fiber src/port/lowmem.cpp tests/port/test_fiber.cpp)
+  target_link_libraries(test_fiber PRIVATE re4_port)
+  add_test(NAME test_fiber COMMAND test_fiber)
+
+  add_executable(test_os_thread src/port/lowmem.cpp tests/port/test_os_thread.cpp)
+  target_include_directories(test_os_thread PRIVATE ${RE4_GAME_INCLUDES})
+  target_link_libraries(test_os_thread PRIVATE re4_port)
+  add_test(NAME test_os_thread COMMAND test_os_thread)
 endif()
 
 # --- re4_port_static_asserts: offsetof() checks for Phase 2 step 5's Ptr32<T>-converted on-disc

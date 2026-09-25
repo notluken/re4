@@ -1052,12 +1052,7 @@ void OptionDataRead()
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: OptionDataRead() called\n"); warned = true; }
 }
-// OSCancelThread: `void OSCancelThread(OSThread* thread)`
-void OSCancelThread(OSThread* thread)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSCancelThread() called\n"); warned = true; }
-}
+// OSCancelThread: real semantics now in src/port/os_thread.cpp (docs/port-boot.md section 34).
 // UNRESOLVED: OSCreateThread -- candidates: ['int OSCreateThread(OSThread* thread, void* (*func)(void*), void* param, void* stack, u32 stackSize, OSPriority priority, u16 attr);', 'OSCreateThread(&pT->Thread, pT->hook, (void*) pT->arg, pT->pStack, pT->StackSize, pT->Priority, 1);']
 // OSDisableInterrupts: `BOOL OSDisableInterrupts(void)`
 BOOL OSDisableInterrupts(void)
@@ -1145,21 +1140,9 @@ BOOL OSInitFont(OSFontHeader* fontData)
     if (!warned) { std::fprintf(stderr, "STUB: OSInitFont() called\n"); warned = true; }
     return 0;
 }
-// OSInitSemaphore: `void OSInitSemaphore(OSSemaphore* sem, s32 count)`
-// NOT a logging-only stub (docs/port-boot.md's stub audit): real semantics, not just a call-site
-// marker -- callers read `sem->count`/`sem->queue` afterward (OSWaitSemaphore/OSSignalSemaphore-
-// shaped code), same class of bug as memclr_asm/memset_asm below (a struct the game depends on
-// being actually filled, not a hardware side effect to merely acknowledge).
-void OSInitSemaphore(OSSemaphore* sem, s32 count)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSInitSemaphore() called\n"); warned = true; }
-    if (sem) {
-        sem->count = count;
-        sem->queue.head = nullptr;
-        sem->queue.tail = nullptr;
-    }
-}
+// OSInitSemaphore: real semantics now in src/port/os_thread.cpp (docs/port-boot.md section 34 --
+// built on the same OSSleepThread/OSWakeupThread the scheduler uses, modeled on src/lib/
+// OSSemaphore.c).
 // OSInitThreadQueue: real semantics now in src/port/os_thread.cpp.
 // OSPanic: `void OSPanic(const char* file, int line, const char* msg, ...)`
 // NOT a logging-only stub: a real OSPanic() call means the game itself detected a fatal condition
@@ -1231,22 +1214,10 @@ void OSSetSoundMode(u32 mode)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: OSSetSoundMode() called\n"); warned = true; }
 }
-// OSSignalSemaphore: `s32 OSSignalSemaphore(OSSemaphore* sem)`
-s32 OSSignalSemaphore(OSSemaphore* sem)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSSignalSemaphore() called\n"); warned = true; }
-    return 0;
-}
+// OSSignalSemaphore: real semantics now in src/port/os_thread.cpp.
 // OSSleepThread: real semantics now in src/port/os_thread.cpp.
 // OSSuspendThread: real semantics now in src/port/os_thread.cpp.
-// OSWaitSemaphore: `s32 OSWaitSemaphore(OSSemaphore* sem)`
-s32 OSWaitSemaphore(OSSemaphore* sem)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSWaitSemaphore() called\n"); warned = true; }
-    return 0;
-}
+// OSWaitSemaphore: real semantics now in src/port/os_thread.cpp.
 // OSWakeupThread: real semantics now in src/port/os_thread.cpp.
 // PCclose: `int PCclose(int fd)`
 int PCclose(int fd)
