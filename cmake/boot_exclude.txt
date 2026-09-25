@@ -16,7 +16,6 @@ src/game/Espgen42.cpp
 src/game/espgen45.cpp
 src/game/objRobo.cpp
 src/game/pendulum.cpp
-src/game/pl_wep.cpp
 src/game/sce_at.cpp
 # src/game/math_sub.cpp: un-excluded (docs/port-boot.md section 41/42) -- its four asm blocks
 # (SQRTF's frsqrte, SINF/COSF's paired-single Taylor series, LIMIT_ANGLE's fcmpu loop) now have
@@ -50,7 +49,6 @@ src/game/game.cpp
 src/game/mercenaries.cpp
 src/game/objRocket.cpp
 src/game/pl_ashley.cpp
-src/game/pl_class.cpp
 src/game/pl_leon.cpp
 src/game/pl_sub.cpp
 src/game/sce_com.cpp

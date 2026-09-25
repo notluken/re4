@@ -1047,7 +1047,9 @@ rand:
         // load (both prio 4, weight 0, so RTL order decides); a laundered local puts the constant's
         // load first and keeps cse from folding it back into the compare.
         f32 z = 0.0f;
+#ifndef TARGET_PC
         asm("" : "+f"(z));
+#endif
         m3r[1] = tmp;
         if (m3r[2] == z) {
             m3r[0] = tmp;
@@ -1241,7 +1243,9 @@ void PlSetLockPitch(cModel* pEm)
         // barrier. Ours would be the `lis m3r` of the m3r[2] store's address, the target's order
         // (`lis 0.0; lis m3r; lfs z; addi`) is what the ready list gives when the barrier insn
         // emits no code.
+#ifndef TARGET_PC
         asm("" : : "f"(p));
+#endif
         m3r[2] = 0.0f;
         m3r[1] = p;
         m3r[0] = m3r[1] * m3r[2] + m3r[1];
