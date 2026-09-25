@@ -13,6 +13,10 @@
 #include <dolphin/dvd.h>
 #include <dolphin/ar.h>
 
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
+
 // DvdHeader::type (PS2 DVD_HEADER_ID): where a part goes; TRANS_NONE skips the entry, TRANS_EOF ends the table.
 enum DVD_HEADER_ID {
     TRANS_MRAM = 0,
@@ -24,7 +28,24 @@ enum DVD_HEADER_ID {
     TRANS_EOF = -1
 };
 
-// One entry of the file header read in front of a multi-part file (header_buff, 64 entries).
+// One entry of the file header read in front of a multi-part file (header_buff, 64 entries). Read
+// straight off disc (big-endian) for a "headered" file (DvdReq::mode bit 15, cDvdQueue::readInit's
+// `fileReadAsync(&header_buff[...], 0x400, ...)`) -- BE<T> under TARGET_PC (Phase 3,
+// docs/port-phase3.md) swaps every field transparently, on this host's little-endian reads *and*
+// writes, so the non-headered path's synthesized-in-memory fake header (readInit's `else` branch,
+// plain host-native assignments) keeps working unchanged through the same field types.
+#ifdef TARGET_PC
+struct DvdHeader {
+    re4_port::BE<u32> type;    // 0x00  DVD_HEADER_ID: MRAM, snd block (ARAM), snd PCM (MRAM), ARAM, nested header, -2 skip, -1 end
+    re4_port::BE<u32> size;    // 0x04
+    re4_port::BE<u32> dest;    // 0x08  explicit destination (0 = next free MRAM/ARAM address)
+    re4_port::BE<u32> ofs;     // 0x0C  offset inside the file
+    re4_port::BE<u32> sndType; // 0x10  sound block (0..8), 8 = enemy (index from SndEmDataReadCheck)
+    re4_port::BE<u32> sndArg;  // 0x14
+    re4_port::BE<u32> sndNo;   // 0x18
+    re4_port::BE<u32> x1C;
+};
+#else
 struct DvdHeader {
     u32 type;    // 0x00  DVD_HEADER_ID: MRAM, snd block (ARAM), snd PCM (MRAM), ARAM, nested header, -2 skip, -1 end
     u32 size;    // 0x04
@@ -35,6 +56,7 @@ struct DvdHeader {
     u32 sndNo;   // 0x18
     u32 x1C;
 };
+#endif
 
 // Read request parameters handed to cDvd::ReadReq by DvdRead/DvdReadN (`DvdReqWork`, 0x6C).
 struct DvdReq {

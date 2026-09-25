@@ -508,7 +508,14 @@ void cDvdQueue::readInit()
         if (chk(0x80000000) || m_NestDepth != 0) {
             u32* p;
             m_be_flag |= 0x20;
+#ifdef TARGET_PC
+            // BE<u32>/u32 in the same ternary is ambiguous (both arms have a conversion to the
+            // other's type) -- not a behavior change, just picking the arm to explicitly convert.
+            m_BaseOffset[m_NestDepth] =
+                m_NestDepth ? (u32) pFilehead[m_NestDepth - 1]->ofs : m_Offset;
+#else
             m_BaseOffset[m_NestDepth] = m_NestDepth ? pFilehead[m_NestDepth - 1]->ofs : m_Offset;
+#endif
             p = m_BaseOffset;
             m_DivReadSize = 0x400;
             fileReadAsync(&header_buff[m_NestDepth << 10], 0x400, p[m_NestDepth]);
@@ -675,6 +682,18 @@ void cDvdQueue::readMain()
             }
             break;
         case TRANS_SND_BLK:
+#ifdef TARGET_PC
+            // Sound off (docs/port-phase3.md, section 15/23): SndInit()'s stub never carves real
+            // MRAM sound-block addresses (Snd.mram_top stays 0), so this entry's destination is
+            // unmapped -- unlike the sound-side load functions (SndBlkInit, SndBgmLoad), this
+            // header-driven DVD load had no existing "sound off" guard, and a real transfer into
+            // address 0 segfaults (found live, SIGSEGV, once the DvdHeader byte-swap fix let this
+            // entry's real type/size/ofs through for the first time -- docs/port-boot.md section
+            // 32/33). Skip the entry like TRANS_NONE instead of transferring into an address that
+            // was never carved.
+            (*ph)++;
+            break;
+#endif
             t = (*ph)->sndType;
             switch ((*ph)->sndType) {
             case 8:
@@ -714,6 +733,12 @@ void cDvdQueue::readMain()
             OSReport("DVD: Trans MRAM Snddata  addr: %08x size: %08x %s\n", m_TransAddr, m_LeftSize, blk_tbl[t]);
             break;
         case TRANS_SND_PCM:
+#ifdef TARGET_PC
+            // Sound off -- same reasoning as TRANS_SND_BLK just above (Snd.aram_base_addr is
+            // equally never carved by the stub).
+            (*ph)++;
+            break;
+#endif
             t = (*ph)->sndType;
             switch ((*ph)->sndType) {
             case 8:
