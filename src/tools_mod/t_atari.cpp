@@ -378,7 +378,12 @@ static void plmove10(AtariToolWork* w)
         Draw_local_pos(&w->pos, 1000, gp->Camera.v_mat);
     }
     if (w->joy.on & 0x400) {
+#ifdef TARGET_PC
+        AtPolyData atpd = MakeAtPolyData(satTbl0[0].vtx, satTbl0[0].norm_p, satTbl0[0].edge_p);
+        int hit = At_poly_sphere_ck(&atpd, &satTbl0[0].poly_p[w->polyNo], &oldPos, &w->pos, 100.0f, 0, 0);
+#else
         int hit = At_poly_sphere_ck((AtPolyData*) satTbl0, &satTbl0[0].poly_p[w->polyNo], &oldPos, &w->pos, 100.0f, 0, 0);
+#endif
 
         eprintf(100, 160, 0, 0, "HIT CK:%d = %d", w->polyNo, hit);
     } else {

@@ -78,7 +78,11 @@ public:
 #endif
     // 0x14: Vec vtx[nVertex]; Vec nrm[nNormal]; Vec edge[nEdge]; AtPoly poly[nPoly]; cSatBlock blocks
 
+#ifdef TARGET_PC
+    SatVec* getVertexPtr();
+#else
     Vec* getVertexPtr();
+#endif
     int dataCheck();
 };
 
@@ -99,19 +103,9 @@ public:
 // Spatial partition of a SAT: an XZ box holding polygon indices, or (flag bit0) a child block
 // chain in place of the indices. `next` is stored as a relative offset in the file
 // (cSat::blockInit turns it into a pointer).
-#ifdef TARGET_PC
-// On-disc big-endian f32 triplet (docs/port-phase3.md), same shape as id_sys.h's BeVec but declared
-// locally (atari.h does not otherwise depend on id_sys.h): cSatBlock::min/m_Size are read straight
-// off the room's SAT archive with no separate byte-swap pass.
-struct SatVec {
-    re4_port::BE<f32> x, y, z;
-    operator Vec() const { return Vec{ (f32) x, (f32) y, (f32) z }; }
-    // createSat2/createSat3/createSat4 (game/atari.cpp) build a cSatBlock from a runtime Vec --
-    // dead-stripped on the real target (their tables/strings stayed in .rodata only), but this
-    // TARGET_PC build still compiles every function, used or not.
-    SatVec& operator=(const Vec& v) { x = v.x; y = v.y; z = v.z; return *this; }
-};
-#endif
+// SatVec (the on-disc big-endian f32 triplet used by cSatBlock::min/m_Size below, and by cSat's
+// vertex/normal/edge tables) is declared in at_sub.h, included above -- cSatFile::getVertexPtr()
+// needed it first.
 
 class cSatBlock {
 public:
@@ -150,9 +144,18 @@ public:
 // the flag byte (emobj setSatMain / clrSat: bit2 = active).
 class cSat : public cUnit {
 public:
+#ifdef TARGET_PC
+    // Raw pointers into the room's SAT archive bytes (not on-disc fields themselves -- computed at
+    // runtime by cSat::operator=), so no Ptr32<T>; but what they point at is still big-endian
+    // on-disc data, hence SatVec/AtPoly rather than Vec/AtPoly's old raw layout.
+    SatVec* vtx;        // 0x0C  (the three table pointers double as the AtPolyData the at_sub checks take)
+    SatVec* norm_p;        // 0x10
+    SatVec* edge_p;       // 0x14
+#else
     Vec* vtx;        // 0x0C  (the three table pointers double as the AtPolyData the at_sub checks take)
     Vec* norm_p;        // 0x10
     Vec* edge_p;       // 0x14
+#endif
     AtPoly* poly_p;    // 0x18
     u16 vertex_num;     // 0x1C
     u16 polygon_num;       // 0x1E

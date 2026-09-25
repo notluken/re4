@@ -272,11 +272,21 @@ u32 At_poly_line_ck(AtPolyData* atp, Vec* cross, AtPoly* polygon, Vec* vert0, Ve
     Vec c;
     Vec a;
     Vec b;
+#ifdef TARGET_PC
+    // atp->vtx/nrm/edge are on-disc big-endian tables (SatVec, docs/port-phase3.md); every entry
+    // used as a Vec* argument below (PSVECSubtract/CrossProduct/DotProduct all take Vec*) needs a
+    // value copy first, rather than the vendor's direct table-pointer alias.
+    Vec v0 = atp->vtx[polygon->v[0]];
+    Vec v1;
+    Vec v2;
+    Vec nrm = atp->nrm[polygon->n];
+#else
     Vec* vtx = atp->vtx;
     Vec* v0 = &vtx[polygon->v[0]];
     Vec* v1;
     Vec* v2;
     Vec* nrm = &atp->nrm[polygon->n];
+#endif
     f32 dp0;
     f32 dp1;
     f32 t;
@@ -284,6 +294,54 @@ u32 At_poly_line_ck(AtPolyData* atp, Vec* cross, AtPoly* polygon, Vec* vert0, Ve
     f32 s1;
     u32 attr;
 
+#ifdef TARGET_PC
+    d0.x = vert0->x - v0.x;
+    d0.y = vert0->y - v0.y;
+    d0.z = vert0->z - v0.z;
+    d1.x = vert1->x - v0.x;
+    d1.y = vert1->y - v0.y;
+    d1.z = vert1->z - v0.z;
+    dp0 = d0.x * nrm.x + d0.y * nrm.y;
+    dp0 += d0.z * nrm.z;
+    dp1 = d1.x * nrm.x + d1.y * nrm.y;
+    dp1 += d1.z * nrm.z;
+    if (dp0 * dp1 > 0.0f) {
+        return 0;
+    }
+    v1 = atp->vtx[polygon->v[1]];
+    PSVECSubtract(vert1, vert0, &a);
+    PSVECSubtract(vert0, &v0, &b);
+    {
+        Vec edge0 = atp->edge[polygon->e[0]];
+        PSVECCrossProduct(&edge0, &a, &c);
+    }
+    if (PSVECDotProduct(&c, &b) < 0.0f) {
+        return 0;
+    }
+    v2 = atp->vtx[polygon->v[2]];
+    PSVECSubtract(vert0, &v1, &b);
+    {
+        Vec edge1 = atp->edge[polygon->e[1]];
+        PSVECCrossProduct(&edge1, &a, &c);
+    }
+    if (PSVECDotProduct(&c, &b) < 0.0f) {
+        return 0;
+    }
+    PSVECSubtract(vert0, &v2, &b);
+    {
+        Vec edge2 = atp->edge[polygon->e[2]];
+        PSVECCrossProduct(&edge2, &a, &c);
+    }
+    if (PSVECDotProduct(&c, &b) < 0.0f) {
+        return 0;
+    }
+    t = -dp0 / PSVECDotProduct(&a, &nrm);
+    if (t >= 1.0f || t < 0.0f) {
+        return 0;
+    }
+    s0 = PSVECDotProduct(&nrm, vert0) - PSVECDotProduct(&nrm, &v0);
+    s1 = PSVECDotProduct(&nrm, vert1) - PSVECDotProduct(&nrm, &v0);
+#else
     d0.x = vert0->x - v0->x;
     d0.y = vert0->y - v0->y;
     d0.z = vert0->z - v0->z;
@@ -321,6 +379,7 @@ u32 At_poly_line_ck(AtPolyData* atp, Vec* cross, AtPoly* polygon, Vec* vert0, Ve
     }
     s0 = PSVECDotProduct(nrm, vert0) - PSVECDotProduct(nrm, v0);
     s1 = PSVECDotProduct(nrm, vert1) - PSVECDotProduct(nrm, v0);
+#endif
     if (s0 * s1 < 0.0f) {
         f32 a0 = fabsf(s0);
         f32 a1 = fabsf(s1);

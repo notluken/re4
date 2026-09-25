@@ -816,7 +816,12 @@ int blkPolySphereCkCore(cSat* pAt, cSatBlock* pBlock, Vec* pos0, Vec* pos1, f32 
             continue;
         }
         polyBitSet(*idx);
+#ifdef TARGET_PC
+        AtPolyData atpd = MakeAtPolyData(pAt->vtx, pAt->norm_p, pAt->edge_p);
+        if (At_poly_sphere_ck(&atpd, poly, pos0, pos1, radius, flag, mask)) {
+#else
         if (At_poly_sphere_ck((AtPolyData*) pAt, poly, pos0, pos1, radius, flag, mask)) {
+#endif
             ret = 1;
             if (pNorm) {
                 *pNorm = pAt->norm_p[pAt->poly_p[*idx].n];
@@ -987,7 +992,14 @@ int blkPolyLineCkCore(cSat* pAt, cSatBlock* pBlock, Vec* pos0, Vec* pos1, int fl
             continue;
         }
         polyBit[no >> 3] |= bit;
+#ifdef TARGET_PC
+        {
+            AtPolyData atpd = MakeAtPolyData(pAt->vtx, pAt->norm_p, pAt->edge_p);
+            attr = At_poly_line_ck(&atpd, &h, poly, pos0, pos1, flag, mask);
+        }
+#else
         attr = At_poly_line_ck((AtPolyData*) pAt, &h, poly, pos0, pos1, flag, mask);
+#endif
         if (attr) {
             if (GetDistance(pos0, &h) < GetDistance(pos0, pCross)) {
                 *pCross = h;
@@ -1124,7 +1136,11 @@ void cSat::setMatrix(Mtx mat0)
 
 cSat& cSat::operator=(cSatFile* f)
 {
+#ifdef TARGET_PC
+    SatVec* v;
+#else
     Vec* v;
+#endif
 
     vertex_num = f->m_nVertex;
     polygon_num = f->m_nPolygon;
@@ -1183,16 +1199,31 @@ void cSat::disp(int poly_num, u32 col, int mode)
     Vec n;
     Vec w;
     AtPoly* pt = poly_p;
+#ifdef TARGET_PC
+    SatVec* vt = vtx;
+#else
     Vec* vt = vtx;
+#endif
     u16 i;
 
     PSMTXConcat(pG->Camera.v_mat, mat, m);
     for (i = 0; i < 3; i++) {
         AtPoly* pl = (AtPoly*) (poly_num * sizeof(AtPoly) + (u32) pt);
+#ifdef TARGET_PC
+        // Same table lookup as the vendor's raw pointer hack below, but through the polygon's
+        // BE<u16> index field and the BE<f32> vertex table (docs/port-phase3.md) instead of an
+        // unswapped `*(u16*)`/`Vec*` reinterpret -- this is debug draw only (t_option "SCROLL
+        // VIEW"), not reached by boot, but still has to compile and read the right bytes.
+        Vec v = vt[pl->v[i]];
+        p[i].x = v.x;
+        p[i].y = v.y;
+        p[i].z = v.z;
+#else
         Vec* v = (Vec*) (*(u16*) (i * 2 + (u32) pl) * sizeof(Vec) + (u32) vt);
         p[i].x = v->x;
         p[i].y = v->y;
         p[i].z = v->z;
+#endif
     }
     switch (mode & 3) {
     case 0: {
@@ -1228,10 +1259,17 @@ void cSat::disp(int poly_num, u32 col, int mode)
 }
 
 // The vertex table right after the file header.
+#ifdef TARGET_PC
+SatVec* cSatFile::getVertexPtr()
+{
+    return (SatVec*) (this + 1);
+}
+#else
 Vec* cSatFile::getVertexPtr()
 {
     return (Vec*) (this + 1);
 }
+#endif
 
 // Sanity check: at most 0x1FFF polygons (the polyBit table size).
 int cSatFile::dataCheck()
@@ -1390,9 +1428,15 @@ cSatFile* createSat(Vec* v, u32 attr, f32 h)
         { { 2, 6, 7 }, 3, { 21, 22, 23 } },
     };
     cSatFile* f;
+#ifdef TARGET_PC
+    SatVec* vtx;
+    SatVec* nrm;
+    SatVec* e;
+#else
     Vec* vtx;
     Vec* nrm;
     Vec* e;
+#endif
     AtPoly* poly;
     cSatBlock* blk;
     const AtPoly* p;
@@ -1413,7 +1457,11 @@ cSatFile* createSat(Vec* v, u32 attr, f32 h)
     f->m_nSlope = 0;
     f->m_nWall = 8;
     f->m_nBlock = 1;
+#ifdef TARGET_PC
+    vtx = (SatVec*) (f + 1);
+#else
     vtx = (Vec*) (f + 1);
+#endif
     vtx[0] = v[0];
     vtx[1] = v[1];
     vtx[2] = v[2];
@@ -1430,17 +1478,49 @@ cSatFile* createSat(Vec* v, u32 attr, f32 h)
     for (i = 0; i < 4; i++) {
         Vec d0;
         Vec d1;
-        Vec* v0;
         p = &poly0[i * 2];
+#ifdef TARGET_PC
+        // vtx/nrm are on-disc big-endian tables (SatVec) here (docs/port-phase3.md); the vendor's
+        // pointer aliasing into Vec* would read/write raw bytes without the swap, so table entries
+        // used as a Vec* argument (PSVECSubtract/CrossProduct/VECNormalize) go through a value copy.
+        Vec v0v = vtx[p->v[0]];
+        Vec v1v = vtx[p->v[1]];
+        Vec v2v = vtx[p->v[2]];
+        Vec crossTmp;
+        PSVECSubtract(&v1v, &v0v, &d0);
+        PSVECSubtract(&v2v, &v0v, &d1);
+        PSVECCrossProduct(&d0, &d1, &crossTmp);
+        VECNormalize(&crossTmp, &crossTmp);
+        nrm[i] = crossTmp;
+#else
+        Vec* v0;
         v0 = &vtx[p->v[0]];
         PSVECSubtract(&vtx[p->v[1]], v0, &d0);
         PSVECSubtract(&vtx[p->v[2]], v0, &d1);
         PSVECCrossProduct(&d0, &d1, &nrm[i]);
 #line 2661 "D:/Bio4/Prog/atari.cpp"
         VECNormalize(&nrm[i], &nrm[i]);
+#endif
     }
     e = &nrm[4];
     for (i = 0; i < 8; i++) {
+#ifdef TARGET_PC
+        Vec v1v = vtx[poly0[i].v[1]];
+        Vec v0v = vtx[poly0[i].v[0]];
+        Vec v2v = vtx[poly0[i].v[2]];
+        e->x = v1v.x - v0v.x;
+        e->y = v1v.y - v0v.y;
+        e->z = v1v.z - v0v.z;
+        e++;
+        e->x = v2v.x - v1v.x;
+        e->y = v2v.y - v1v.y;
+        e->z = v2v.z - v1v.z;
+        e++;
+        e->x = v0v.x - v2v.x;
+        e->y = v0v.y - v2v.y;
+        e->z = v0v.z - v2v.z;
+        e++;
+#else
         Vec* v1 = (Vec*) (poly0[i].v[1] * sizeof(Vec) + (u32) vtx);
         Vec* v0 = (Vec*) (poly0[i].v[0] * sizeof(Vec) + (u32) vtx);
         Vec* v2 = (Vec*) (poly0[i].v[2] * sizeof(Vec) + (u32) vtx);
@@ -1456,6 +1536,7 @@ cSatFile* createSat(Vec* v, u32 attr, f32 h)
         e->y = v0->y - v2->y;
         e->z = v0->z - v2->z;
         e++;
+#endif
     }
     poly = (AtPoly*) e;
     memcpy(poly, poly0, sizeof(poly0));
@@ -1510,9 +1591,15 @@ cSatFile* createBoxSat(Vec* v, u32 attr, f32 h)
         { { 2, 6, 7 }, 5, { 33, 34, 35 } },
     };
     cSatFile* f;
+#ifdef TARGET_PC
+    SatVec* vtx;
+    SatVec* nrm;
+    SatVec* e;
+#else
     Vec* vtx;
     Vec* nrm;
     Vec* e;
+#endif
     AtPoly* poly;
     cSatBlock* blk;
     const AtPoly* p;
@@ -1533,7 +1620,11 @@ cSatFile* createBoxSat(Vec* v, u32 attr, f32 h)
     f->m_nSlope = 4;
     f->m_nWall = 8;
     f->m_nBlock = 1;
+#ifdef TARGET_PC
+    vtx = (SatVec*) (f + 1);
+#else
     vtx = (Vec*) (f + 1);
+#endif
     vtx[0] = v[0];
     vtx[1] = v[1];
     vtx[2] = v[2];
@@ -1550,17 +1641,46 @@ cSatFile* createBoxSat(Vec* v, u32 attr, f32 h)
     for (i = 0; i < 6; i++) {
         Vec d0;
         Vec d1;
-        Vec* v0;
         p = &poly0[i * 2];
+#ifdef TARGET_PC
+        Vec v0v = vtx[p->v[0]];
+        Vec v1v = vtx[p->v[1]];
+        Vec v2v = vtx[p->v[2]];
+        Vec crossTmp;
+        PSVECSubtract(&v1v, &v0v, &d0);
+        PSVECSubtract(&v2v, &v0v, &d1);
+        PSVECCrossProduct(&d0, &d1, &crossTmp);
+        VECNormalize(&crossTmp, &crossTmp);
+        nrm[i] = crossTmp;
+#else
+        Vec* v0;
         v0 = &vtx[p->v[0]];
         PSVECSubtract(&vtx[p->v[1]], v0, &d0);
         PSVECSubtract(&vtx[p->v[2]], v0, &d1);
         PSVECCrossProduct(&d0, &d1, &nrm[i]);
 #line 2797 "D:/Bio4/Prog/atari.cpp"
         VECNormalize(&nrm[i], &nrm[i]);
+#endif
     }
     e = &nrm[6];
     for (i = 0; i < 12; i++) {
+#ifdef TARGET_PC
+        Vec v1v = vtx[poly0[i].v[1]];
+        Vec v0v = vtx[poly0[i].v[0]];
+        Vec v2v = vtx[poly0[i].v[2]];
+        e->x = v1v.x - v0v.x;
+        e->y = v1v.y - v0v.y;
+        e->z = v1v.z - v0v.z;
+        e++;
+        e->x = v2v.x - v1v.x;
+        e->y = v2v.y - v1v.y;
+        e->z = v2v.z - v1v.z;
+        e++;
+        e->x = v0v.x - v2v.x;
+        e->y = v0v.y - v2v.y;
+        e->z = v0v.z - v2v.z;
+        e++;
+#else
         Vec* v1 = (Vec*) (poly0[i].v[1] * sizeof(Vec) + (u32) vtx);
         Vec* v0 = (Vec*) (poly0[i].v[0] * sizeof(Vec) + (u32) vtx);
         Vec* v2 = (Vec*) (poly0[i].v[2] * sizeof(Vec) + (u32) vtx);
@@ -1576,6 +1696,7 @@ cSatFile* createBoxSat(Vec* v, u32 attr, f32 h)
         e->y = v0->y - v2->y;
         e->z = v0->z - v2->z;
         e++;
+#endif
     }
     poly = (AtPoly*) e;
     memcpy(poly, poly0, sizeof(poly0));
@@ -1620,9 +1741,15 @@ static cSatFile* createFloorSat(Vec* v, u32 attr, f32 h)
         { { 2, 0, 3 }, 0, { 3, 4, 5 } },
     };
     cSatFile* f;
+#ifdef TARGET_PC
+    SatVec* vtx;
+    SatVec* nrm;
+    SatVec* e;
+#else
     Vec* vtx;
     Vec* nrm;
     Vec* e;
+#endif
     AtPoly* poly;
     cSatBlock* blk;
     const AtPoly* p;
@@ -1643,7 +1770,11 @@ static cSatFile* createFloorSat(Vec* v, u32 attr, f32 h)
     f->m_nSlope = 0;
     f->m_nWall = 0;
     f->m_nBlock = 1;
+#ifdef TARGET_PC
+    vtx = (SatVec*) (f + 1);
+#else
     vtx = (Vec*) (f + 1);
+#endif
     vtx[0] = v[0];
     vtx[1] = v[1];
     vtx[2] = v[2];
@@ -1652,17 +1783,46 @@ static cSatFile* createFloorSat(Vec* v, u32 attr, f32 h)
     for (i = 0; i < 1; i++) {
         Vec d0;
         Vec d1;
-        Vec* v0;
         p = &poly0[i * 2];
+#ifdef TARGET_PC
+        Vec v0v = vtx[p->v[0]];
+        Vec v1v = vtx[p->v[1]];
+        Vec v2v = vtx[p->v[2]];
+        Vec crossTmp;
+        PSVECSubtract(&v1v, &v0v, &d0);
+        PSVECSubtract(&v2v, &v0v, &d1);
+        PSVECCrossProduct(&d0, &d1, &crossTmp);
+        VECNormalize(&crossTmp, &crossTmp);
+        nrm[i] = crossTmp;
+#else
+        Vec* v0;
         v0 = &vtx[p->v[0]];
         PSVECSubtract(&vtx[p->v[1]], v0, &d0);
         PSVECSubtract(&vtx[p->v[2]], v0, &d1);
         PSVECCrossProduct(&d0, &d1, &nrm[i]);
 #line 2910 "D:/Bio4/Prog/atari.cpp"
         VECNormalize(&nrm[i], &nrm[i]);
+#endif
     }
     e = &nrm[1];
     for (i = 0; i < 2; i++) {
+#ifdef TARGET_PC
+        Vec v1v = vtx[poly0[i].v[1]];
+        Vec v0v = vtx[poly0[i].v[0]];
+        Vec v2v = vtx[poly0[i].v[2]];
+        e->x = v1v.x - v0v.x;
+        e->y = v1v.y - v0v.y;
+        e->z = v1v.z - v0v.z;
+        e++;
+        e->x = v2v.x - v1v.x;
+        e->y = v2v.y - v1v.y;
+        e->z = v2v.z - v1v.z;
+        e++;
+        e->x = v0v.x - v2v.x;
+        e->y = v0v.y - v2v.y;
+        e->z = v0v.z - v2v.z;
+        e++;
+#else
         Vec* v1 = (Vec*) (poly0[i].v[1] * sizeof(Vec) + (u32) vtx);
         Vec* v0 = (Vec*) (poly0[i].v[0] * sizeof(Vec) + (u32) vtx);
         Vec* v2 = (Vec*) (poly0[i].v[2] * sizeof(Vec) + (u32) vtx);
@@ -1678,6 +1838,7 @@ static cSatFile* createFloorSat(Vec* v, u32 attr, f32 h)
         e->y = v0->y - v2->y;
         e->z = v0->z - v2->z;
         e++;
+#endif
     }
     poly = (AtPoly*) e;
     memcpy(poly, poly0, sizeof(poly0));

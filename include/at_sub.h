@@ -3,15 +3,57 @@
 
 #include "types.h"
 #include "vec.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
+
+// On-disc big-endian f32 triplet (docs/port-phase3.md): the SAT vertex/normal/edge tables
+// (cSatFile, right after its header) are raw big-endian floats aliased in place by cSat::operator=
+// (game/atari.cpp) -- never copied through a swap pass -- so every read of one of those tables has
+// to go through this instead of a plain `Vec`. `operator Vec()` is the one place callers convert;
+// nothing here is done automatically, matching id_sys.h's `BeVec` (same shape, declared locally
+// because at_sub.h does not otherwise depend on id_sys.h).
+#ifdef TARGET_PC
+struct SatVec {
+    re4_port::BE<f32> x, y, z;
+    operator Vec() const { return Vec{ (f32) x, (f32) y, (f32) z }; }
+    SatVec& operator=(const Vec& v) { x = v.x; y = v.y; z = v.z; return *this; }
+};
+#endif
 
 // Collision polygon data block (game/at_sub.cpp, game/atari.cpp): vertex, face normal and
 // edge normal tables the polygons index into.
 struct AtPolyData {
     u8 pad_0[0xC];
+#ifdef TARGET_PC
+    SatVec* vtx;     // 0x0C
+    SatVec* nrm;     // 0x10  face normals
+    SatVec* edge;    // 0x14  edge normals
+#else
     Vec* vtx;        // 0x0C
     Vec* nrm;        // 0x10  face normals
     Vec* edge;       // 0x14  edge normals
+#endif
 };
+
+#ifdef TARGET_PC
+// The vendor's call sites build an AtPolyData by reinterpret-casting a cSat*/local cSat (its
+// vtx/norm_p/edge_p sit at the same fixed offsets as AtPolyData::vtx/nrm/edge on the GC's 32-bit
+// layout, docs/port-phase3.md). That offset assumption breaks on this 64-bit host -- cSat has an
+// 8-byte vtable pointer and 8-byte pointer members where the GC build has 4-byte ones, so the
+// fixed `pad_0[0xC]` lands on the wrong bytes (found live: `(AtPolyData*) pAt`'s ->vtx read as
+// null while pAt->vtx itself was a valid pointer, docs/port-phase3.md). Build the value instead of
+// aliasing memory -- every caller passes it as `&MakeAtPolyData(...)` bound to a local, since a
+// function's return value can't have its address taken directly.
+inline AtPolyData MakeAtPolyData(SatVec* vtx, SatVec* nrm, SatVec* edge)
+{
+    AtPolyData d;
+    d.vtx = vtx;
+    d.nrm = nrm;
+    d.edge = edge;
+    return d;
+}
+#endif
 
 // Check flags of the At_poly_*_ck / hitCheck `flag` word (PS2 SAT_TYPE): which atari sets to test and, in
 // SAT_TYPE_MIDDLE..SAT_TYPE_SEE, which *_NOHIT attribute bits exclude a polygon.
@@ -116,7 +158,22 @@ enum EAT_ATTR {
 };
 
 // One collision triangle (0x14 bytes): three vertex, one normal and three edge indices, attribute.
+// On-disc, big-endian, aliased straight out of the SAT file (same class of bug as cSatFile/
+// cSatBlock in atari.h): every plain field goes through BE<T> under TARGET_PC.
 struct AtPoly {
+#ifdef TARGET_PC
+    re4_port::BE<u16> v[3];        // 0x00
+    re4_port::BE<u16> n;           // 0x06
+    re4_port::BE<u16> e[3];        // 0x08
+    u8 pad_E[2];
+    union {
+        struct {
+            re4_port::BE<u16> attrHi;  // 0x10  attribute word high half
+            re4_port::BE<u16> attrLo;  // 0x12
+        };
+        re4_port::BE<u32> attr;        // 0x10  the attribute word (SAT_ATTR / EAT_ATTR; atari createSat)
+    };
+#else
     u16 v[3];        // 0x00
     u16 n;           // 0x06
     u16 e[3];        // 0x08
@@ -128,6 +185,7 @@ struct AtPoly {
         };
         u32 attr;        // 0x10  the attribute word (SAT_ATTR / EAT_ATTR; atari createSat)
     };
+#endif
 };
 
 extern "C" {
