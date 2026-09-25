@@ -75,6 +75,26 @@ OSThread* g_holder = nullptr; // whose "turn" it is; see the file header design 
 std::unordered_map<OSThreadQueue*, OSThread*> g_sleepers;
 std::unordered_map<OSThread*, bool> g_wakeFlag;
 
+// A real, confirmed missed-wakeup race (found live, this session, via a diagnostic print --
+// `OSWakeupThread` observed with `target==nullptr`, immediately preceding the game hanging
+// forever): `scheduler.cpp`'s own `TaskSleep()` is real vendor code whose call order is
+// `OSResumeThread(pParentThread)` (hands control back to the scheduler thread) *then*
+// `OSSleepThread(&pCTask->Queue)` (registers this task as asleep) -- correct and atomic on the
+// real single-core target, where nothing else can run in between, but on this host the scheduler
+// thread is a genuine separate OS thread that can regain control, race ahead to a *later*
+// `TaskSchedulerMain()` pass over this same task's slot, decrement its `SleepCtr` to 0 and call
+// `OSWakeupThread()` on this queue, all before the sleeping task's own thread has actually reached
+// its `OSSleepThread()` call and registered itself -- an `OSWakeupThread()` with nothing yet
+// registered used to just do nothing, permanently losing that wakeup (the task then registers
+// itself moments later and blocks forever, since nothing will ever call `OSWakeupThread()` on
+// this queue again). Fixed below like a binary semaphore per queue: an `OSWakeupThread()` that
+// finds no registered sleeper leaves a "pending" mark instead of dropping it, and `OSSleepThread()`
+// consumes (and clears) a pending mark instead of blocking, if one is already there by the time it
+// registers -- correct regardless of which side reaches its half of the rendezvous first, matching
+// the real hardware's actual guarantee (a `TaskSleep()`'d task always resumes on its intended
+// wakeup) without needing the call order in the byte-identical `scheduler.cpp` to change at all.
+std::unordered_map<OSThreadQueue*, bool> g_pendingWake;
+
 thread_local OSThread* t_self = nullptr;
 
 OSThread g_mainThread{}; // storage for the main game thread's OSThread identity (never read back
@@ -272,9 +292,22 @@ void OSSleepThread(OSThreadQueue* queue)
     OSThread* self = re4_port::t_self;
     {
         std::lock_guard<std::mutex> lk(re4_port::g_mutex);
-        re4_port::g_sleepers[queue] = self;
-        re4_port::g_wakeFlag[self] = false;
+        auto pending = re4_port::g_pendingWake.find(queue);
+        if (pending != re4_port::g_pendingWake.end() && pending->second) {
+            // The wakeup for this sleep already arrived before we got here -- see
+            // g_pendingWake's own comment. Apply exactly the same side effects
+            // OSWakeupThread() itself would have applied (had it found us already registered)
+            // instead of registering and blocking: consume the mark, mark ourselves woken, take
+            // the token.
+            re4_port::g_pendingWake.erase(pending);
+            re4_port::g_wakeFlag[self] = true;
+            re4_port::g_holder = self;
+        } else {
+            re4_port::g_sleepers[queue] = self;
+            re4_port::g_wakeFlag[self] = false;
+        }
     }
+    re4_port::g_cv.notify_all();
     {
         std::unique_lock<std::mutex> lk(re4_port::g_mutex);
         re4_port::g_cv.wait(lk, [&] { return re4_port::g_wakeFlag[self]; });
@@ -294,11 +327,16 @@ void OSWakeupThread(OSThreadQueue* queue)
             re4_port::g_sleepers.erase(it);
             re4_port::g_wakeFlag[target] = true;
             re4_port::g_holder = target;
+        } else {
+            // Nobody is registered as asleep on this queue yet -- the real hardware equivalent of
+            // this call happening before the target task reached its own OSSleepThread() (see
+            // g_pendingWake's own comment). Leave a mark instead of silently dropping this
+            // wakeup: whichever thread's OSSleepThread() call comes next for this same queue
+            // consumes it instead of blocking.
+            re4_port::g_pendingWake[queue] = true;
         }
     }
-    if (target != nullptr) {
-        re4_port::g_cv.notify_all();
-    }
+    re4_port::g_cv.notify_all();
 }
 
 void OSExitThread(void* val)
