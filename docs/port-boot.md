@@ -2089,3 +2089,143 @@ new to check there yet.
   touches outside `src/port`/`include/port`, remote-verified: see below)
 - `5b6e37bf` -- missed-wakeup race fix (`src/port/os_thread.cpp`, port-only, no remote round trip
   needed)
+
+## 34. The scheduler rewritten on fibers (coordinator decision), replacing the thread+token
+    emulation outright -- section 33's second race is gone by construction (2026-09-25)
+
+Coordinator-directed: section 33 left one scheduler race root-caused but not fixed (two real host
+threads briefly both touching `scheduler.cpp`'s shared `pCTask`), on top of one already fixed the
+same pass (a missed-wakeup). Rather than keep patching the real-std::thread-plus-"turn token"
+design race by race, the coordinator's decision was to replace the mechanism itself: every OSThread
+(the game's per-task identity, `TASK::Thread`, and the "main"/driving identity) is now backed by a
+**fiber** -- a saved CPU context with its own stack, switched with `swapcontext()`, never a real OS
+thread -- and every one of those fibers runs on the SAME single real host thread. "Exactly one
+task's code is ever executing" -- the invariant the whole scheduler design depends on, and the one
+the token model had to maintain by hand and failed to in at least one place -- now holds because
+there is only one real call stack of native instructions running at all, not because some lock or
+condvar protocol says so.
+
+### Mechanism chosen: POSIX ucontext, not a hand-written arm64 context switch
+
+Tried live before committing to it: a ~40-line standalone test (`getcontext`/`makecontext`/
+`swapcontext`, six round trips between a "main" context and a fiber touching float locals) compiled
+and ran correctly on this host (Darwin 25.6, arm64, Apple clang) once `_XOPEN_SOURCE` is defined
+(macOS's `<ucontext.h>` otherwise `#error`s on its own deprecated-routines guard). The three
+functions are marked "deprecated ... No longer supported" in this SDK, but are still present, still
+exported, and still behave correctly for exactly this use (full general-purpose context save/
+restore, not signal delivery, which is what that deprecation note is actually about). Chose this
+over a hand-written arm64 context switch (save/restore x19-x28, sp, lr/fp, the callee-saved halves
+of d8-d15 -- maybe 30-40 lines of `.s`/inline asm) because it is already correct, already
+cross-checked against real hardware ABI behavior by the OS itself, and this is not a hot loop (a
+handful of switches per frame, not per instruction) -- revisit only if profiling ever shows it
+matters. `src/port/fiber.cpp`/`include/port/fiber.h` is the whole primitive: `FiberCreate`,
+`FiberSwitchTo`, `FiberCurrent`, `FiberFromCurrentContext` (wraps the calling thread's own already-
+running context as fiber #0). `tests/port/test_fiber.cpp` proves it two ways: a 5-round-trip
+ping-pong, and a 10000-switch stress test carrying live NEON (`float32x4_t`) state across every
+switch, checked back on the other side each time -- both pass.
+
+### The scheduler itself: modeled directly on the real Nintendo SDK source already in this tree
+
+`src/lib/OSThread.c` (already decompiled, byte-matching, real) turned out to be the exact algorithm
+needed -- `SetRun`/`UnsetRun`/`SelectThread`'s priority run-queues (`RunQueue[32]`, lower number =
+higher priority) and its one load-bearing rule (`SelectThread`'s `if (currentThread->priority <=
+priority) return NULL;`: a thread only ever preempts the one currently running if its priority is
+**strictly** better -- a tie or a worse-priority thread becoming ready never switches away). Reading
+that file end to end is what explains *why* `scheduler.cpp`'s own call order (`TaskSleep`'s
+`OSResumeThread(pParentThread)` **then** `OSSleepThread(&pCTask->Queue)`) was always safe on real
+hardware without needing to change: the real SDK's `DefaultThread` (the main-thread identity) is
+created at priority `0x10` (16), and every task this game ever creates runs at `0xF` (15) or
+better -- so a task resuming its parent (worse priority) never preempts, and keeps running its own
+next line, while the parent resuming a task (better priority) always does. `src/port/os_thread.cpp`
+is a new, from-scratch, fiber-based implementation of that same algorithm (not a recompiled copy of
+`OSThread.c` -- its own `OSSaveContext`/`OSLoadContext`/`__OSSwitchThread` are raw PPC register-bank
+primitives with no arm64 equivalent, and its returns-twice save/restore trick is exactly what
+`FiberSwitchTo` makes unnecessary), with every function commented against the real one it mirrors.
+`OSInitSemaphore`/`OSWaitSemaphore`/`OSSignalSemaphore`/`OSTryWaitSemaphore`/`OSGetSemaphoreCount`
+are modeled the same deliberate way on the real, already-decompiled `src/lib/OSSemaphore.c`.
+
+Not implemented this pass, on purpose, not silently: `OSInitMutex`/`OSLockMutex`/`OSUnlockMutex`,
+`OSInitMessageQueue`/`OSSendMessage`/`OSReceiveMessage`/`OSJamMessage`. Grepped the whole tree: no
+game code calls any of them today (only `src/lib/OSMutex.c`, the real SDK source, does). They stay
+on the generic logging-only stub path rather than getting an unexercised, unverified
+fiber-scheduler-based implementation now -- if a future unit needs one, model it on `src/lib/
+OSMutex.c` the same way the semaphore functions above are modeled on `OSSemaphore.c`.
+
+### A real regression this rewrite would otherwise have introduced, found and fixed at its own
+    true location
+
+`src/game/main.cpp`'s real, byte-matching `postVSyncCallback()` calls `iTaskSuspend()` ->
+`OSSuspendThread()`, registered as a VI retrace callback. `include/port/vi.h`'s own design (Phase 4)
+runs that callback on the host **process's real main thread** (Aurora's present loop) -- a
+genuinely different real OS thread than the one every fiber now lives on. Left alone, that would
+have meant a real, unsynchronized OS thread calling into this file's now-lock-free run-queue
+bookkeeping while a fiber was mid-reschedule: a new, worse bug than anything this rewrite set out to
+fix (the old token design at least funneled every mutation through one mutex; this design has
+*no* lock anywhere, by design, because nothing was supposed to call it except the one thread every
+fiber lives on). Fixed at the actual point of the layering violation, not by adding a lock to
+`os_thread.cpp`: `src/port/vi.cpp` (port-only, no byte-matching constraint) no longer calls a
+registered VI callback directly from `RunPresentLoop()`; it queues it (the only lock in this whole
+area, and it never touches `os_thread.cpp`'s state) and `VIWaitForRetrace()` -- called by the game
+thread once per frame, `src/game/main.cpp`'s own unchanged real call sites -- drains and runs it
+there instead, right after the same real tick it was queued for. This is the general "interrupt-
+context callback must not run concurrently with a fiber" mechanism the coordinator asked for, scoped
+to the one real call site that exists today; DVD/ARQ/AI completion callbacks were checked and do not
+call into `os_thread.cpp` at all in this tree (confirmed by grep, not assumed), so nothing else
+needed this treatment this pass.
+
+### Tests (`tests/port/test_fiber.cpp`, `tests/port/test_os_thread.cpp`) and results
+
+`test_fiber`: ping-pong (5 round trips) and the 10000-switch NEON stress test above -- both OK.
+`test_os_thread`, built on the real `OSCreateThread`/`OSResumeThread`/`OSWakeupThread`/
+`OSSleepThread`/`OSExitThread`/`OSSemaphore` API, not a mock of it:
+  - the exact section-33 shape (`OSResumeThread(parent)` then `OSSleepThread(&queue)`, repeated 5
+    dispatch rounds via `OSCreateThread`+`OSResumeThread` then `OSWakeupThread`) -- OK, matches
+    `TaskSchedulerMain`'s own TASK_EXEC/TASK_SLEEP call shapes exactly.
+  - priority ordering: three threads at priorities 2/6/10, only the worst (10) ever resumed
+    directly by main -- it resumes the other two itself mid-body; the only way their recorded
+    execution order can come out priority-sorted (2, then 6, then 10) is if strict-priority
+    preemption is really implemented, not simulated by call order -- OK.
+  - semaphore blocking + a priority-driven interleaving (the waiter is better priority than the
+    signaller, so `OSSignalSemaphore` must switch to it **mid-call**, not after the signaller
+    finishes) -- OK.
+
+All pre-existing `ctest`s (`test_ptr32`, `test_arena`, `test_be`) still pass unchanged.
+
+### `re4_boot`, before vs. after
+
+Before (section 33, `5b6e37bf` state): hard deadlock, confirmed via `lldb` -- every task thread
+parked on its own condvar, the driving thread parked forever in `WaitForHandback()`, nothing left to
+ever wake it; the vendor's own 60-second hang watchdog (`haltExecCheck()`) was the only thing that
+ever ended the process.
+
+After this rewrite: the deadlock is gone. The boot sequence now runs past every point sections 24-33
+got stuck at -- `etc/moji8.tpl`, `etc/sizetbl.dat`, `Font/common_p.fnt`, `debug/config.txt`,
+`debug/roomInfo.dat` all read successfully, then `Render()`/`SetPrimBuffPtr()`/
+`GXSetCurrentGXThread()` run, real GX FIFO register writes reach Aurora (`[aurora::gx::fifo]
+Unhandled XF/BP register ...` -- expected: GX register handling is a separate, later milestone, not
+this pass's concern), and the process then runs **continuously at ~100% CPU** (confirmed with `ps`,
+twice, a `pcpu` reading taken 5 real seconds apart both showing ~100%, `STAT` `RN` -- genuinely
+running, not blocked) for over 30 real seconds with no further log growth and no crash -- i.e. it is
+in a real, steady per-frame loop, not stuck. This is new progress: it did not reach this point (or
+this stable a state) in any prior session. `title.dat` (the title screen's own texture archive) is
+not reached yet in the log -- the next milestone past this pass's own stopping point.
+
+### Screenshot, honestly described
+
+`boot_fiber_3.png` (scratchpad dir), captured while the process is confirmed running at ~100% CPU,
+several seconds in: near-black window, a thin dark-blue vertical bar pair near the left edge, one
+small pale-purple rectangle near the top-right -- the same debug-overlay content sections 29/31/33
+already described, not a title screen and not new geometry. Expected: this pass's fix is a
+scheduler-correctness fix, not a rendering one, and the log confirms `title.dat` (the archive with
+the title's actual textures) has not been reached yet.
+
+### Commits this pass
+
+- fiber primitive + os_thread.cpp rewrite (`include/port/fiber.h`, `src/port/fiber.cpp`,
+  `include/port/os_thread.h`, `src/port/os_thread.cpp`, `src/port/stubs/generated_c_stubs.cpp`,
+  port-only, no remote round trip needed)
+- `src/game/scheduler.cpp`: removed the three now-unneeded `WaitForHandback()` TARGET_PC blocks and
+  the `os_thread.h` include -- touches outside `src/port`/`include/port`, remote-verified (see PR)
+- `src/port/vi.cpp`: deferred VI retrace callback execution onto the game thread (port-only)
+- `CMakeLists.txt`, `tests/port/test_fiber.cpp`, `tests/port/test_os_thread.cpp`: build wiring + new
+  tests (port-only)
