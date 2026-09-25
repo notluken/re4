@@ -3,10 +3,11 @@
 
 #include "types.h"
 #include "gx.h"
+#include "port/format_attr.h"
 
 // Dolphin OS/VI entry points used by game code (the SDK headers are CodeWarrior-only).
 extern "C" {
-void OSPanic(const char* file, int line, const char* msg, ...);
+void OSPanic(const char* file, int line, const char* msg, ...) RE4_FORMAT_PRINTF(3, 4);
 u32 OSGetProgressiveMode();
 void OSSetProgressiveMode(u32 on);
 u32 VIGetTvFormat();

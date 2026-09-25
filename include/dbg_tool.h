@@ -7,6 +7,7 @@
 #include "global.h"
 #include "eprintf.h"
 #include "main_mem.h"
+#include "port/format_attr.h"
 
 // Debug-tool editor templates (the second half of D:/Bio4/Prog/db_toolbase.h, from the cDbgWindow
 // classes on: the HALT() checks below carry that file name and its line numbers). Used by Tools'
@@ -19,8 +20,8 @@
 
 #include "file.h"
 
-extern "C" int sprintf(char* s, const char* fmt, ...);
-extern "C" void OSReport(const char* fmt, ...);
+extern "C" int sprintf(char* s, const char* fmt, ...) RE4_FORMAT_PRINTF(2, 3);
+extern "C" void OSReport(const char* fmt, ...) RE4_FORMAT_PRINTF(1, 2);
 
 // HALT() as the original header spells it (a plain block, see docs/matching.md)
 #define DBG_TOOL_HALT()                                    \

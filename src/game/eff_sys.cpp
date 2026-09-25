@@ -612,7 +612,7 @@ int espTexRegist(TEXPalette* tpl, EspAnmData* anm, u8 id, u32 owner)
         return 0;
     }
     if (anm->Frames != tpl->numDescriptors) {
-        pLog->err(0, 0, "ESP : ID[%02x] TEX/ANM ptn num diff[%d / %d]", id, tpl->numDescriptors, anm->Frames);
+        pLog->err(0, 0, "ESP : ID[%02x] TEX/ANM ptn num diff[%d / %d]", id, (u32) tpl->numDescriptors, anm->Frames); // (u32) cast: BE<u32> under TARGET_PC, varargs drop its conversion operator; no-op on the original target where the field is plain u32 (bytes unchanged)
         return 0;
     }
     EspCalcTplAddr(tpl);

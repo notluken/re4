@@ -120,6 +120,7 @@ set(RE4_GAME_OPTIONS
   -Wno-narrowing
   -Wno-address-of-temporary
   -mllvm -global-isel=false
+  -Wformat
 )
 
 # --- re4_game_core: a small representative slice of src/game (Phase 1 goal: compiles, not links) ---

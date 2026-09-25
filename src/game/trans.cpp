@@ -1152,7 +1152,7 @@ void commonModelTrans(cModel* m, cModelInfo* info, Mtx viewMat, int flag)
             return;
         }
         if (d->nTex > 0xF7) {
-            pLog->err(0, 0, "commonModelTrans() TEXOBJ OVERFLOW %d", d->nTex);
+            pLog->err(0, 0, "commonModelTrans() TEXOBJ OVERFLOW %d", (u32) d->nTex); // (u32) cast: BE<u32> under TARGET_PC, varargs drop its conversion operator; no-op on the original target (bytes unchanged)
             return;
         }
         Mtx inv;

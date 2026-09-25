@@ -15,8 +15,9 @@
 #include "player.h"
 #include "global.h"
 #include "db_log.h"
+#include "port/format_attr.h"
 
-extern "C" void OSReport(const char* fmt, ...);
+extern "C" void OSReport(const char* fmt, ...) RE4_FORMAT_PRINTF(1, 2);
 
 extern void (*ObjInitFunc[0x40])(cObj*);   // game/obj.cpp: per-id constructor table (cObjMgr::construct)
 extern void (*WeaponMoveFunc)(cPlayer*);   // game/player.cpp: the equipped weapon's per-frame routine

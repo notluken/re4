@@ -3,12 +3,13 @@
 
 #include "types.h"
 #include "room_data.h"
+#include "port/format_attr.h"
 
 // Room save flags (the original flag_rsf.h): bit `no` of the word after the room save record's
 // header. Every unit that includes it carries the "HALT %s(%d)\n" / "D:/Bio4/Prog/flag_rsf.h"
 // strings of the range checks (objRobo, sce_com, sce_at, every stage room); the rooms pass
 // constant flag numbers, so the checks fold away (sce_at.cpp has the same bodies inline).
-extern "C" void OSReport(const char* fmt, ...);
+extern "C" void OSReport(const char* fmt, ...) RE4_FORMAT_PRINTF(1, 2);
 
 static inline u32* RsfFlags(u16 room)
 {

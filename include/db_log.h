@@ -3,6 +3,7 @@
 
 #include "types.h"
 #include "va_ppc.h"
+#include "port/format_attr.h"
 
 // One debug log line (0x4C bytes).
 struct cLogWork {
@@ -38,9 +39,9 @@ public:
     cLogWork m_Mes[100];   // 0x10
 
     void init();
-    void mes(int a, int b, const char* fmt, ...);
-    void err(int a, int b, const char* fmt, ...);
-    void warn(int a, int b, const char* fmt, ...);
+    void mes(int a, int b, const char* fmt, ...) RE4_FORMAT_PRINTF(4, 5);
+    void err(int a, int b, const char* fmt, ...) RE4_FORMAT_PRINTF(4, 5);
+    void warn(int a, int b, const char* fmt, ...) RE4_FORMAT_PRINTF(4, 5);
     void vmes(int flag, int col, const char* mes, va_list argptr);
     void verr(int flag, int errId, const char* mes, va_list argptr);
     void vwarn(int flag, int errId, const char* mes, va_list argptr);
@@ -73,7 +74,7 @@ void LogInit();
 // Debug break with source location (used by the header-inline range checks).
 extern void dbgAssert(const char* file, int line);
 
-extern "C" void OSReport(const char* fmt, ...);
+extern "C" void OSReport(const char* fmt, ...) RE4_FORMAT_PRINTF(1, 2);
 
 // Report the source location and stop (a write to an unmapped address). A plain block, not
 // do/while(0): the loop notes of a do/while are a scheduling barrier (main_sub.cpp). The units keep

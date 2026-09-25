@@ -328,12 +328,16 @@ void roomJumpMove(test* w)
     eprintf(0xD8, 0x38, 0, 0, "STAGE = %d", w->stage);
     eprintf(0xD8, 0x46, 0, 0, "ROOM  = %02x", info->room);
     eprintf(0xD8, 0x54, 0, 0, "POINT = %d", w->point);
-    eprintf(0xD8, 0x2A, 4, 0, "%s", info->name);
+    // (const char*) matters only under TARGET_PC: info->name/person/person2 are re4_port::Ptr32<char>
+    // there (room_jmp.h); C's `...` never calls a class's conversion operator, so an uncast Ptr32<char>
+    // would pass its raw handle bytes instead of a real pointer (title.cpp has the same fix, bytes
+    // unchanged on the original target where these fields are already char*).
+    eprintf(0xD8, 0x2A, 4, 0, "%s", (const char*) info->name);
     if (info->person2[0] != 0) {
-        eprintf(0xD8, 0x1C, 0, 0, "     SOFT(%s)", info->person2);
+        eprintf(0xD8, 0x1C, 0, 0, "     SOFT(%s)", (const char*) info->person2);
     }
     if (info->person[0] != 0) {
-        eprintf(0xD8, 0xE, 0, 0, "     SCR(%s)", info->person);
+        eprintf(0xD8, 0xE, 0, 0, "     SCR(%s)", (const char*) info->person);
     }
     eprintf(0xD0, (w->mode + 4) * 0xE, 0, 0, ">");
     if (joy->trg & 0x100) {
