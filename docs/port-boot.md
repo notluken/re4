@@ -2319,3 +2319,73 @@ no glyph shapes.
 - `c11c270b` -- Aurora patch: null-check `CARDProbeEx`'s output pointers (`tools/port/`, not
   `src/`/`include/`, no remote round trip needed by the stated rule, but the fix is entirely in the
   vendored-but-patched Aurora tree, not this repo's own game/port code)
+
+## 36. `CoreDataRead()`/`OptionDataRead()` audit: real code brought in, not restubbed; new,
+    deeper blocker found past it (2026-09-25)
+
+Coordinator-directed follow-up on section 35's diagnosis: `CoreDataRead()` and its neighbours are
+real GAME functions (`src/game/read.cpp`), excluded from `re4_boot` only because
+`cmake/boot_exclude.txt` (pointer<->integer-cast category) listed `read.cpp` as "not yet
+hand-fixed" -- stale. Un-excluding it and rebuilding showed the `RE4_REWRITE_CASTS` cast rewriter
+(implied by `RE4_U32_32=ON`, docs/port-phase2.md section 8) already turns every one of its direct
+casts into `GC32()`/`GCPTR<T>()` correctly; the file compiles clean, no hand-fixing needed after
+all. Un-excluding it pulls in real definitions for `CoreDataRead`, `OptionDataRead`,
+`EmReadInit`/`EmReadSearch`/`EmReadModule`/`SearchEmModule`, `PlReadModule`,
+`WepReadModule`/`ReleaseWepData`, `ReleasePlData`, `GetDataExt` -- the entire "OptionDataRead and
+anything similar" family the task asked about, all now real rather than logging stubs. The
+matching duplicate-symbol stubs were removed from `src/port/stubs/generated_c_stubs.cpp`/
+`generated_cpp_stubs.cpp` (left as one-line "now defined for real" pointers to read.cpp, following
+the file's own existing convention for this exact situation, e.g. `Rmode`/`ScreenShotTriggerType`
+in section 26).
+
+**Two other units were tried the same way and are genuinely not ready, not just stale entries**:
+`game.cpp` (the `GAME_WORK Game;` global read.cpp needs) still has real, uninvestigated errors
+under `RE4_U32_32` (an `mem_alloc(size, __FILE__, __LINE__, a, b)` call whose `size`/`a`/`b`
+parameter names don't exist in that scope -- looks like a macro-expansion/parameter-shadowing bug
+in the source itself or the rewriter, not confirmed which -- plus real pointer-truncation errors
+unrelated to this bug); `trans.cpp` (owns `SpecularInit`/`GlobalIlmTexInit`, the two functions
+`CoreDataRead()` calls) still has real paired-single asm (`PSQ_L_U8_TO`) elsewhere in the same
+file, confirming the existing Phase 5 categorization, not stale. Both stay excluded, unchanged.
+
+**Fix chosen**: rather than re-add a `CoreDataRead()`-shaped stub (which would have silently
+regressed the DVD read this pass's real fix delivers), three small, explicitly-labeled manual
+stubs were added instead, each documented with why it can't be the real thing yet:
+`src/port/stubs/manual_stubs.cpp` now defines `Game` (a plain global, `GameWork`, exactly
+matching `game.cpp`'s real `GAME_WORK` byte layout -- read.cpp already declares its own identical
+view struct for it, so this is not a guess) and logging-only stand-ins for `SpecularInit`/
+`GlobalIlmTexInit` (real bodies are plain C++, but live in the Phase-5-blocked `trans.cpp` TU).
+
+**Verified**: `re4_boot` links and runs; the DVD log now shows a real, successful read of
+`etc/core.das` (the core archive `CoreDataRead()` was always supposed to load,
+`addr=80578000 size=00230740`) immediately followed by `STUB: SpecularInit()`/
+`STUB: GlobalIlmTexInit()` -- confirming the real read path now runs end to end, only the texture
+binding at its tail is still a stub. Default host build (`RE4_U32_32=OFF`, `build-pc/`) unaffected:
+`re4_game_all -k 0` still 33 failing files (same set), `ctest` 5/5. No `src/game`/`include` file
+was touched this pass (only `cmake/boot_exclude.txt` and `src/port/stubs/*.cpp`), so no remote
+round trip is needed by the stated rule.
+
+**New, deeper blocker past this fix (not resolved this pass, budget)**: `re4_boot` now crashes
+later and differently than section 35 -- `EXC_BAD_ACCESS` at address `0x8`, still in
+`MessageData::getAddr()` (`mes.cpp`), still reached via `cCard::errorDisp() -> cardMesSet() ->
+MessageControl::MesSet() -> Message::init()`, but `CoreDataRead()` has now genuinely run and
+`pG->pCore` is a real, populated pointer -- this is not the same null-table bug section 35 found.
+Read directly: `MesData.ptr[0]` (the "core text" message table, `data_type=0`) is set only by
+`MessageControl::gameInit()` (`mes.cpp`, called from `game.cpp`'s own `gameInit()` -- the "start a
+new game" flow, `Rno0==0`) and `roomInit()` -- never by `MessageControl::init()` (`mes.cpp`,
+docs section 2's "`cMes.init()`", the boot-time call `main.cpp` really makes) or by
+`CoreDataRead()` itself. `cCard::errorDisp()`'s call chain reaches `Message::init()` with
+`attr & 1` set, selecting `data_type=0` -- so on **real hardware**, either (a) this exact
+error-display call path is only ever reached after a game session's `gameInit()`/`roomInit()` has
+already bound `MesData.ptr[0]` (i.e. this port's memory-card probe is running `cCard::MainLoop()`
+too early relative to the real boot sequence -- a sequencing bug in this port, not upstream), or
+(b) there is a fourth call site binding `MesData.ptr[0]` at boot time this pass did not find (a
+`grep -rn "MesData"` across every `src/game/*.cpp` found exactly the four call sites named above
+and no others, but the boot-time one could be reached through `game.cpp` itself, which is not
+compiled into `re4_boot` at all right now -- so if the real fix is "call `cMes.gameInit()`-shaped
+code at boot", it is blocked on the same `game.cpp` exclusion this section already found
+independently blocking). **Not root-caused further this pass** -- next step is tracing, on real
+hardware knowledge or the PS2 source if available, whether `cCard`'s boot-time probe genuinely runs
+before or after the message tables are bound, since that answers whether the fix belongs in
+`main.cpp`'s boot sequence (call something earlier) or confirms `game.cpp` needs to be un-excluded
+next (a real, separate unit of work: the `mem_alloc(size, ..., a, b)` scoping bug above, plus
+`game.cpp`'s own pointer-truncation cast sites, neither trivial).
