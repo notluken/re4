@@ -72,6 +72,17 @@ std::atomic<bool> g_windowReady{false};
 // can never race a not-yet-enqueued draw the way it did here -- no Aurora patch needed, this is
 // purely about which of the port's own two threads may run Aurora entry points at a given moment.
 std::mutex g_gxHostMutex;
+// Set once, by RunPresentLoop() (host main thread), right before it takes g_gxHostMutex to begin
+// tearing Aurora down (see the invariant documented at that call site). Checked by BeginGxFrame()
+// (game thread) AFTER it has acquired g_gxHostMutex -- the mutex hand-off is what makes the flag
+// safe to read without its own synchronization: the store below happens-before the lock() that
+// follows it in program order on this thread, and any thread that later acquires the same mutex
+// (including one that was already blocked waiting for it) is guaranteed to observe every write
+// that happened-before that lock, per the mutex's own acquire/release semantics. So a frame that
+// is already in flight when shutdown starts runs to completion unaffected (it acquired the lock
+// before the flag was ever set); the next one to acquire the lock always sees the flag if shutdown
+// has started, and skips touching Aurora at all instead of racing its teardown.
+std::atomic<bool> g_shuttingDown{false};
 // Held by BeginGxFrame() and released by EndGxFrame() -- these are two separate calls from two
 // separate call sites (src/game/main_sub.cpp's Render_before()/Render_swap()) on the same (game)
 // thread, so the lock has to outlive the function that acquires it; thread_local because only the
@@ -281,6 +292,16 @@ void BeginGxFrame()
     // aurora_initialize() calls), and holding g_gxHostMutex earlier would deadlock against
     // RunPresentLoop()'s own lock around aurora_update() below.
     t_gxHostLock.lock();
+    if (g_shuttingDown.load(std::memory_order_relaxed)) {
+        // RunPresentLoop() has started (or finished) tearing Aurora down -- see g_shuttingDown's own
+        // comment. Never call into Aurora again once that has happened: this is exactly the race that
+        // used to crash the game thread inside aurora_end_frame()/ImGui::Render() with the host main
+        // thread concurrently inside aurora_shutdown() (docs/port-boot.md's New Game crash). The frame
+        // is simply not presented -- correct the same way a real console dropping a field nobody is
+        // watching is (BeginGxFrame()'s own no-session comment below, same policy).
+        t_gxFrameActive = false;
+        return;
+    }
     re4_port::HostAllocScope hostAlloc;
     t_gxFrameActive = aurora_begin_frame();
     if (!t_gxFrameActive) {
@@ -454,7 +475,26 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
         }
     }
 
-    aurora_shutdown();
+    // Invariant: no aurora_* entry point may ever run concurrently with aurora_shutdown() -- the game
+    // thread's BeginGxFrame()/EndGxFrame() span (src/game/main_sub.cpp's Render_before()/Render_swap())
+    // is the only other caller of one, and it serializes against this loop's aurora_update() through
+    // g_gxHostMutex already, but shutdown used to run with no such guard at all: this loop could reach
+    // here and call aurora_shutdown() while the game thread was already inside aurora_end_frame() (a
+    // real, reproduced crash -- host main thread inside aurora::gfx::render_worker::synchronize() from
+    // aurora_shutdown(), game thread inside ImGui::Render() from aurora_end_frame(), null ImGui context
+    // torn down mid-frame; New Game's title->game transition changes render state often enough to make
+    // the timing window easy to hit interactively, but the race exists on any frame boundary, not just
+    // that transition). Fixed with two parts: g_shuttingDown (set here, checked by BeginGxFrame() while
+    // it holds g_gxHostMutex -- see that flag's own comment for why the mutex hand-off makes this safe
+    // without extra synchronization) makes every BeginGxFrame() from this point on a no-op instead of a
+    // real Aurora call; taking g_gxHostMutex here, AFTER setting the flag, blocks until any frame that
+    // was already genuinely in flight (started before the flag existed) finishes its own EndGxFrame()
+    // and releases the lock, so aurora_shutdown() below never overlaps a real aurora_end_frame() call.
+    g_shuttingDown.store(true, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> gxHostLock(g_gxHostMutex);
+        aurora_shutdown();
+    }
 }
 
 } // namespace re4_port
