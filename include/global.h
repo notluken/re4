@@ -7,48 +7,56 @@
 
 #ifdef TARGET_PC
 #include <cstddef> // PG_OFS's TARGET_PC branch below (offsetof), no meaning for the original target
+#include "port/be.h"
+#endif
+
+#ifdef TARGET_PC
+#define G_BE_U32 re4_port::BE<u32>
+#else
+#define G_BE_U32 u32
 #endif
 
 // Archive header at pG->pCore: a table of file offsets to the sub-files. Only the entries that
-// matched units use are named.
+// matched units use are named. On-disc, big-endian (Phase 3, docs/port-phase3.md) -- every ofs_NN
+// field is BE<u32> under TARGET_PC.
 struct ArcFile {
     u8 pad_0[0x10];
-    u32 ofs_10;   // 0x10  specular data (read: CoreDataRead -> SpecularInit)
-    u32 ofs_14;   // 0x14  core effect data (eff_sys: EspDataLoad owner 0)
-    u32 ofs_18;   // 0x18  room texture data (room_tex)
-    u32 ofs_1C;   // 0x1C  vibration pattern table (pl_dmg: VibSetData)
-    u32 ofs_20;   // 0x20  obstacle model bin (obj20 SetObaModel)
-    u32 ofs_24;   // 0x24  obstacle model tpl
-    u32 ofs_28;   // 0x28  message tables (mes: MesData.ptr[0..2])
-    u32 ofs_2C;   // 0x2C  core light data (game: cLightMgr::roomInit core cLit)
-    u32 ofs_30;   // 0x30  core camera data (game: CameraControl::CoreDataRead)
-    u32 ofs_34;   // 0x34
-    u32 ofs_38;   // 0x38
-    u32 ofs_3C;   // 0x3C  light path data (game: cLightMgr::initPath)
-    u32 ofs_40;   // 0x40  global illumination texture (read: CoreDataRead -> GlobalIlmTexInit)
-    u32 ofs_44;   // 0x44  specular data 2..4 (SpecularInit)
-    u32 ofs_48;   // 0x48
-    u32 ofs_4C;   // 0x4C
-    u32 ofs_50;   // 0x50  debug effect data (eff_sys: EspDataLoad owner 0xD1)
-    u32 ofs_54;   // 0x54  message table type 3 (mes: MesData.ptr[3])
-    u32 ofs_58;   // 0x58  item examine light cuts 0..4 (examine ItemExamine::init)
-    u32 ofs_5C;   // 0x5C
-    u32 ofs_60;   // 0x60
-    u32 ofs_64;   // 0x64
-    u32 ofs_68;   // 0x68
-    u32 ofs_6C;   // 0x6C  system message table (dvd: MesData.ptr[4])
-    u32 ofs_70;   // 0x70  TV-mode message table (tv_mode)
-    u32 ofs_74;   // 0x74  HUD id textures (cockpit: IdTexDataLoad(.., 4))
-    u32 ofs_78;   // 0x78
-    u32 ofs_7C;   // 0x7C  life meter id data (cockpit, type 0x21)
-    u32 ofs_80;   // 0x80  action button id data (cockpit, type 0x20)
-    u32 ofs_84;   // 0x84  count-down id data (cockpit, type 0x23)
-    u32 ofs_88;   // 0x88  HUD id data type 0x30 (cockpit)
-    u32 ofs_8C;   // 0x8C
-    u32 ofs_90;   // 0x90
-    u32 ofs_94;   // 0x94  message window id data (cockpit, type 0x2F)
-    u32 ofs_98;   // 0x98  bullet icon id data (cockpit, type 0x32)
-    u32 ofs_9C;   // 0x9C  sub-mission widget id data (stage)
+    G_BE_U32 ofs_10;   // 0x10  specular data (read: CoreDataRead -> SpecularInit)
+    G_BE_U32 ofs_14;   // 0x14  core effect data (eff_sys: EspDataLoad owner 0)
+    G_BE_U32 ofs_18;   // 0x18  room texture data (room_tex)
+    G_BE_U32 ofs_1C;   // 0x1C  vibration pattern table (pl_dmg: VibSetData)
+    G_BE_U32 ofs_20;   // 0x20  obstacle model bin (obj20 SetObaModel)
+    G_BE_U32 ofs_24;   // 0x24  obstacle model tpl
+    G_BE_U32 ofs_28;   // 0x28  message tables (mes: MesData.ptr[0..2])
+    G_BE_U32 ofs_2C;   // 0x2C  core light data (game: cLightMgr::roomInit core cLit)
+    G_BE_U32 ofs_30;   // 0x30  core camera data (game: CameraControl::CoreDataRead)
+    G_BE_U32 ofs_34;   // 0x34
+    G_BE_U32 ofs_38;   // 0x38
+    G_BE_U32 ofs_3C;   // 0x3C  light path data (game: cLightMgr::initPath)
+    G_BE_U32 ofs_40;   // 0x40  global illumination texture (read: CoreDataRead -> GlobalIlmTexInit)
+    G_BE_U32 ofs_44;   // 0x44  specular data 2..4 (SpecularInit)
+    G_BE_U32 ofs_48;   // 0x48
+    G_BE_U32 ofs_4C;   // 0x4C
+    G_BE_U32 ofs_50;   // 0x50  debug effect data (eff_sys: EspDataLoad owner 0xD1)
+    G_BE_U32 ofs_54;   // 0x54  message table type 3 (mes: MesData.ptr[3])
+    G_BE_U32 ofs_58;   // 0x58  item examine light cuts 0..4 (examine ItemExamine::init)
+    G_BE_U32 ofs_5C;   // 0x5C
+    G_BE_U32 ofs_60;   // 0x60
+    G_BE_U32 ofs_64;   // 0x64
+    G_BE_U32 ofs_68;   // 0x68
+    G_BE_U32 ofs_6C;   // 0x6C  system message table (dvd: MesData.ptr[4])
+    G_BE_U32 ofs_70;   // 0x70  TV-mode message table (tv_mode)
+    G_BE_U32 ofs_74;   // 0x74  HUD id textures (cockpit: IdTexDataLoad(.., 4))
+    G_BE_U32 ofs_78;   // 0x78
+    G_BE_U32 ofs_7C;   // 0x7C  life meter id data (cockpit, type 0x21)
+    G_BE_U32 ofs_80;   // 0x80  action button id data (cockpit, type 0x20)
+    G_BE_U32 ofs_84;   // 0x84  count-down id data (cockpit, type 0x23)
+    G_BE_U32 ofs_88;   // 0x88  HUD id data type 0x30 (cockpit)
+    G_BE_U32 ofs_8C;   // 0x8C
+    G_BE_U32 ofs_90;   // 0x90
+    G_BE_U32 ofs_94;   // 0x94  message window id data (cockpit, type 0x2F)
+    G_BE_U32 ofs_98;   // 0x98  bullet icon id data (cockpit, type 0x32)
+    G_BE_U32 ofs_9C;   // 0x9C  sub-mission widget id data (stage)
 };
 // Sub-file `field` (an ofs_NN member) of the current archive.
 // pG->pCore is a live, already-loaded host buffer (never an on-disc/relocated field itself), and
@@ -63,8 +71,9 @@ struct ArcFile {
 
 // Player archive at pG->pPlArc: a table of byte offsets to the player's sub-files (models, textures,
 // motions, faces...). The pl_* units index it directly; the pointer is `ofs + (u32) arc`.
+// On-disc, big-endian (Phase 3, docs/port-phase3.md) -- BE<u32> under TARGET_PC.
 struct PlArc {
-    u32 ofs[0x100];   // pl_knife indexes up to 0x87
+    G_BE_U32 ofs[0x100];   // pl_knife indexes up to 0x87
 };
 // Same reasoning as ARC_PTR: `arc` is always a live host buffer, `ofs[no]` a plain offset into it.
 #ifdef TARGET_PC
@@ -82,9 +91,11 @@ struct PlArc {
 #define NO_MOT(pl, idx) ((pl)->m_MotTbl[idx] = (void*) 0)
 
 // Room archive at pG->pRoomArc: offsets to its sub-files (GetDataExt finds them by tag; ctrl14 indexes it).
+// On-disc, big-endian (Phase 3, docs/port-phase3.md) -- BE<u32> under TARGET_PC.
 struct RoomArc {
-    u32 ofs[0x10];
+    G_BE_U32 ofs[0x10];
 };
+#undef G_BE_U32
 // Same reasoning as ARC_PTR/PL_ARC_PTR.
 #ifdef TARGET_PC
 #define ROOM_ARC_PTR(arc, no) ((void*) ((u8*) (arc) + ((RoomArc*) (arc))->ofs[no]))
