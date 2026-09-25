@@ -6,9 +6,34 @@
 #include "hermite.h"
 #ifdef TARGET_PC
 #include "port/be.h"
+#include "port/ptr32.h"
+
+// On-disc vector (id table `pos`/`vtx[4]`/`rot` fields, IdData/IdData2 below): big-endian f32
+// triplet, same reasoning as every other BE<T> field in this port (docs/port-phase3.md). Distinct
+// from the shared, host-native `Vec` (include/vec.h) that IdUnit's own runtime fields use --
+// IdUnit::pos0/ver[]/rot0/rot are computed values, not read straight off disc, so they stay plain
+// Vec; only the copy sites in IDSystem::set() (game/id_sys.cpp) convert BeVec -> Vec explicitly.
+struct BeVec {
+    re4_port::BE<f32> x, y, z;
+    operator Vec() const { return Vec{ (f32) x, (f32) y, (f32) z }; }
+};
 #endif
 
-// Screen id (widget) unit (game/id_sys.cpp), 0x138 bytes.
+// Screen id (widget) unit (game/id_sys.cpp), 0x138 bytes on the original target. A runtime pool
+// object (IDSystem::gameInit's `MEM_ALLOC(n * sizeof(IdUnit), ...)`), not on-disc data -- but that
+// allocation's byte size is exactly what `cCard::getUseMemSize()` (card.cpp) budgets scratch heap
+// space for, using the GameCube's own 0x138-byte size. Plain 8-byte host pointers here (pParent,
+// path0, path1, curve[4]: 6 fields) would widen IdUnit to 0x158 (confirmed: `sizeof(IdUnit)` under
+// TARGET_PC without this fix), overrunning that vendor-sized budget by 0x20 bytes/unit (0x2000
+// bytes for the 0x100-unit m_IdSave pool alone) and starving the heap the card screen's own
+// allocations then run in -- the real root cause of "IDSystem::gameInit() malloc failed" /
+// "cDatTbl::end : memory failed" (both symptoms of the same heap exhaustion, traced live with lldb:
+// `alloc[0x15800]:free[0x11d40]`, exactly the widened-pool size against too little free space).
+// Every pointer this pool ever holds already lives inside the compressed-handle window (the arena
+// MEM_ALLOC draws from, docs/port-phase2.md) -- Ptr32<T> under TARGET_PC restores the 0x138 size
+// exactly (no call-site changes: every existing `u->pParent`/`u->path0`/`u->curve[n]` use already
+// goes through Ptr32<T>'s implicit conversions the same way the rest of this port's on-disc pointer
+// fields do).
 struct IdUnit {
     u8 be_flag;        // 0x00  0xFF: free; 0x01: alive, 0x02: just set, 0x04: move, 0x08: visible, 0x10: drawing
     u8 unitNo;       // 0x01  own number (parent lookup key)
@@ -20,7 +45,11 @@ struct IdUnit {
     u8 rowNo;           // 0x07
     Mtx mat;         // 0x08  world matrix
     Mtx l_mat;    // 0x38
+#ifdef TARGET_PC
+    re4_port::Ptr32<IdUnit> pParent;  // 0x68
+#else
     IdUnit* pParent;  // 0x68
+#endif
     u8 texId;        // 0x6C
     u8 maskId;       // 0x6D
     u8 texNo;           // 0x6E  texture frame (stage: digit)
@@ -56,9 +85,19 @@ struct IdUnit {
     f32 u1;          // 0x114
     f32 v0;          // 0x118
     f32 v1;          // 0x11C
+#ifdef TARGET_PC
+    // Ptr32<u8>, not Ptr32<void>: Ptr32<T>::operator[] needs a complete, reference-able T to declare
+    // (even though never called on these two fields) once the class template gets instantiated --
+    // Ptr32<void> fails to compile ("cannot form a reference to 'void'"); Ptr32<u8> has the same
+    // opaque-byte-pointer semantics every existing `(u8*) u->path0` call site already assumes.
+    re4_port::Ptr32<u8> path0;     // 0x120  FuncPath data
+    re4_port::Ptr32<u8> path1;     // 0x124
+    re4_port::Ptr32<Hermite1> curve[4];  // 0x128
+#else
     void* path0;     // 0x120  FuncPath data
     void* path1;     // 0x124
     Hermite1* curve[4];  // 0x128
+#endif
 };
 
 // One entry of an id data table (IDSystem::set), version 1 = 0x88 bytes, version 2 = 0x8C bytes.
@@ -79,13 +118,24 @@ struct IdData {
     u8 rotAxis;      // 0x0F
     u8 dir;          // 0x10
     u8 pad_11[3];
+#ifdef TARGET_PC
+    BeVec pos;        // 0x14
+    BeVec vtx[4];     // 0x20
+    re4_port::BE<f32> sizeX;  // 0x50
+    re4_port::BE<f32> sizeY;  // 0x54
+#else
     Vec pos;         // 0x14
     Vec vtx[4];      // 0x20
     f32 sizeX;       // 0x50
     f32 sizeY;       // 0x54
+#endif
     u8 col0[4];      // 0x58
     // version 1
+#ifdef TARGET_PC
+    BeVec rot;        // 0x5C
+#else
     Vec rot;         // 0x5C
+#endif
     u8 blendType;    // 0x68
     u8 transType;    // 0x69
     u8 maskId;       // 0x6A
@@ -120,13 +170,24 @@ struct IdData2 {
     u8 rotAxis;      // 0x0F
     u8 dir;          // 0x10
     u8 pad_11[3];
+#ifdef TARGET_PC
+    BeVec pos;        // 0x14
+    BeVec vtx[4];     // 0x20
+    re4_port::BE<f32> sizeX;  // 0x50
+    re4_port::BE<f32> sizeY;  // 0x54
+#else
     Vec pos;         // 0x14
     Vec vtx[4];      // 0x20
     f32 sizeX;       // 0x50
     f32 sizeY;       // 0x54
+#endif
     u8 col0[4];      // 0x58
     u8 col1[4];      // 0x5C
+#ifdef TARGET_PC
+    BeVec rot;        // 0x60
+#else
     Vec rot;         // 0x60
+#endif
     u8 blendType;    // 0x6C
     u8 transType;    // 0x6D
     u8 maskId;       // 0x6E

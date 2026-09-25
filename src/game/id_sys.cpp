@@ -272,13 +272,13 @@ void IDSystem::set(void* data, u8 id, int type, u8 ot, u8 prio, u8 mode)
                     u->pow = p1->transSub;
                     a = p1->ofs[0];
                     if (a) {
-                        u->path0 = (void*) (a + (u32) data);
+                        u->path0 = (u8*) (a + (u32) data);
                     } else {
                         u->path0 = 0;
                     }
                     a = p1->ofs[1];
                     if (a) {
-                        u->path1 = (void*) (a + (u32) data);
+                        u->path1 = (u8*) (a + (u32) data);
                     } else {
                         u->path1 = 0;
                     }
@@ -380,13 +380,13 @@ void IDSystem::set(void* data, u8 id, int type, u8 ot, u8 prio, u8 mode)
                     u->pow = p2->transSub;
                     a = p2->ofs[0];
                     if (a) {
-                        u->path0 = (void*) (a + (u32) data);
+                        u->path0 = (u8*) (a + (u32) data);
                     } else {
                         u->path0 = 0;
                     }
                     a = p2->ofs[1];
                     if (a) {
-                        u->path1 = (void*) (a + (u32) data);
+                        u->path1 = (u8*) (a + (u32) data);
                     } else {
                         u->path1 = 0;
                     }

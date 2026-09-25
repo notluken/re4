@@ -3665,9 +3665,9 @@ void CardID::up_down(cCard* pCard)
     case 1:
         if (m_IdSave.unitPtr(0, IDC_SSCRN_FAR_0)->anima_state & 1) {
             IdUnit* u = m_IdSave.unitPtr(0, IDC_SSCRN_FAR_0);
-            u->path0 = g_p_path_org[0];
+            u->path0 = (u8*) g_p_path_org[0];
             u->curve[0] = (Hermite1*) g_p_hrmt_org[0];
-            u->path1 = g_p_spln_org[0];
+            u->path1 = (u8*) g_p_spln_org[0];
             u->pos0 = g_pos0_org;
             FuncPathParametrize(u->path0, u->path1);
             IdSys.setTime(u, 0);
