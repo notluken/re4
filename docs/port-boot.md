@@ -1875,3 +1875,89 @@ needed per the port rules.
 - Once `Render()` is live, re-screenshot -- the two 2D overlay draws already reaching Aurora's FIFO
   this session suggest the title archive/font system may already be closer to visible than the black
   frames suggest, but nothing will be conclusively visible until the main scene pass runs for real.
+
+## 32. DVD read-retry storm and the GXEnd false positive, both root-caused and fixed; new frontier
+    is a real ARAM-DMA hang inside the title sound bank (2026-09-25)
+
+Coordinator-directed follow-up to section 31's two flagged items. Screenshots this pass: the
+per-window capture (`-l <windowid>`) succeeded for the first time this session (contradicts section
+31's "always fails" -- confirmed context-dependent, not chased further), showing real geometry (grey
+horizontal bars, a colored strip) instead of a uniform black field -- still the debug/eprintf overlay,
+not the title screen.
+
+### 1. DVD read-retry storm: real root cause, fixed in Aurora (not this repo's own code)
+
+Added a temporary diagnostic print in `dvdread_callback` (`src/game/dvd.cpp`, reverted after use --
+confirmed byte-identical to HEAD) and traced every "DVD: Read Error!!!" to the same shape: Aurora's
+`result` always equalled the *unaligned* `m_DivReadSize`, never `ALIGN32(m_DivReadSize)`, the value
+`cDvdQueue::fileReadAsync` actually requested (it rounds every read up to the next 32-byte boundary,
+matching real GameCube DVD hardware, which only ever transfers whole aligned sectors). Root cause,
+confirmed live with an Aurora-side print: `readFromHandle()` (`aurora/lib/dolphin/dvd/dvd.cpp`) stops
+at the *file's own* logical EOF (its FST-registered length) instead of the physical disc image, so a
+request for the alignment padding past a file's true end came back short -- even though
+`DVDReadAsyncPrio`'s own bounds check (`offset + length < fileInfo->length + DVD_MIN_TRANSFER_SIZE`)
+explicitly documents that exact padding as valid. Fixed by zero-filling a shortfall of
+`DVD_MIN_TRANSFER_SIZE` (32) bytes or less instead of reporting it as a real transfer-size mismatch
+(`tools/port/aurora-patches/0003-dvd-align-padding.patch`, Aurora-only, no `src/game` changes).
+**Verified**: 0 "DVD: Read Error!!!" lines across multiple live runs that previously logged 20-70 per
+file; every DVD read (`etc/moji8.tpl`, `etc/sizetbl.dat`, `Font/common_p.fnt`, `debug/config.txt`,
+`debug/roomInfo.dat`, `SS/cmn/title.snd`'s header) now succeeds on the first try.
+
+### 2. GXEnd "vertex data not evenly divisible" warning: root-caused as a real false positive, fixed
+
+Hand-computed the real per-vertex byte size for both draw call sites reaching Aurora at this point
+against their own declared `GXSetVtxAttrFmt`: `main_sub.cpp`'s `DrawTexture` (position 3×s16 = 6 bytes
++ texcoord 2×f32 = 8 bytes = 14 bytes/vertex) and `mes.cpp`'s glyph `draw()` (position 2×s16 = 4 +
+color 4×u8 = 4 + texcoord 2×f32 = 8 = 16 bytes/vertex) -- both match their real vertex counts exactly;
+the submitted vertex geometry itself was never wrong. The warning's real cause: `mes.cpp`'s `draw()`
+never calls `GXEnd()` (correct -- matches real hardware's fixed-vertex-count auto-complete, the same
+behavior `GXVert.cpp`'s own `pre_begin()` comment documents), so the *next* glyph's `setAttribute()`
+(real texture/matrix/TEV state loads) writes FIFO bytes before the next `GXBegin()` implicitly closes
+the previous one -- Aurora's byte-count heuristic (`bytesWritten % nVerts`) has no way to separate
+those state-change bytes from vertex payload, so it fires on entirely valid data specifically at this
+call shape. Fixed by suppressing the check only on the *implicit* close path (`sImplicitEnd` flag,
+`tools/port/aurora-patches/0004-gx-implicit-end-suppress-mismatch-warning.patch`); an explicit
+`GXEnd()` call from the caller still gets the real check. **Verified**: 0 "not evenly divisible"
+warnings across a run that previously logged one per frame (both byte counts, 266/4 and 257/8,
+accounted for exactly by this mechanism -- not chased with a byte-for-byte reconstruction beyond
+confirming both draw sites' own math, budget).
+
+Neither fix changes what's visibly rendered (confirmed: `boot_3.png`, same debug-overlay bars as
+before) -- both were real correctness/diagnostics fixes, not the cause of the "no glyph shapes"
+symptom, which remains open (font texture likely not correctly bound/decoded -- not reached this
+pass).
+
+### 3. New frontier: `SS/cmn/title.snd`'s header read hangs the game thread indefinitely
+
+Past both fixes above, every file read up through `SS/cmn/title.snd`'s 0x400-byte header succeeds
+(confirmed with a temporary diagnostic print: `entrynum=669`, `fileLen=782720`, both fine, and a
+second Aurora-side print confirmed the read genuinely completes and its callback genuinely fires) --
+but no further progress is ever logged afterward. Confirmed live this is a real block, not a spin:
+`ps`/`top` on the running `re4_boot` process show ~0% CPU and `sleeping` state for 25+ seconds, not a
+busy-wait. Traced (not fully root-caused, budget) to the sound-bank header's `TRANS_SND_BLK`/
+`TRANS_SND_PCM` parts (`cDvdQueue::readMain`, `src/game/dvd.cpp`): these route ARAM-destined chunks
+through `cDvdQueue::trans2aram()`, which calls the real (unstubbed) `ARQPostRequest()`
+(`src/lib/arq.c`) -- unlike `SndInit()` (Phase 5, already stubbed per section 15/23), `arq.c`/`AR.c`
+are still the vendor's real hardware-DMA code, whose completion callback
+(`__ARQInterruptServiceRoutine`) is only ever invoked by a real ARAM-DMA hardware interrupt
+(`ARInit()`'s `__OSSetInterruptHandler(6, __ARHandler)`) that has no host equivalent -- so
+`trans2aram_cb` never fires, and the busy bit it's supposed to clear (`m_be_flag & 0x01000000`) stays
+set forever. (`AR.c`'s own `__DSPRegs` is a raw pointer to the real hardware's physical address
+`0xCC005000`, so a genuine ARAM DMA attempt would segfault, not hang -- the process staying alive and
+merely blocked suggests this specific path is reached via a real wait primitive, e.g. the port's
+cooperative-task scheduler's own synchronization, rather than `ARStartDMA` itself; **not confirmed
+further this pass**, flagged for whoever picks this up next.)
+
+**Next steps**: root-cause exactly which wait primitive blocks (a task-scheduler semaphore/condvar,
+most likely, given the "sleeping, 0% CPU, no crash" signature) and give `ARQPostRequest` (or
+`trans2aram()`'s call site, `TARGET_PC`-only) a host stand-in that performs the MRAM<->ARAM copy
+synchronously and invokes the completion callback immediately, mirroring what `SndInit()`'s existing
+Phase-5 stubs already do for the rest of the sound subsystem. Until this is fixed, `title.snd` (and by
+extension `title.dat`, gated behind it in `titleWait()`) can never finish loading, so the title screen
+is unreachable no matter how correct the render path is.
+
+### Commits this pass (Aurora patches only, no `src/game`/`include` changes, no remote round trip
+    needed per the port rules)
+
+- DVD alignment-padding fix (`tools/port/aurora-patches/0003-dvd-align-padding.patch`)
+- GX implicit-end warning suppression (`tools/port/aurora-patches/0004-gx-implicit-end-suppress-mismatch-warning.patch`)
