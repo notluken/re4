@@ -67,26 +67,16 @@ void CaptureOwnWindowScreenshot(const char* destPath)
         std::string cmd = "/usr/sbin/screencapture -x -l " + std::to_string(*windowId) + " '" +
                            destPath + "'";
         int rc = std::system(cmd.c_str());
-        // screencapture -l can fail ("could not create image from window") for a window not
-        // fully composited by the modern per-window capture path (observed live in this port's own
-        // dev environment -- TO VERIFY whether this reproduces for every user/session) -- fall back
-        // to the whole-screen capture that is already known to work, rather than silently producing
-        // no file at all.
+        // Window-only on purpose: a whole-screen fallback captures whatever else is on the user's
+        // desktop (other apps, private messages). If the per-window capture fails, no file is made.
         if (rc == 0) {
             std::fprintf(stderr, "re4_boot: screenshot attempted -> %s (window-specific)\n", destPath);
             return;
         }
-        std::fprintf(stderr,
-                     "re4_boot: window-specific screenshot failed (rc=%d), falling back to whole "
-                     "screen\n",
-                     rc);
+        std::fprintf(stderr, "re4_boot: window-specific screenshot failed (rc=%d), none taken\n", rc);
     } else {
-        std::fprintf(stderr, "re4_boot: no own window found for screenshot, falling back to whole "
-                              "screen\n");
+        std::fprintf(stderr, "re4_boot: no own window found for screenshot, none taken\n");
     }
-    std::string cmd = "/usr/sbin/screencapture -x '" + std::string(destPath) + "'";
-    std::system(cmd.c_str());
-    std::fprintf(stderr, "re4_boot: screenshot attempted -> %s (whole-screen fallback)\n", destPath);
 }
 
 } // namespace re4_port
