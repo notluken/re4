@@ -487,3 +487,92 @@ screen) was still not captured this session.
 
 No REL-module-missing stop was hit this pass (`wep01` or otherwise) -- the run was terminated by the
 session budget while still cycling in the room's per-frame loop, not by a further crash.
+
+## 8. Coordinator follow-up: "BSS SIZE OVER!!!" root-caused and fixed, SAT format converted, real
+   next blocker found (missing weapon REL module)
+
+### "BSS SIZE OVER!!!" -- root cause was `OSModuleLink`'s raw 8-byte host pointers, not a bssSize swap
+
+Traced with a temporary diagnostic (`OSReport` dump of `pModule`'s raw bytes and
+`sizeof(OSModuleInfo)`/`offsetof(bssSize)`, added then removed -- not committed) at the exact call
+site (`ReadWepData`, `src/game/read.cpp`, loading `em/wep02.drs`, the handgun's own REL): the field
+being checked, `OSModuleHeader::bssSize`, was already correctly `OSModU32` (`re4_port::be_u32`,
+i.e. `BE<u32>`) -- Phase 4's own prep work, `include/dolphin/os/OSModule.h`'s header comment. The
+bug was one struct member *before* it: `OSModuleInfo::link` (`OSModuleLink { OSModuleInfo* next,
+*prev; }`) was still two raw C++ pointers, 8 bytes each on this arm64 host instead of the GameCube's
+4 -- confirmed live: `sizeof(OSModuleInfo)` came back 48, not the real 32, and
+`offsetof(OSModuleHeader, bssSize)` 48 (0x30) instead of 32 (0x20). Every REL header read directly
+off disc into this struct (every `(OSModuleHeader*) (REL_READ_OFFSET32(data+4) + data)` cast in
+`read.cpp`) was therefore reading `numSections`/`sectionInfoOffset`/`nameOffset`/`nameSize`/
+`version`/`bssSize`/... 16 bytes further into the raw REL bytes than the real field -- for
+`em/wep02.drs` this meant `pModule->bssSize` read `0x01010100` (16843008) instead of the REL's real,
+tiny `bssSize` of 8, tripping the `> DLL_BSS_MAX` (0x80) debug safety net and hanging in the
+vendor's own `for (;;) { eprintf("BSS SIZE OVER!!!"); TaskSleep(1); }` loop -- explaining why it never
+appeared in the stdout log (`eprintf` draws directly to the screen's debug-text overlay, not
+`OSReport`) even though the process kept "running" (still looping, drawing that overlay every
+frame) rather than crashing outright.
+
+**Fix** (`include/dolphin/os/OSModule.h`, `TARGET_PC` only): `OSModuleLink::next`/`prev` are now
+`re4_port::Ptr32<OSModuleInfo>`, matching every other on-disc pointer field in this tree and
+restoring `OSModuleInfo`'s real 0x20-byte size. This one field is never dereferenced as a real
+pointer anywhere in this port's own `OSLink()`/`OSUnlink()`/`IsFresh()` (`src/port/rel.cpp`) -- their
+"has this exact header buffer already been linked by this host" marker used to stash the address of
+a plain static object there (`kHostLinkedMarker`, 8 bytes, not a valid `Ptr32<T>` arena handle);
+switched to storing/comparing a fixed raw 32-bit handle instead (`Ptr32<T>::FromRaw()`/
+`raw_handle()`, which never dereference, so never trip `Ptr32<T>`'s out-of-arena-window abort) --
+`kHostLinkedMarkerHandle = 0xFFFFFFFE`, a value no real disc-read `next`/`prev` (always 0 per the
+file's own prior comment) or genuine relocated handle could plausibly collide with.
+
+**Verified**: `re4_game_all -k 0` still the exact same 25-file baseline (this header change touches
+nothing in that list). `ctest`: 10/10. Live run: the "BSS SIZE OVER!!!" hang is gone -- the same
+`em/wep02.drs` load now correctly proceeds to `OSLink()`, which correctly reports the real next
+blocker (below) instead.
+
+### SAT (scenario collision) format converted -- second real bug on the same room, found immediately after
+
+With the above fixed, the very next blocker hit was `cSat::blockInit() INVALID PTR 0x09dc8c42 (
+05060706 )` during R120's own collision-data init -- `include/atari.h`'s `cSatFile` (every plain
+`u16` count: `m_nVertex`/`m_nNormal`/`m_nEdge`/`m_nPolygon`/`m_nFloor`/`m_nSlope`/`m_nWall`/
+`m_nBlock`) and `cSatHeader::ofs[]` were raw, unswapped -- `cSat::operator=(cSatFile*)` copies those
+counts directly into `cSat`'s own `vertex_num`/`polygon_num`/etc., which then drive every SAT table
+pointer (`norm_p`/`edge_p`/`poly_p`/`block_p` -- literally `vtx + vertex_num`, etc.), so a garbage
+count corrupts every pointer downstream, including the block-chain `blockInit()` walks. `cSatBlock`'s
+own remaining raw fields (`m_nFloor`/`m_nSlope`/`m_nWall`/`m_Flag`, and `min`/`m_Size`, plain `Vec`s)
+had the same bug (`m_pList`, the block-chain pointer, was already `Ptr32<T>`'d in Phase 2 -- only its
+siblings were missed). Converted all of the above to `BE<u16>`/`BE<u32>`/a new `SatVec` (same
+`BeVec` pattern as `id_sys.h`/`room_jmp.h`/`scroll.h`'s `SmdVec`) under `TARGET_PC`;
+`cSatHeader::getSat()`'s raw `*(u32*) (...)` table read became a `BE<u32>` array index. Two call
+sites needed their own local variable's type following the field type change (`u16* idx` ->
+`BE<u16>* idx` in two `atari.cpp` collision-check helpers; `SatVec` gained an `operator=(const Vec&)`
+so the three dead-stripped-on-the-real-target `createSatN` builders still compile on this host).
+
+**Verified**: `re4_game_all -k 0`: same 25-file baseline, `atari.cpp` compiles clean. `ctest`:
+10/10. Live run: `cSat::blockInit()`'s INVALID PTR errors are gone -- R120's SAT init now completes
+silently.
+
+### The real next blocker: missing weapon REL module (id 4, `em/wep02.drs` -- Leon's handgun)
+
+Past both fixes, `re4_boot` now reaches `re4_port::OSLink: no built module for id 4` (this port's
+own `OSLink()` stand-in, `src/port/rel.cpp`, correctly reporting that nothing is registered for that
+id) immediately followed by `DLL_Link()`'s own vendor-written 60-frame-then-`HALT()` fallback
+(`main_sub.cpp:1440`, a genuine `*(volatile u32*) 0x11111111 = 0` crash -- this is real vendor code
+behaving exactly as designed when a DLL fails to link, not a bug this port introduced). `id 4` is
+read from the REL header embedded in `em/wep02.drs` (Leon's handgun weapon archive, loaded by
+`ReadWepData(no=2, ...)` right after `st1_0` links and just before `R120Init`'s own banner) --
+**not yet built for the host**: `RE4_REL_MODULES` (`CMakeLists.txt`) currently lists only `st1_0`.
+Building `wep02` (or whichever module directory in `src/wep*` owns REL id 4 -- not yet identified by
+name, only by the runtime id) through the same `tools/port/build_rel_module.py` pipeline `st1_0`
+already uses (`config/G4BE08/modules/<mod>/rel.json`, add to `RE4_REL_MODULES`, regenerate the
+registry) is real, substantial follow-up work -- a full per-module build (cast-rewriting, `ld -r`
+combining, static-ctor semantics if the module has any global constructors) for at least one more
+module, not attempted this pass given the remaining budget. This is the actual, confirmed-live
+"missing REL module" stop the task brief anticipated.
+
+**Screenshot, honestly described**: captured at the point `re4_boot` is looping the vendor's 60-frame
+pre-`HALT()` wait (`RE4_PORT_FIXED_VI=1`, same input script, `RE4_PORT_SCREENSHOT_DELAY_MS=8500`) --
+a black screen with only the debug HUD overlay (`PrimitiveBuff` lines, the memory-usage gauge bars,
+frame counters "53"/"57" bottom-left, hex readouts "3F2FC0"/"402FC0" bottom-right). **Not the room
+render**: consistent with every prior session's finding that no run yet has reached an actual GX
+draw call for room geometry -- this blocker (and the real vendor `HALT()` that follows it) sits
+before that point in the room's own init sequence, not after. Goal 4 (Leon/the level geometry
+visible on screen) was not reached this pass.
