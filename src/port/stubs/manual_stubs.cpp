@@ -7,6 +7,7 @@
 
 #include "stub_common.h"
 #include "dolphin/os/OSThread.h"
+#include "trans.h"
 
 extern "C" {
 
@@ -204,6 +205,46 @@ cSceSys SceSys;
 int cSceSys::checkCTaskRange()
 {
     return 0;
+}
+
+// Game: global GAME_WORK instance, normally defined in game.cpp (still excluded,
+// cmake/boot_exclude.txt -- pointer<->integer cast category). read.cpp (now real, docs/port-boot.md
+// section 35) declares its own view struct (`GameWork`, 0x1C bytes: Rno_bak/Map_addr/Map_size/
+// Option_addr/Option_size/Swap_addr/omake_wep_addr) matching game.cpp's real GAME_WORK
+// byte-for-byte; only `ReadWepData` reads it (Game.omake_wep_addr), and only for the extra-mode
+// weapon-data buffer set up by gameInit(), not on the boot path. A plain global-scope C++ variable
+// is not Itanium-mangled (docs/port-boot.md section 7), so this definition binds to the same link
+// name (`_Game`) game.cpp's own `GAME_WORK Game;` would have produced.
+struct GameWork {
+    u32 Rno_bak;
+    u32 Map_addr;
+    u32 Map_size;
+    u32 Option_addr;
+    u32 Option_size;
+    u32 Swap_addr;
+    void* omake_wep_addr;
+};
+GameWork Game;
+
+// SpecularInit / GlobalIlmTexInit: normally defined in trans.cpp (still excluded,
+// cmake/boot_exclude.txt -- Phase 5, real paired-single asm elsewhere in that same file blocks the
+// whole translation unit even though these two functions themselves are plain C++). Called from
+// read.cpp's now-real CoreDataRead() right after it loads the core archive off disc, to bind the
+// specular/indirect/thermal and global-illumination TPL textures via GXInitTexObj/GXInitTlutObj.
+// Stubbed here as logging no-ops: the GX texture objects they would fill in stay zero-initialized,
+// which is wrong for later specular/GI rendering but does not crash CoreDataRead itself (the real
+// blocker this pass fixes is the null message-table read, not texture binding) -- bringing in the
+// real logic needs trans.cpp's Phase 5 paired-single material ported to C first (coordinator's
+// item 2 in a later pass), not a one-line fix here.
+void SpecularInit(TEXPalette*, TEXPalette*, TEXPalette*, TEXPalette*)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SpecularInit() called\n"); warned = true; }
+}
+void GlobalIlmTexInit(TEXPalette*)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: GlobalIlmTexInit() called\n"); warned = true; }
 }
 
 #endif // TARGET_PC

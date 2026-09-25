@@ -41,7 +41,6 @@ src/game/pl_ashley.cpp
 src/game/pl_class.cpp
 src/game/pl_leon.cpp
 src/game/pl_sub.cpp
-src/game/read.cpp
 src/game/sce_com.cpp
 src/game/sce_sys.cpp
 src/game/scroll.cpp

@@ -403,12 +403,9 @@ void ClrShape(cModel* pMod)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: ClrShape() called\n"); warned = true; }
 }
-// CoreDataRead: `void CoreDataRead(CameraDataHeader* data)`
-void CoreDataRead()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CoreDataRead() called\n"); warned = true; }
-}
+// CoreDataRead: real definition now in src/game/read.cpp (docs/port-boot.md section 35 -- read.cpp
+// un-excluded from cmake/boot_exclude.txt, its Ptr32/pointer-cast issues turned out already handled
+// by the RE4_REWRITE_CASTS cast rewriter).
 // COSF: `f32 COSF(f32 x)`
 f32 COSF(f32 x)
 {
@@ -521,19 +518,8 @@ BOOL EmHitCheck(Vec* ret_cross, Vec* ret_norm, Vec* pos0, Vec* pos1, u32 flag)
     if (!warned) { std::fprintf(stderr, "STUB: EmHitCheck() called\n"); warned = true; }
     return 0;
 }
-// EmReadInit: `void EmReadInit()`
-void EmReadInit()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: EmReadInit() called\n"); warned = true; }
-}
-// EmReadSearch: `void* EmReadSearch(int id, void* data_addr, u32 malloc_size)`
-void* EmReadSearch(int id, void* data_addr, u32 malloc_size)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: EmReadSearch() called\n"); warned = true; }
-    return (void*) 0;
-}
+// EmReadInit / EmReadSearch: real definitions now in src/game/read.cpp (docs/port-boot.md
+// section 35 continuation -- read.cpp un-excluded).
 // EndPlDamage: `void EndPlDamage()`
 void EndPlDamage()
 {
@@ -1046,12 +1032,8 @@ int ObjHitCheck(Vec* ret_cross, Vec* ret_norm, Vec* pos0, Vec* pos1, u32 flag)
     if (!warned) { std::fprintf(stderr, "STUB: ObjHitCheck() called\n"); warned = true; }
     return 0;
 }
-// OptionDataRead: `void OptionDataRead()`
-void OptionDataRead()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OptionDataRead() called\n"); warned = true; }
-}
+// OptionDataRead: real definition now in src/game/read.cpp (docs/port-boot.md section 35
+// continuation -- read.cpp un-excluded).
 // OSCancelThread: real semantics now in src/port/os_thread.cpp (docs/port-boot.md section 34).
 // UNRESOLVED: OSCreateThread -- candidates: ['int OSCreateThread(OSThread* thread, void* (*func)(void*), void* param, void* stack, u32 stackSize, OSPriority priority, u16 attr);', 'OSCreateThread(&pT->Thread, pT->hook, (void*) pT->arg, pT->pStack, pT->StackSize, pT->Priority, 1);']
 // OSDisableInterrupts: `BOOL OSDisableInterrupts(void)`
@@ -1724,18 +1706,8 @@ int PullCloth(Cloth** ppCl)
     if (!warned) { std::fprintf(stderr, "STUB: PullCloth() called\n"); warned = true; }
     return 0;
 }
-// ReleasePlData: `void ReleasePlData()`
-void ReleasePlData()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ReleasePlData() called\n"); warned = true; }
-}
-// ReleaseWepData: `void ReleaseWepData()`
-void ReleaseWepData()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ReleaseWepData() called\n"); warned = true; }
-}
+// ReleasePlData / ReleaseWepData: real definitions now in src/game/read.cpp (docs/port-boot.md
+// section 35 continuation -- read.cpp un-excluded).
 // Render: `void Render()`
 void Render()
 {
@@ -2074,8 +2046,8 @@ u32 aniso{};
 debugCamera CamDbg{};
 // DC: `extern cDataCtrl DC;`
 cDataCtrl DC{};
-// EmReadModule: `extern ReadModule EmReadModule[4];`
-ReadModule EmReadModule[4] = {};
+// EmReadModule: now defined for real by src/game/read.cpp (docs/port-boot.md section 35
+// continuation -- no longer excluded), removed from here to avoid a duplicate-symbol link error.
 // g_at2_cnt: `extern u32 g_at2_cnt[];`
 u32 g_at2_cnt[] = {};
 // g_at2_cyc: `extern u32 g_at2_cyc[];`
@@ -2102,14 +2074,14 @@ u8 max_lod{};
 MercID mercId{};
 // min_lod: `extern u8 min_lod;`
 u8 min_lod{};
-// PlReadModule: `extern ReadModule PlReadModule;`
-ReadModule PlReadModule{};
+// PlReadModule: now defined for real by src/game/read.cpp (docs/port-boot.md section 35
+// continuation -- no longer excluded), removed from here to avoid a duplicate-symbol link error.
 // pSaveData: `extern SAVE_DATA_HEAD* pSaveData;`
 SAVE_DATA_HEAD* pSaveData{};
 // Rmode, ScreenShotTriggerType: now defined for real by src/game/main_sub.cpp (docs/port-boot.md
 // section 26 -- no longer excluded), removed from here to avoid a duplicate-symbol link error.
 // ThermoTlut: `extern GXTlutObj ThermoTlut;`
 GXTlutObj ThermoTlut{};
-// WepReadModule: `extern ReadModule WepReadModule;`
-ReadModule WepReadModule{};
+// WepReadModule: now defined for real by src/game/read.cpp (docs/port-boot.md section 35
+// continuation -- no longer excluded), removed from here to avoid a duplicate-symbol link error.
 #endif // TARGET_PC

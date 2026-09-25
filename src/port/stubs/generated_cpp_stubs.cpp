@@ -535,13 +535,8 @@ JOY* GetBugCheckController()
     if (!warned) { std::fprintf(stderr, "STUB: GetBugCheckController() called\n"); warned = true; }
     return (JOY*) 0;
 }
-// GetDataExt(void*, char const*, int) -- free function, return type guessed: `void*`
-void* GetDataExt(void* a0, char const* a1, int a2)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: GetDataExt() called\n"); warned = true; }
-    return (void*) 0;
-}
+// GetDataExt: real definition now in src/game/read.cpp (docs/port-boot.md section 35
+// continuation -- read.cpp un-excluded).
 // GetWaterHeight(Vec*, float*) -- free function, return type guessed: `int`
 int GetWaterHeight(Vec* a0, float* a1)
 {
@@ -641,13 +636,8 @@ void ScaleMatrix(float (*a0) [4], Vec* a1)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: ScaleMatrix() called\n"); warned = true; }
 }
-// SearchEmModule(int) -- free function, return type guessed: `ReadModule*`
-ReadModule* SearchEmModule(int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SearchEmModule() called\n"); warned = true; }
-    return (ReadModule*) 0;
-}
+// SearchEmModule: real definition now in src/game/read.cpp (docs/port-boot.md section 35
+// continuation -- read.cpp un-excluded).
 // SetSubDamage(cEm*, void (*)()) -- free function, return type guessed: `void`
 void SetSubDamage(cEm* a0, void (*a1)())
 {
