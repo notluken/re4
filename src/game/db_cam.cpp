@@ -518,7 +518,11 @@ void debugCamera::menu(Camera* pCam, JOY* pJoy)
                 // tying t to wy; the second anchor after FSet keeps t (and so this insn) alive to
                 // sched2 without touching the up copy's pG reload (a slot between the up stores and
                 // that reload breaks the fake-death overlap that gives its `addi` r11).
+#ifndef TARGET_PC
                 asm("" : "=&r"(t) : "r"(wy), "f"(0.0f));
+#else
+                (void) t;
+#endif
             }
             {
                 u8* d1 = (u8*) &pG->Camera.param.at;
