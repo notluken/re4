@@ -616,7 +616,7 @@ static void r206_snipe()
             u32 zero;
 
             r206_work->timer = (u32) (fRand0_1() * 60.0f) + 0x3C;
-            rsf = RsfCheck(*(u16*) &pG->stage_no, 6);
+            rsf = RsfCheck(G_ROOM_ID, 6);
             zero = 0;
             if (rsf) {
                 r206_work->cnt++;

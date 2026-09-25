@@ -228,19 +228,46 @@ struct GlobalWork {
     u32 peseta;            // 0x4F98  money (ss_shop buy/sell, item pickups; PlSelect swaps it with peseta_bak)
     union {
         u16 room_id;       // 0x4F9C  stage << 8 | room as one halfword (obj14: room 004 test)
+#ifdef TARGET_PC
+        // TARGET_PC endian fix (docs/port-boot.md): the host is little-endian, so a plain u16 read
+        // of two adjacent bytes [byte0, byte1] is byte0 | (byte1 << 8), the opposite of the GameCube
+        // (big-endian) (byte0 << 8) | byte1 that every pG->room_id / G_ROOM_ID call site (~150 of
+        // them) already assumes. Swapping only the *declaration order* of the two u8 members --
+        // room_no now first (the low, first-read byte), stage_no second -- makes the host's native
+        // u16 read produce stage_no << 8 | room_no again, with no per-call-site fix and no BE<u16>
+        // wrapper needed (a plain field is simpler and just as correct once the byte order agrees).
+        // Every stage_no/room_no field access elsewhere keeps working unchanged: it goes through the
+        // field name, not a hardcoded offset, so it does not care which physical byte the reorder put
+        // it at. The one place that *did* rely on the physical byte offset of stage_no specifically
+        // (the raw `*(u16*) &pG->stage_no` overlay a few macros used instead of the room_id view) is
+        // fixed alongside this reorder, below and at each of its other call sites.
+        struct {
+            u8 room_no;    // 0x4F9C on this host (0x4F9D on GameCube)
+            u8 stage_no;   // 0x4F9D on this host (0x4F9C on GameCube)
+        };
+#else
         struct {
             u8 stage_no;   // 0x4F9C
             u8 room_no;    // 0x4F9D
         };
+#endif
     };
     u8 Part;       // 0x4F9E  spawn point in the current room (copied to Part_old / next_point)
     u8 JumpPoint;  // 0x4F9F  room jump point (title/room_jmp debug jump; room scripts branch on 1/2)
     union {
         u16 room_id_prev;  // 0x4FA0  room_id of the previous room (room_jmp CRoomInfo::setNextPos)
+#ifdef TARGET_PC
+        // Same TARGET_PC endian fix as room_id above, for the "previous room" copy.
+        struct {
+            u8 room_prev;  // 0x4FA0 on this host (0x4FA1 on GameCube)
+            u8 stage_prev; // 0x4FA1 on this host (0x4FA0 on GameCube)
+        };
+#else
         struct {
             u8 stage_prev; // 0x4FA0  stage the current room data was loaded for (stage.cpp)
             u8 room_prev;  // 0x4FA1
         };
+#endif
     };
     u8 Part_old;              // 0x4FA2  copy of x4F9E (room_jmp)
     s8 em_list_no;          // 0x4FA3  enemy list currently loaded (stage.cpp), -1 = none
@@ -327,22 +354,20 @@ extern SYSTEM_SAVE_WORK SystemSave;
 
 // stage_no/room_no read as one u16 (stage << 8 | room), as cRoomData::getRoomSavePtr wants it.
 //
-// TARGET_PC NOTE (found while porting room_jmp.cpp, not fixed here -- see the room_jmp commit
-// message / port session report): this raw `*(u16*) &pG->stage_no` overlay, and the plain `u16
-// room_id` union member it aliases (global.h's GlobalWork), only combine/split into the intended
-// `stage << 8 | room` value on a real (big-endian) GameCube. On this little-endian host, ANY single
-// view used consistently for both the write and the later read/compare (room_id <-> room_id, or
-// stage_no/room_no <-> stage_no/room_no) stays internally self-consistent regardless of host
-// endianness -- the bug only surfaces where a value crosses between the two views (e.g. title.cpp's
-// `G_ROOM_ID = pRj->getRoomInfo(...)->roomNo` builds a combined value from a table read that itself
-// produces correctly-ordered stage_no/room_no *bytes*, then stores it through the combined-u16 view,
-// which reorders those same two bytes on a little-endian host). Fixing this needs a full audit of
-// every stage_no/room_no <-> room_id crossing (title.cpp, save/load, possibly more) plus every
-// `pG->room_id`/`G_ROOM_ID` use inside a variadic call (sprintf/eprintf -- ~20+ sites, same class of
-// bug as the info->name fix in this same commit) before any of the ~150 direct `pG->room_id`
-// call sites can safely become BE<u16>; out of scope for this pass. Left as plain u16/the raw
-// overlay, unchanged, matching current (partially-by-luck) working behavior.
+// TARGET_PC FIX (docs/port-boot.md; previously a documented, not-yet-fixed gap left by the room_jmp
+// port -- see that commit and the port session report): the raw `*(u16*) &pG->stage_no` overlay this
+// macro used on every target only produced `stage << 8 | room` on a real (big-endian) GameCube,
+// because it depended on stage_no physically sitting at the union's first (low) byte. Now that
+// GlobalWork's room_id union reorders stage_no/room_no under TARGET_PC (above) so the union's own
+// plain `u16 room_id` read already equals `stage << 8 | room` on this little-endian host, `&pG->
+// stage_no` is no longer the union's address (stage_no moved to the second byte) -- so G_ROOM_ID
+// reads `pG->room_id` directly on TARGET_PC instead of re-deriving the address of a field that moved.
+// The non-TARGET_PC branch is untouched (same expression, same bytes) for the original target.
+#ifdef TARGET_PC
+#define G_ROOM_ID (pG->room_id)
+#else
 #define G_ROOM_ID (*(u16*) &pG->stage_no)
+#endif
 
 // Flag helpers: `f |= b` / `f &= ~b` through a reference. Not an aliasing device: the pG reload after a
 // store is the compiler's own (docs/matching.md, "Compiler", mem-flags patch), and a plain `pG->x = v` is

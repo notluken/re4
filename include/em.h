@@ -156,8 +156,25 @@ public:
 // The routine bytes written all at once, in the single stw the original emits at some sites (four
 // separate byte stores do not reproduce it). A macro, not an inline: an inline defined here would
 // create entities in every unit that includes em.h, which renumbers their static locals.
+//
+// TARGET_PC: the GC-side single-store form packs r0 into the composed u32's high byte on purpose --
+// on a real (big-endian) machine that store's first (lowest-address) byte, which lands on r_no_0, is
+// the value's high byte. On this little-endian host the same store would put the value's *low* byte
+// (r3) at the lowest address instead, silently reversing r_no_0..r_no_3 -- a real bug, not the
+// "self-consistent regardless of endianness" case (unlike Rno0 in game.cpp, this macro constructs the
+// packed value from four independent arguments rather than round-tripping four fields already in
+// memory, so there is no save/restore symmetry to fall back on). Four plain per-field byte stores
+// (this file's own EmRoutineSet, right below, already does exactly that) are host-endian-safe and
+// give the identical r_no_0..r_no_3 result; only the single-instruction GC scheduling trick is
+// endian-sensitive, so TARGET_PC uses the four-store form instead of that trick.
+#ifdef TARGET_PC
+#define EmRoutineSetW(em, r0, r1, r2, r3)                                                         \
+    ((void) ((em)->r_no_0 = (u8) (r0), (em)->r_no_1 = (u8) (r1), (em)->r_no_2 = (u8) (r2),        \
+             (em)->r_no_3 = (u8) (r3)))
+#else
 #define EmRoutineSetW(em, r0, r1, r2, r3) \
     (*(u32*) &(em)->r_no_0 = ((u32) (r0) << 24) | ((u32) (r1) << 16) | ((u32) (r2) << 8) | (u32) (r3))
+#endif
 
 // The four routine numbers of an enemy written through a helper: the stores stay in this order and the
 // arguments keep the registers of the call, which is not the case when they are assigned inline.

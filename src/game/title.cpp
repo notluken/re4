@@ -47,7 +47,14 @@ extern "C" u32 VIGetRetraceCount(void); // debug trace only, see RE4_PORT_TITLE_
 #line 62
 
 // stage_prev/room_prev written as one u16 through a plain pointer (aliases pG like G_ROOM_ID).
+// TARGET_PC: pG->stage_prev moved to the union's second byte (global.h's room_id_prev reorder), so
+// `&pG->stage_prev` is no longer that union's address; read pG->room_id_prev directly instead (same
+// fix as G_ROOM_ID, global.h). Non-TARGET_PC branch unchanged.
+#ifdef TARGET_PC
+#define G_ROOM_ID_PREV (pG->room_id_prev)
+#else
 #define G_ROOM_ID_PREV (*(u16*) &pG->stage_prev)
+#endif
 
 // Sub-file of the core archive (pG->pCore): `ofs + (u32) arc` (integer arithmetic, ofs first).
 // Same reasoning as global.h's ARC_PTR (a duplicate of it): pG->pCore is a live host buffer, `field`

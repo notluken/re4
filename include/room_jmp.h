@@ -23,21 +23,27 @@ struct RoomInfoVec {
 #endif
 
 struct CRoomInfo {
-    // roomNo/stage/room deliberately NOT made BE<u16>/BE-aware here: unlike flag/pos/angle (used
-    // only inside this file, self-contained), roomNo ultimately feeds global.h's `G_ROOM_ID`/
-    // `pG->room_id`, which alias `pG->stage_no`/`pG->room_no` through raw pointer-cast/union tricks
-    // that are themselves endian-sensitive in a way this table's own fix can't safely paper over
-    // (see the TARGET_PC note on G_ROOM_ID, global.h) -- changing roomNo alone would trade the
-    // current (partially-by-luck) working New Game -> room navigation for a guaranteed-wrong one.
-    // The `.stage`/`.room` single-byte reads below need no swap either way (a one-byte read is the
-    // same regardless of host endianness).
+    // roomNo now IS made BE<u16> under TARGET_PC (docs/port-boot.md): this table is raw on-disc
+    // big-endian bytes read straight through this struct with no separate byte-swap pass (same
+    // reasoning as flag/pos/angle below), so a plain host u16 read of roomNo would come out
+    // byte-swapped. Previously left un-swapped on purpose because it fed global.h's G_ROOM_ID/
+    // pG->room_id, which aliased pG->stage_no/pG->room_no through a raw pointer-cast/union trick
+    // that was itself wrong the same way on this host -- the two wrongs cancelled (New Game -> room
+    // navigation worked "by luck"). Now that GlobalWork's room_id union is fixed to read correctly on
+    // its own (global.h's TARGET_PC reorder), that cancellation is gone, so roomNo must be correct on
+    // its own too. The `.stage`/`.room` single-byte reads below still need no swap either way (a
+    // one-byte read is the same regardless of host endianness).
 #ifdef TARGET_PC
     re4_port::BE<u16> flag;      // 0x00  bit 0: pos/angle valid
 #else
     u16 flag;      // 0x00  bit 0: pos/angle valid
 #endif
     union {
+#ifdef TARGET_PC
+        re4_port::BE<u16> roomNo;  // 0x02  stage << 8 | room
+#else
         u16 roomNo;  // 0x02  stage << 8 | room
+#endif
         struct {
             u8 stage;  // 0x02
             u8 room;   // 0x03

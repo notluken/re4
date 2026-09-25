@@ -313,7 +313,7 @@ void R317Elevator2Init()
     Vec pos1 = {0.0f, 10825.0f, 0.0f};
 
     // The struct view keeps the pG load below the template-copy stores.
-    if (RsfCheck(*(u16*) &pG->stage_no, 3)) {
+    if (RsfCheck(G_ROOM_ID, 3)) {
         obj->setPos(&pos1);
     } else {
         obj->setPos(&pos0);

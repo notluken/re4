@@ -275,7 +275,7 @@ static void R213SuMove()
             o12->scale.x = sinf(a0) * r213_suAmpX + 1.0f;
             o12->scale.y = cosf(a1) * r213_suAmpY + 1.0f;
             o12->scale.z = sinf(a2) * r213_suAmpZ + 1.0f;
-            if (RsfCheck(*(u16*) &pG->stage_no, 2) == 0) {   // struct view: the pG load stays below the scale store
+            if (RsfCheck(G_ROOM_ID, 2) == 0) {   // struct view: the pG load stays below the scale store
                 cEmHit* hit = r213_work->hit[0];
 
                 if (hit) {

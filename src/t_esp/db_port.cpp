@@ -175,7 +175,12 @@ static inline int flagOn(u32 f, u32 bit)
 // the room id read through the struct view of pG (global.h pG) right after the "x:/soft/room/" template copy: the
 // pG load then depends on the copy's stores and the target's store order (word 1 last, `stw r9,4(r30)` right before
 // `lwz r9,pG`) follows; the plain G_ROOM_ID read is a fixed scalar the stores do not order
+// TARGET_PC: same G_ROOM_ID fix as global.h (stage_no moved to the union's second byte there).
+#ifdef TARGET_PC
+#define G_ROOM_ID_S (pG->room_id)
+#else
 #define G_ROOM_ID_S (*(u16*) &pG->stage_no)
+#endif
 // COMPILER-DIFF: #13 -- the j loop's `&EvtDebug` is a fresh `lis/addi` in the target (a REG_EQUIV lo_sum pseudo that the
 // original never allocated, re-materialised at its copy); a distinct SYMBOL_REF ("*EvtDebug" string, so cse/gcse do not
 // merge it with the pScr block's lo_sum) gives that with a symbol-based alias base for the loop's loads

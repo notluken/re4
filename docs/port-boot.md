@@ -3348,3 +3348,117 @@ model.cpp objRobo.cpp pendulum.cpp pl_class.cpp sce_at.cpp sce_sys.cpp scheduler
 (cast-rewriter un-exclusions, etc.) -- not something this session changed. Any future session
 reporting a "default build failing-file count" should always name the target (`re4_game_all -k 0`,
 not the whole `build-pc` project) to stay comparable across sessions.
+
+## 49. `pG->room_id` / `G_ROOM_ID` endian gap (left open at section 37) closed: `GlobalWork`'s
+    room_id/room_id_prev union reordered, `CRoomInfo::roomNo`'s double cancellation removed
+
+Section 37 (`## 37`, "`MesData.ptr[0]`, traced exhaustively") flagged but deliberately left open a
+real endian bug in `pG->room_id`/`G_ROOM_ID`: on a real (big-endian) GameCube, `GlobalWork`'s
+`stage_no`/`room_no` union (`include/global.h`) and the raw `*(u16*) &pG->stage_no` pointer-cast the
+`G_ROOM_ID` family of macros used both read `stage_no << 8 | room_no` -- because on that hardware the
+struct's *first* (lowest-address) byte, `stage_no`, *is* the value's high byte. On this little-endian
+host, the same physical layout makes a plain `u16` read of those same two bytes come out as
+`room_no << 8 | stage_no` instead: reversed. ~150 call sites read `pG->room_id`/`G_ROOM_ID` directly
+(item/cutscene/trigger logic, `room_id == 0x120`-style comparisons, sprintf'd into eprintf strings);
+none of them were auditable one at a time, so this was left as a documented, not-yet-fixed gap.
+`include/room_jmp.h`'s `CRoomInfo::roomNo` (the AREA JUMP room table) made the bug momentarily
+invisible for New Game -> room navigation: `title.cpp`'s `G_ROOM_ID = pRj->getRoomInfo(...)->roomNo`
+crosses from the table's raw on-disc big-endian bytes (read straight through the struct, correctly
+byte-ordered on disc) into `pG->room_id`'s already-reversed view -- reversed again by a `roomNo` that
+was *also* left un-swapped on purpose (its own header comment named this "double cancellation" and
+explained why fixing `roomNo` alone, without first fixing `room_id`, would trade a working-by-luck
+crossing for a guaranteed-wrong one).
+
+**Fix, in order (bytes unchanged on GameCube -- everything below is `#ifdef TARGET_PC`):**
+
+1. **`GlobalWork::room_id`/`room_id_prev` (`include/global.h`)**: under `TARGET_PC`, the two `u8`
+   struct members inside each union are declared in the *opposite* order from the original
+   (`room_no` first, `stage_no` second; `room_prev` first, `stage_prev` second) -- physically putting
+   the low (first-read) byte where a little-endian `u16` read expects it, so the union's own plain
+   `u16 room_id`/`room_id_prev` read already equals `stage_no << 8 | room_no` on this host, with no
+   wrapper type and no per-call-site fix needed for any of the ~150 direct `pG->room_id`/`G_ROOM_ID`
+   uses. Every existing `pG->stage_no`/`pG->room_no`/etc. field access elsewhere is unaffected: it
+   goes through the field name, not a hardcoded offset.
+2. **The handful of sites that instead took `&pG->stage_no`/`&pG->stage_prev` directly** (now the
+   union's *second* byte, not its address, after the reorder): `G_ROOM_ID` (`global.h`),
+   `G_ROOM_ID_PREV` (`title.cpp`), `GS_ROOM_ID` (`st3/r300.cpp`), `G_ROOM_ID_S` (`t_esp/db_port.cpp`)
+   gained a `TARGET_PC` branch reading `pG->room_id`/`pG->room_id_prev` directly instead; five
+   further inline (non-macro) `*(u16*) &pG->stage_no` reads (`st3/r317.cpp`, `st3/r30c.cpp`,
+   `st2/r209.cpp` x2, `st2/r213.cpp`, `st2/r206.cpp`) were switched to the `G_ROOM_ID` macro instead
+   of duplicating the cast -- on GameCube `G_ROOM_ID` expands to the byte-identical original
+   expression, so this is a no-op for that target while getting the `TARGET_PC` fix automatically.
+   `PREV_ROOM_ID` (`st3/r315.cpp`, `*(u16*) &pG->room_id_prev`) needed no change: it already takes
+   the address of the union itself, not of one of its members, so the reorder does not move it.
+3. **`CRoomInfo::roomNo` (`include/room_jmp.h`)**: now `re4_port::BE<u16>` under `TARGET_PC` (was
+   deliberately left a plain, un-swapped `u16` until `room_id` itself was fixed). The on-disc table
+   bytes are unaffected -- this table is compiled GameCube-side data (bytes never change) read
+   straight through the struct with no separate byte-swap pass, same reasoning as `flag`/`pos`/
+   `angle`, already `BE`-aware, right above it -- so it cannot be fixed by reordering physical bytes
+   the way `GlobalWork`'s own RAM-only fields could; it needs the wrapper type instead. `.stage`/
+   `.room` (the single-byte union members) are untouched: a one-byte read needs no swap either way.
+   This removes the "double cancellation" the header comment used to document.
+
+**Other `GlobalWork`/runtime-struct fields checked for the same alias-crossing bug** (grep for
+`*(u16*) &`/`*(u32*) &` on a `pG->` member, plus every union in `global.h`): `game.cpp`'s
+`Game.Rno_bak = *(u32*) &pG->Rno0` / `*(u32*) &pG->Rno0 = Game.Rno_bak` (save/restore the four
+`Rno0..Rno3` bytes as one word around the option-screen pause) is **not** the same bug class: it
+round-trips through the *same* wide view for both the save and the later restore, so whichever byte
+order the host happens to read/write in, the four individual bytes come back exactly as they went in
+-- this is the "any single view used consistently for both the write and the read stays
+self-consistent" case section 37's own note already named, not the "value crosses between two
+different views" case room_id was. It was left unchanged. One further, genuine instance of the same
+bug class *was* found and fixed outside `GlobalWork`: `include/em.h`'s `EmRoutineSetW(em, r0, r1, r2,
+r3)` macro composes a single `u32` from four independent arguments (`r0 << 24 | r1 << 16 | r2 << 8 |
+r3`) and stores it through `*(u32*) &em->r_no_0` in one shot -- correct on a big-endian GameCube
+(first byte = the value's high byte = `r0`, matching `r_no_0`'s position), silently reversed on this
+little-endian host (first byte would become `r3`). Unlike `Rno0`, there is no round-trip symmetry to
+fall back on here: the value is freshly constructed from arguments, not read back from where it was
+written. Fixed under `TARGET_PC` to four independent per-field byte stores (`em->r_no_0 = r0; ...`),
+which give the identical `r_no_0..r_no_3` result regardless of host endianness -- this file's own
+`EmRoutineSet` inline, right below the macro, already does exactly that. A broader sweep of every
+other `u8`-pair-under-a-wider-view union in the tree (`model.h`'s `x0`/`partsNo`/`parentNo`,
+`etc_model.h`, `esp.h`, `scroll.h`, `obj.h`, `em.h`'s `Catch_pos_adj`, `sscrn.h`, `snd.h`'s
+`SND_RND`, `motion.cpp`'s local float/byte unions, ...) was **not** done this pass -- each one needs
+the same case-by-case "does a value actually cross between the wide view and the narrow view, or
+does every use stay on one side" analysis room_id got, and most look like the self-consistent
+round-trip case from a first read, not the crossing case, but that is exactly the kind of claim this
+project's own rules say must not be asserted without evidence. **TO VERIFY** (follow-up work, not
+done here).
+
+**Verified**: `test_room_id` (new, `tests/port/test_room_id.cpp`, wired into `CMakeLists.txt` next to
+the other `tests/port/` ctests) exercises both directions -- writing `stage_no`/`room_no` and reading
+`room_id` back, and vice versa (the `title.cpp`/`room_jmp.cpp` crossing direction), for both the
+current-room and previous-room union, plus a `CRoomInfo` reinterpreted directly over a small raw
+byte buffer (disc byte order: stage byte then room byte) checked against its `BE<u16> roomNo`. All
+pass (`ctest --test-dir build-pc`: 9/9, including the new test). `re4_port_static_asserts`
+(`build-pc-u32on`, `RE4_U32_32=ON`) re-verified `CRoomInfo::flag`/`roomNo` still sit at their
+documented `0x00`/`0x02` offsets with `BE<u16> roomNo` in the union. `re4_game_all -k 0`: still
+exactly the 25-file baseline from section 48, same file list, `game.cpp` (which this section's
+`Rno0` note is about) failing for its own pre-existing, unrelated pointer-truncation cast. `re4_rel_
+all -k 0`: every file this pass touched (`em36`/`em38`/`em32`/`em35`/`st3/r300.cpp`/`st2/r213.cpp`/
+`st2/r206.cpp`, which use `EmRoutineSetW`/`GS_ROOM_ID`/the inline `G_ROOM_ID` sites) compiles clean;
+the six that still fail there (`em2d.cpp`, `em39.cpp`, `r209.cpp`, `r30c.cpp`, `r317.cpp`,
+`db_port.cpp`) fail for their own pre-existing, unrelated errors (fp-register `asm` constraints,
+pointer-truncation casts under `RE4_U32_32=OFF`), confirmed unchanged from before this pass. Real-
+target (GameCube) verification: clean rebuild + `dtk shasum` (every line `OK`) and `asmcheck.py --all`
+(231 total, unchanged) on the remote build host, both via `port/wip-phase1` before fast-forwarding
+`port/macos-arm64`.
+
+**Save compatibility, not implemented**: `GlobalWork` is saved raw to the memory card
+(`game/main.cpp`'s `SystemSave`/`GameSaveBlock` path copies `pG->save_data_start_addr..` verbatim).
+The `TARGET_PC` reorder above only changes which physical byte holds `stage_no` vs. `room_no` (and
+`stage_prev` vs. `room_prev`) *in this host's own RAM layout* -- a real save file written by this
+port and read back by this same port round-trips correctly (same reorder on both ends), but a save
+file written by a real GameCube (or read by one) would have `stage_no`/`room_no` at the *opposite*
+physical offsets from what this host now expects, silently corrupting those two bytes on load (and
+vice versa for a save this port writes, read on real hardware). No GameCube-compatible save/load BE
+conversion pass exists yet for this or any other on-disc-format save field; out of scope for this
+pass, flagged here so a future memory-card session does not assume `GlobalWork`'s host layout is
+already save-compatible.
+
+**Not reached this pass**: the broader union audit named above (`model.h` and the rest); a live
+in-emulator/real-run confirmation that AREA JUMP (stage 1, room 0x20 -> `room_id` 0x120) still lands
+in OPENING was not re-captured with a fresh `RE4_PORT_TITLE_TRACE`/screenshot this session (`docs/
+port-boot.md`'s own no-full-screen-screenshot rule and the session's remaining budget) -- the unit
+test above is the evidence for the arithmetic itself; a full boot-to-AREA-JUMP repro is follow-up
+work.

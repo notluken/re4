@@ -123,7 +123,7 @@ void R30cInit()
             AtariOffV(&pSUB->atari, ~0x200);
             pSUB->motionSet(ROOM_ARC_PTR(pG->pRoom, 0x24), 0, 0, 4, 0);
             r30c_work->shout = SceExec(0x12, (TaskFunc) r30c_AshleyShout, 0, 0, 2, 0);
-            if (RsfCheck(*(u16*) &pG->stage_no, 1) == 0) {
+            if (RsfCheck(G_ROOM_ID, 1) == 0) {
                 SceAtDataSet_exec(5, 0x12, 0, (TaskFunc) r30c_EventCut, 0, 1);
             }
         }

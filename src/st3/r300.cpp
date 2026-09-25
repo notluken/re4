@@ -85,7 +85,12 @@ extern "C" void* r300_memset(void*, ...) asm("memset");
 // Reference store: the work pointer and the field are reloaded after it.
 
 // Room id through the struct-member view of pG: the load stays below a preceding member store.
+// TARGET_PC: same G_ROOM_ID fix as global.h (stage_no moved to the union's second byte there).
+#ifdef TARGET_PC
+#define GS_ROOM_ID (pG->room_id)
+#else
 #define GS_ROOM_ID (*(u16*) &pG->stage_no)
+#endif
 
 static u8 r300_texTbl0[0x20];
 static u8 r300_texTbl1[0x20];

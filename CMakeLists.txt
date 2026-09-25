@@ -331,6 +331,12 @@ if (RE4_PC_BUILD_TESTS)
   target_link_libraries(test_os_thread PRIVATE re4_port)
   add_test(NAME test_os_thread COMMAND test_os_thread)
 
+  # test_room_id: GlobalWork::room_id/room_id_prev and CRoomInfo::roomNo TARGET_PC endian fix
+  # (docs/port-boot.md) -- global.h/room_jmp.h only, no re4_port link needed.
+  add_executable(test_room_id tests/port/test_room_id.cpp)
+  target_include_directories(test_room_id PRIVATE ${RE4_GAME_INCLUDES})
+  add_test(NAME test_room_id COMMAND test_room_id)
+
   # test_math_sub: a src/game unit's TARGET_PC substitutions (SQRTF/SINF/COSF/LIMIT_ANGLE,
   # docs/port-boot.md section 41), not re4_port -- links src/game/math_sub.cpp directly rather
   # than through re4_game_core/re4_boot_game, so it always builds regardless of RE4_U32_32.
