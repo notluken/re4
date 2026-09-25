@@ -1417,6 +1417,29 @@ void cDvd::FileTblExistCheck()
 {
     int i;
 
+#ifdef TARGET_PC
+    // SET_DRS_NAME() (game/read.cpp -- ReadPlayerData, ReadWepData, EmReadModule) mutates a
+    // FileTbl[].name string IN PLACE to swap its extension for ".drs": real GameCube behavior,
+    // since the vendor's string literals lived in a writable data section there. Clang places C++
+    // string literals in read-only __TEXT,__cstring on the host; writing through one SIGBUSes
+    // (measured live: ReadPlayerData -> SET_DRS_NAME -> EXC_BAD_ACCESS code=2 (KERN_PROTECTION_FAILURE),
+    // faulting address inside re4_boot's own __TEXT segment, maxprot r-x). Give every entry its own
+    // writable heap copy once, up front, before anything can read or mutate it -- intentionally
+    // leaked (FileTbl's names live for the whole process); a `static bool` guard makes this once-only
+    // even though FileTblExistCheck() itself also runs again on a disc change (DiscChange(), further
+    // down this file), which would otherwise re-copy an already-writable copy into a fresh one.
+    static bool s_madeWritable = false;
+    if (!s_madeWritable) {
+        s_madeWritable = true;
+        for (i = 0; i < sizeof(FileTbl) / sizeof(FileTbl[0]); i++) {
+            size_t len = strlen(FileTbl[i].name) + 1;
+            char* buf = new char[len];
+            memcpy(buf, FileTbl[i].name, len);
+            FileTbl[i].name = buf;
+        }
+    }
+#endif
+
     for (i = 0; i < sizeof(FileTbl) / sizeof(FileTbl[0]); i++) {
         FileTbl[i].entrynum = DVDConvertPathToEntrynum(FileTbl[i].name);
     }
