@@ -1,0 +1,42 @@
+diff --git a/lib/gx/fifo.cpp b/lib/gx/fifo.cpp
+index bcaba60..6741ab7 100644
+--- a/lib/gx/fifo.cpp
++++ b/lib/gx/fifo.cpp
+@@ -24,7 +24,36 @@ uint32_t sDlWritePos = 0;
+ 
+ namespace {
+ constexpr Module Log{"aurora::gx::fifo"};
+-constexpr auto kProcessingMode = ProcessingMode::Thread;
++// re4-port: was ProcessingMode::Thread (separate worker pthread, producer/consumer handshake via
++// std::atomic<uint32_t>::wait/notify_all on sWorkerWake and sProcessed). The re4 port's own
++// threading model runs the whole game on ONE host thread (fibers via ucontext, see
++// src/port/fiber.cpp) and never needs FIFO processing to overlap with anything else -- drain()
++// blocks the caller until the FIFO is empty either way, so the worker thread bought no real
++// concurrency for this port, only a wait/notify handshake to get wrong.
++//
++// Root cause of the game-thread deadlock this switch fixes: a genuine missed wakeup was observed
++// (via fprintf tracing) at drain()'s sProcessed.wait()/worker_main()'s sWorkerWake.wait() boundary
++// on the very first real GX FIFO drain of a session -- the worker thread parks in
++// sWorkerWake.wait(event) and is never woken again, even though drain() incremented sWorkerWake
++// and called notify_all() after storing the new sPublished target. A standalone minimal repro
++// (plain std::thread pair, no Aurora/GX code, same store->fetch_add->notify_all / load->wait
++// handshake shape, 2000 iterations with a randomized delay to shake out timing) did NOT reproduce
++// a hang on this exact toolchain (clang, libc++, macOS arm64) over 2000 iterations -- see
++// re4/docs/port-boot.md section 42/43 for the repro and the traced failure sequence. That rules
++// out "std::atomic<uint32_t>::wait is broken on this platform" as the explanation (this project's
++// own CLAUDE.md: never conclude a platform/compiler bug without a repro, and here the repro says
++// the *primitive* is fine). The
++// remaining possibilities are a subtler ordering bug specific to Aurora's three-atomic handshake
++// (sPublished / sProcessed / sWorkerWake) or an interaction with re4's specific call pattern
++// (GXDrawDone() -> Render_done() -> drain(), main.cpp's frame loop) not reproduced by the isolated
++// test -- neither pinned down further (budget). Given the port never needs the worker thread's
++// concurrency, removing it entirely (Drain: process synchronously inside publish()/drain(), no
++// second thread, no wait/notify at all) sidesteps the whole race class rather than chasing one
++// specific interleaving, and is strictly more deterministic for a "single game thread" design.
++// Upstream Aurora may still want ProcessingMode::Thread for its own (multi-thread) use cases; this
++// patch only changes the *port's* checkout, applied via tools/port/aurora-patches/, and is not
++// proposed upstream without its own investigation of the handshake bug.
++constexpr auto kProcessingMode = ProcessingMode::Drain;
+ constexpr uint32_t kDrawBatchSize = 1;
+ 
+ bool sFrameActive = false;

@@ -2977,3 +2977,51 @@ screenshot or a commit -- no diagnostic-only code is in any binary referenced ab
 above first), `trans.cpp`'s locked-cache design decision, `cUnit`/`cCoord`'s actual code change, and
 the title screen itself -- all now blocked on the FIFO deadlock above rather than on section 41's
 `ThreadExitException` (fixed) or `math_sub.cpp`'s exclusion (fixed).
+
+## 43. GX FIFO missed-wakeup fixed (minimal repro + `ProcessingMode::Drain` patch); new blocker found
+    one step later (2026-09-25, follow-up to section 42)
+
+**Minimal repro (task from section 42)**: a standalone `std::thread` pair (no Aurora/GX code at all)
+reproducing the exact handshake shape (`store(target) -> fetch_add+notify_all` / `load -> wait ->
+recheck`) on a second atomic, run 2000 times with a randomized delay to shake out timing, did **not**
+reproduce a hang on this toolchain (clang, libc++, macOS arm64). This rules out "`std::atomic<uint32_t>
+::wait`/`notify_all` is broken on this platform" as the explanation, per this project's own rule
+against blaming the platform without a repro -- the primitive itself is fine here.
+
+**Fix applied**: `tools/port/aurora-patches/0006-gx-fifo-drain-mode.patch` switches Aurora's
+`lib/gx/fifo.cpp` `kProcessingMode` from `ProcessingMode::Thread` to `ProcessingMode::Drain`. This
+port's design already runs the whole game on one host thread (fibers via ucontext); the FIFO worker
+thread bought no real concurrency here, only a wait/notify handshake between three atomics
+(`sPublished`/`sProcessed`/`sWorkerWake`) to get wrong. Rather than hunt the exact interleaving that
+produces the missed wakeup in Aurora's specific three-atomic handshake (out of budget, and the
+isolated repro above did not reproduce it in a simpler two-atomic version), removing the second
+thread entirely sidesteps the whole race class: `Drain` processes the FIFO synchronously inside
+`publish()`/`drain()`, no separate thread, no wait/notify at all. This is a port-local decision
+(`tools/port/aurora-patches/`, not proposed upstream); the patch's own header comment records the
+reasoning and what was and wasn't chased down.
+
+**Verified**: patch applies and reverses cleanly (`git apply --check` / `--reverse --check`) against
+the Aurora checkout's current working tree (the three earlier patches already applied). Clean
+`cmake --build build-pc-boot --target re4_boot` picks it up automatically (CMakeLists.txt's own
+idempotent per-configure patch-apply loop). Running `re4_boot` (`RE4_PORT_FIXED_VI=1`,
+`RE4_PORT_SCREENSHOT=...`) no longer hangs at the first GX drain: the log now shows real FIFO
+processing (`[debug] [aurora::gx::fifo] Unhandled XF register ...`/`Unhandled BP register ...`/
+`Unhandled XF memory write ...` -- genuine command-stream bytes reaching the processor) and the
+process now exits on its own within a couple of seconds instead of hanging indefinitely.
+
+**New blocker, one step later**: `[fatal] [aurora::gfx] No active recording session`, immediately
+after the FIFO processes the frame's first commands. The log's own preceding line already flagged the
+likely cause: `re4_port: aurora_begin_frame() returned false -- this frame's GX submission has no
+active recording session (window minimized/GPU not ready)` (`src/port/vi.cpp`'s own comment) --
+`Render()`/`DrawOTag` still run unconditionally per `main.cpp`'s unchanged frame loop even when
+`aurora_begin_frame()` says there is no session to draw into, so the FIFO's processor hits a real GX
+command with nothing to record it into. **Not chased further this pass (budget)**: whether this is a
+genuine "no display/headless" condition in this run environment vs. a port-side ordering bug (`Render()`
+needs to check the same `aurora_begin_frame()` return value `main.cpp`'s frame loop already discarded,
+or the frame loop needs to skip `Render()` for a frame with no session, matching real hardware's
+vertical-blank-pending behavior) -- **TO VERIFY** next session, distinct from and now blocking on top
+of this section's FIFO fix.
+
+**Host default build**: unaffected -- this patch only touches the Aurora checkout consumed by
+`RE4_BUILD_BOOT`, no `src/`/`include/` change in this repo. `re4_game_all -k 0` / `ctest` not
+re-run this session (no code in this repo changed that either target compiles).
