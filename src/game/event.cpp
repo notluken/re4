@@ -3255,9 +3255,9 @@ int DatTbl::SetDat(const char* nm, void* dat, u8 type, void* dat2, u8 flag, int*
             memclr_asm(&pWork[i], sizeof(DatTblEntry));
             pWork[i].FlagBe8 = flag | 1;
             strcpy(pWork[i].Name, nm);
-            pWork[i].Dat = dat;
+            pWork[i].Dat = (u8*) dat;
             pWork[i].Etc = type;
-            pWork[i].dat2 = dat2;
+            pWork[i].dat2 = (u8*) dat2;
             pWork[i].Count = 1;
             if (wkNo != 0) {
                 *wkNo = i;

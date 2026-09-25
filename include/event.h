@@ -6,6 +6,9 @@
 #include "db_log.h"
 #include "cManager.h"
 #include "main_mem.h"
+#ifdef TARGET_PC
+#include "port/ptr32.h"
+#endif
 
 #line 8 "D:/Bio4/Prog/event.h"
 
@@ -31,14 +34,25 @@ public:
 class cModel;
 class cLit;
 
-// Named data slot table (game/event.cpp `cDatTbl`, demangled `DatTbl`): `num` entries of 0x3C.
+// Named data slot table (game/event.cpp `cDatTbl`, demangled `DatTbl`): `num` entries of 0x3C on
+// the original target. A runtime pool object (DatTbl::init's `MEM_ALLOC(num * sizeof(DatTblEntry),
+// ...)`) allocated from the same heap the card screen's own scratch budget shares -- same reasoning
+// as IdUnit (include/id_sys.h): plain 8-byte host pointers here would widen every entry past its
+// GameCube size and eat into that shared, byte-budgeted heap. Ptr32<u8> under TARGET_PC restores
+// the exact 0x3C size (no call-site changes for reads; the two `void*`-typed writes -- SetDat's
+// own `dat`/`dat2` parameters -- get an explicit `(u8*)` cast, src/game/event.cpp).
 struct DatTblEntry {
     char Name[0x30];   // 0x00
     u8 FlagBe8;           // 0x30  bit0: in use, bit1: `dat2` is a debug-heap block freed with the entry
     u8 Etc;           // 0x31
     u16 Count;         // 0x32  reference count (SetDat of an existing name increments it)
+#ifdef TARGET_PC
+    re4_port::Ptr32<u8> Dat;  // 0x34
+    re4_port::Ptr32<u8> dat2; // 0x38
+#else
     void* Dat;         // 0x34
     void* dat2;        // 0x38
+#endif
 };
 
 class DatTbl {
