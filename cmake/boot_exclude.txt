@@ -40,20 +40,32 @@ src/game/sce_at.cpp
 # Ptr32<T>/array-pointee/Sema interaction bugs (Phase 2 step 5 follow-up, not Phase 5):
 src/game/Espgen43.cpp
 
-# Remaining direct/macro pointer<->integer casts, not yet hand-fixed (Phase 2 step 4 candidates,
-# same shape as the PG_OFS/FlagXor fixes already landed -- just not reached this session):
-src/game/act_btn.cpp
-src/game/datactrl.cpp
+# act_btn.cpp, datactrl.cpp, game.cpp, mercenaries.cpp, objRocket.cpp, pl_ashley.cpp, pl_leon.cpp,
+# pl_sub.cpp, sce_com.cpp, sce_sys.cpp, scroll.cpp: un-excluded -- all failed only because of a
+# re4_cast_rewriter bug (tools/port/cast_rewriter/CastRewriter.cpp), not a real source-level gap.
+# `getExpansionLoc()` always collapses to the *start* of a macro expansion regardless of whether
+# the queried location was itself a begin or an end token, so a cast whose argument is a
+# function-like macro call with its own nested expansions (`(u32) WEP_ARC_PTR(0x7)` ->
+# `PL_ARC_PTR(arc, no)`) had its rewritten range truncated right after the macro name, leaving the
+# real argument list (`(0x7)`) as unconverted trailing text, while the macro's parameter names
+# (`arc`, `no`) leaked into the replacement verbatim from the #define's own spelling instead of the
+# call site's substituted arguments ("use of undeclared identifier 'arc'"/'no'" downstream). Fixed
+# by using `getExpansionRange(Loc).getBegin()/.getEnd()` (the *ultimate-file* range of the whole
+# macro invocation) instead, plus a narrower fix so a *foreign* macro nested inside a non-macro-body
+# cast's argument (`(u32) DVD_BUFF2`, src/game/dvd.cpp) is left as opaque call-site text rather than
+# recomposed inline -- that recomposition is already done, once, at the macro's own #define text
+# when it is defined in the same TU (the MacroBody path), and doing it a second time at every call
+# site duplicated/mismatched the conversion. Regression test:
+# tools/port/cast_rewriter/tests/test_macro_ranges.cpp. Two casts in cManager.h (getPrevWork) and
+# flag_rsf.h (RsfFlagWord) plus one in game.cpp (dispWorkNum) were real, separate header/`.cpp`-
+# level casts the rewriter correctly never touches (not macro-produced) -- hand-fixed with the same
+# GC32-based TARGET_PC branch as cManager<T>::destroy's existing VALID_PTR-style check.
+#
+# esp0a.cpp: NOT a cast-rewriter issue -- `AddOtWorldPos(e, Esp0a_Trans2, ...)` passes a
+# `void (*)(cEsp*)` callback where the SDK declares `void (*)(void*)`; the vendor's GCC 2.95 allowed
+# the implicit function-pointer-type mismatch, clang does not. Same "AddOtWorldPos-shaped SDK call"
+# pattern flagged out-of-scope by docs/port-phase2.md section 6's step 5 -- not attempted here.
 src/game/esp0a.cpp
-src/game/game.cpp
-src/game/mercenaries.cpp
-src/game/objRocket.cpp
-src/game/pl_ashley.cpp
-src/game/pl_leon.cpp
-src/game/pl_sub.cpp
-src/game/sce_com.cpp
-src/game/sce_sys.cpp
-src/game/scroll.cpp
 
 # Two whole-function-asm units, excluded from re4_game_all itself already (never attempted here):
 src/game/memset_2.cpp
