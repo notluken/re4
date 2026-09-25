@@ -1961,3 +1961,131 @@ is unreachable no matter how correct the render path is.
 
 - DVD alignment-padding fix (`tools/port/aurora-patches/0003-dvd-align-padding.patch`)
 - GX implicit-end warning suppression (`tools/port/aurora-patches/0004-gx-implicit-end-suppress-mismatch-warning.patch`)
+
+## 33. Continuing past section 32: DvdHeader endianness (real root cause of the title.snd hang),
+    sound-block skip, a real scheduler missed-wakeup race fixed, one scheduler race still open
+    (2026-09-25)
+
+Coordinator-directed follow-up. Ordered by what was asked: (1) the ARAM-DMA hang from section 32,
+(2) font glyph rendering, (3) reach the title screen.
+
+### 1. The section 32 "ARAM-DMA hang" hypothesis was wrong; the real bug was DvdHeader endianness
+
+A temporary diagnostic print (`cDvdQueue::readMain`, reverted after use -- confirmed byte-identical
+to HEAD) showed the real cause immediately: `title.snd`'s multi-part file header (`DvdHeader`,
+`include/dvd.h`) is read straight off disc for "headered" files (`DvdReq::mode` bit 15) and was
+**never byte-swapped** on this host -- every field (`type`, `size`, `ofs`, `sndType`, ...) came
+through as raw big-endian garbage (`type=16777216` instead of `1`, etc.). `cDvdQueue::readMain()`'s
+`switch ((*ph)->type)` matched no known `TRANS_*` case for that garbage value, so the state machine
+silently looped forever re-processing the same unrecognized entry -- explaining the "sleeping, 0%
+CPU, no crash" signature exactly (each `Read()` poll did real, bounded work and returned, forever,
+with no crash and no progress). Not an ARAM/DMA issue at all -- that hypothesis (section 32) is
+retracted; Aurora's own AR.cpp (a real, synchronous host ARQ/AR implementation, already linked into
+`aurora_os`) was never actually reached along this path in the first place (confirmed: `src/lib/
+arq.c`/`AR.c`, the real-hardware-register version, are not even compiled into `re4_boot_game` --
+`aurora_os`'s own `AR.cpp` provides these symbols instead, `nm` on the individual `.o` files
+confirmed this unambiguously).
+
+Fixed with `BE<u32>` under `TARGET_PC` on every `DvdHeader` field (`include/dvd.h`), the same
+treatment TPL/model structs already have (Phase 3) -- transparent on both the disc-read path and
+the non-headered path's synthesized-in-memory fake header (`readInit`'s plain host-native
+assignments to the same fields keep working through `BE<T>`'s normal assignment operator). One call
+site (`m_BaseOffset[...] = m_NestDepth ? pFilehead[...]->ofs : m_Offset;`) became an ambiguous
+`BE<u32>`/`u32` ternary; given an explicit cast under `TARGET_PC` only (`#else` byte-identical).
+
+**Verified**: with this fix alone, every DVD read's type/size/ofs field decoded correctly (confirmed
+live: `type=1 size=1312 ofs=1024 sndType=6`, all plausible).
+
+### 2. New crash once real values came through: TRANS_SND_BLK/PCM into an unmapped sound address
+
+With the header now readable, `TRANS_SND_BLK`'s destination computation (`SndMem.blk_mram[t] =
+Snd.mram_top`) resolved to a real, address-zero destination -- `SndInit()`'s "sound off" stub
+(Phase 5, sections 15/23) never carves real MRAM/ARAM sound-block addresses, unlike every other
+`SndMem`-dependent call site already found and guarded (`SndBlkInit`, `SndBgmLoad`, `cCard::
+initSub`). This one (header-driven DVD load, not the sound-side load functions) had no existing
+guard, and `cDvdQueue::trans2mram()`'s eventual `memcpy((void*) 0, ...)` segfaulted (confirmed live
+with `lldb`, real `SIGSEGV`, `addr: 00000000` in the log immediately before). Fixed the same way as
+every other "sound off" site: skip the entry under `TARGET_PC` (`(*ph)++; break;`, matching
+`TRANS_NONE`'s own handling) for both `TRANS_SND_BLK` and `TRANS_SND_PCM`.
+
+**Verified**: `title.snd` now completes its whole read (`DVD: Read Ok  <n>`), and the very next file
+(`ss/cmn/save_e.dat`, the card/save-data probe) reads and completes too -- real progress past two
+whole files this session did not reach before.
+
+### 3. A real, confirmed scheduler missed-wakeup race, fixed -- but a second, still-open one remains
+
+Past both fixes above, the game still hung (confirmed again: `ps`/`top` showed 0% CPU, `sleeping`
+state, for 60+ real seconds, until the vendor's own hang watchdog (`haltExecCheck()`, `vsync_cnt >
+3599`) fired and crashed on its own unhandled debug-halt address (`0x11111111`) -- this watchdog
+firing at the *documented* ~60-second real-time threshold (confirmed by timing an actual run) rules
+out the earlier "vsync counter racing ahead of real time" possibility; the game thread is genuinely
+blocked.
+
+`lldb`, attached live mid-hang (before the watchdog fires, `thread backtrace all`), showed every one
+of this port's own real per-task threads (Title_task, `cCard::initSub`, `cDvd::readProcMain`) parked
+in `OSSleepThread`'s condvar wait (normal, expected -- each is correctly waiting its turn), and the
+one thread that drives the whole cooperative scheduler (`TaskSchedulerMain` -> `WaitForHandback()`
+-> `BecomeRunner()`) *also* blocked, waiting for a "handback" token (`g_holder`, `src/port/
+os_thread.cpp`) nothing will ever set again -- a genuine deadlock, not a slow-progress illusion.
+
+Root-caused one real race with a further live diagnostic (temporary prints in `OSWakeupThread`/
+`OSSleepThread`, reverted after use): `OSWakeupThread(queue)` observed with **no registered
+sleeper** (`target==nullptr`) right before the hang. `scheduler.cpp`'s own `TaskSleep()` (real
+vendor code) hands control back to the parent thread (`OSResumeThread(pParentThread)`) *before*
+registering the task as asleep (`OSSleepThread(&pCTask->Queue)`) -- atomic and race-free on the real
+single-core target, but a genuine TOCTOU race once the parent/scheduler and the task are real,
+independent host threads: the scheduler can regain control, cycle back to this same task's slot on
+a *later* pass, decrement its sleep counter to 0, and call `OSWakeupThread()` on its queue *before*
+the task's own thread has actually reached its `OSSleepThread()` call -- permanently losing that
+wakeup (previously: a no-op). Fixed (`src/port/os_thread.cpp`, port-only) with a per-queue "pending
+wake" mark, exactly like a binary semaphore: `OSWakeupThread()` finding no sleeper leaves a mark
+instead of dropping the wakeup, and `OSSleepThread()` consumes a mark instead of blocking if one is
+already there when it registers -- correct regardless of which side of the rendezvous arrives
+first, with no change to `scheduler.cpp`'s own (byte-identical) call order.
+
+**This fix alone does not resolve the hang.** A second run, with more diagnostic prints
+(`OSResumeThread`/`OSSleepThread`/`OSWakeupThread` all logging), still deadlocked at the same
+"three tasks parked, scheduler waiting forever" signature -- but one log line right before it is a
+real, different smoking gun, not yet root-caused further this pass:
+
+```
+DBG OSWakeupThread: queue=0x105c48bd8 target=0x105c48880
+DBG OSSleepThread: queue=0x105c48bd8 self=0x105c48130     <- different thread, same queue address
+```
+
+A *different* `OSThread*` (`0x105c48130`, previously only ever seen registering on a *different*
+queue, `0x105c48488`) registers as asleep on the queue that had just been woken for `0x105c48880`.
+Since each real task's `TASK::Queue` is a distinct field of that task's own struct, one thread
+calling `OSSleepThread(&pCTask->Queue)` with the *wrong* task's queue address means `pCTask`
+(`scheduler.cpp`'s single global "current task" pointer, real vendor code, correct by construction
+only if truly one thread executes task code at a time) was read while pointing at the wrong task --
+i.e. two of this port's real host threads were both executing task-scheduler-adjacent code
+concernedly for at least the span between one thread's `TaskSleep()` reading `pCTask` and another's
+own read/write of the same global. **Not resolved this pass** (budget) -- the missed-wakeup fix
+above is real and independently correct (and needed regardless), but the underlying invariant this
+port's whole cooperative-scheduler design depends on ("`BecomeRunner()` truly excludes every other
+thread from touching shared globals like `pCTask` until it returns") appears to have a second, real
+gap somewhere in the handback protocol, most likely around exactly when the *previous* holder is
+guaranteed to have stopped touching scheduler-global state relative to when the *next* holder is
+allowed to start. Next step: audit every `pCTask`/`pParentThread`-touching call site in
+`scheduler.cpp` against the exact point `BecomeRunner()`'s condition variable actually releases each
+thread, with a live trace of `pCTask`'s value alongside the existing wakeup/sleep prints, to find
+the second race's precise window.
+
+### 4. Screenshot taken this pass, honestly described
+
+`boot_4.png` (scratchpad dir), captured ~1.5 s after window open (well before the still-open
+scheduler race hangs the game thread): identical to sections 29/31's debug-overlay content (grey
+horizontal bars, no glyph shapes, small vertical colour strip) -- neither of this pass's real fixes
+changed what is visibly rendered, since both are earlier-in-the-boot-sequence correctness fixes,
+not rendering fixes. Font-glyph-texture root-causing (`GXInitTexObj`/`GXLoadTexObj`, per the
+coordinator's item 2) was not reached this pass -- the game never gets far enough past the second
+scheduler race to load `title.dat` (the archive with the title's own textures), so there is nothing
+new to check there yet.
+
+### Commits this pass
+
+- `97deddfb` -- DvdHeader endianness fix + sound-block skip (`src/game/dvd.cpp`, `include/dvd.h`;
+  touches outside `src/port`/`include/port`, remote-verified: see below)
+- `5b6e37bf` -- missed-wakeup race fix (`src/port/os_thread.cpp`, port-only, no remote round trip
+  needed)
