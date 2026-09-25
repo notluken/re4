@@ -17,6 +17,65 @@ The repository contains no game assets and no code or data copied from the discs
 own images of the debug discs to build (disc 1 for `main.dol` and most RELs, disc 2 for the four
 island-stage RELs); the original files are read from them at configure time.
 
+## macOS port (work in progress)
+
+This fork (branch `port/macos-arm64`) is also porting the decompiled game to run natively on
+Apple Silicon Macs: clang, CMake, and [Aurora](https://github.com/encounter/aurora) for GX, VI,
+PAD, DVD and CARD. All port code sits behind `#ifdef TARGET_PC`, so the GameCube build above still
+produces the original bytes; every change that touches game sources is checked with a clean
+rebuild and `dtk shasum` (115/115 `OK`) before it is merged.
+
+**Status.** The main executable (`main.dol`'s code, `re4_boot`) boots through the memory-card
+check and the title flow to the save/load menu, with readable text, textured 2D and keyboard input.
+Sound is off, the REL overlays (enemies, rooms, weapons, characters) are not linked yet, so there is
+no gameplay. Next milestone: link the room, weapon and enemy modules and enter the first room.
+
+**Build and run** (macOS on Apple Silicon, Homebrew):
+
+```sh
+brew install cmake ninja llvm sdl3 libpng fmt zstd freetype xxhash
+git clone https://github.com/encounter/aurora ../aurora    # next to this checkout
+# your own disc image in orig/G4BE08/ (see Building below), extracted once by configure.py
+
+# the build-time cast rewriter (once)
+cmake -S tools/port/cast_rewriter -B build-pc-tool -G Ninja \
+      -DCMAKE_PREFIX_PATH=$(brew --prefix llvm) -DCMAKE_BUILD_TYPE=Release
+cmake --build build-pc-tool
+
+# the game
+cmake -S . -B build-pc-boot -G Ninja -DRE4_BUILD_BOOT=ON -DRE4_U32_32=ON \
+      -DRE4_CAST_REWRITER_BIN="$PWD/build-pc-tool/re4_cast_rewriter" -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-pc-boot --target re4_boot
+
+# run from the repository root
+./build-pc-boot/re4_boot orig/G4BE08/files orig/G4BE08/re4_debug_disc1.iso
+```
+
+Keys: Enter = Start, Z = A, X = B, C = X, V = Y, arrows = D-pad; a gamepad also works. Saves go to
+`~/Library/Application Support/re4-port/card` (`RE4_CARD_DIR` overrides it). Debug switches:
+`RE4_PORT_INPUT="frame:BUTTON,..."` scripts button presses, `RE4_PORT_FIXED_VI=1` makes a run
+deterministic, `RE4_PORT_SCREENSHOT=<png>` captures the game window.
+
+**How the port works**, in short:
+
+- *Memory.* The game assumes 32-bit pointers and the GameCube memory map. A 1 GB arena inside the
+  executable reproduces that map (16 KB of low memory at GC `0x80000000`, then the game's globals,
+  then the heaps), and pointers the game keeps in 32 bits are stored as offsets from a base
+  (`Ptr32<T>`), so address checks, bit-31 tricks and relocation markers behave as on the console.
+- *Byte order.* Disc data stays big-endian in memory; on-disc struct fields are declared as
+  `BE<T>`, which swaps on every access, so the engine can relocate, save and move data in place.
+- *Casts.* A libTooling tool (`tools/port/cast_rewriter`) rewrites pointer↔integer casts into
+  generated copies under the build directory; the original sources are left untouched.
+- *Threads.* The game's cooperative OS threads run as fibers on one host thread, as they did on
+  the single-core console.
+- *Assembly.* The paired-single kernels the port needs are rewritten in C and checked bit for bit
+  against the original instructions run in a small Gekko simulator (`tools/port/ppcsim`).
+
+Plan and findings: `docs/port.md` (phases), `docs/port-phase2.md` (pointers and memory),
+`docs/port-phase3.md` (byte order), `docs/port-boot.md` (boot log, build and run details),
+`docs/port-layout-parity.md` (struct sizes against the GameCube). The `Dockerfile` reproduces the
+original GameCube build on an x86_64 Linux host.
+
 ## Building
 
 Linux, Python 3, [ninja](https://ninja-build.org/). Compilers and tools (decomp-toolkit, objdiff,
