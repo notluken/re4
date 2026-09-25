@@ -4,19 +4,42 @@
 #include "types.h"
 #include "vec.h"
 #include "obj.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
+
+#ifdef TARGET_PC
+// On-disc big-endian f32 triplet (docs/port-phase3.md), same shape as id_sys.h's BeVec: SmdWork is
+// read straight off the room archive ("SMD" tag) with no separate byte-swap pass, unlike a runtime
+// cObj's own plain Vec fields.
+struct SmdVec {
+    re4_port::BE<f32> x, y, z;
+    operator Vec() const { return Vec{ (f32) x, (f32) y, (f32) z }; }
+};
+#endif
 
 // Scroll (room model) data file `SMD` (game/scroll.cpp). One SmdWork per placed model.
 struct SmdWork {
+#ifdef TARGET_PC
+    SmdVec pos;    // 0x00
+    SmdVec rot;    // 0x0C
+    SmdVec scale;  // 0x18
+#else
     Vec pos;       // 0x00
     Vec rot;       // 0x0C
     Vec scale;     // 0x18
+#endif
     u8 binNo;      // 0x24  bin table index (0xFF: none)
     u8 tplNo;      // 0x25  tpl table index (0xFF: none)
     u8 motNo;      // 0x26  motion table index (0xFF: none)
     u8 id;         // 0x27  scroll object id (0xFF: unused, 0xFE: not registered)
     u8 pad_28[0x44 - 0x28];
     union {
+#ifdef TARGET_PC
+        re4_port::BE<u32> flags;   // 0x44  bit4: bin/tpl come from the common SMD, bit6: motion too
+#else
         u32 flags;   // 0x44  bit4: bin/tpl come from the common SMD, bit6: motion too
+#endif
         struct {
             u8 pad_44[3];
             u8 attr;  // 0x47  low byte of flags -> cObj::attr
@@ -28,15 +51,27 @@ class cSmd {
 public:
     u8 Version;    // 0x00
     u8 Flag;      // 0x01  bit0: group count table in front of the works
+#ifdef TARGET_PC
+    re4_port::BE<u16> nModel;     // 0x02
+    re4_port::BE<u32> BinTblOfs;    // 0x04  offset table of the bins
+    re4_port::BE<u32> TplTblOfs;    // 0x08  offset table of the tpls
+    re4_port::BE<u32> MotTblOfs;    // 0x0C  offset table of the motions
+#else
     u16 nModel;     // 0x02
     u32 BinTblOfs;    // 0x04  offset table of the bins
     u32 TplTblOfs;    // 0x08  offset table of the tpls
     u32 MotTblOfs;    // 0x0C  offset table of the motions
+#endif
     union {
         SmdWork work[1];   // 0x10
         struct {
+#ifdef TARGET_PC
+            re4_port::BE<u32> nGroup;    // 0x10
+            re4_port::BE<u32> num[1];    // 0x14  works per group
+#else
             u32 nGroup;    // 0x10
             u32 num[1];    // 0x14  works per group
+#endif
         } grp;
     };
 

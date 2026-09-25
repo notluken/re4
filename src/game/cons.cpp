@@ -5,12 +5,25 @@
 
 #include "types.h"
 #include "db_log.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
-// Per-room constants: a count, a validity bitmap and the values.
+// Per-room constants: a count, a validity bitmap and the values. On-disc, big-endian (Phase 3,
+// docs/port-phase3.md) -- room archive tag "CNS" -- num/bits/values all need BE<u32> under
+// TARGET_PC: previously left entirely raw (missed by every earlier survey pass), so `r->num` read
+// as a garbage/huge host-native value made every ConsGetRoomValue() call fall through to
+// ConsRoomDefault[] (id >= r->num always true) or, worse, index `values[id]` with the bit test
+// passing by chance -- feeding cModInfoMgr::create()/other room-pool allocations a garbage count.
 // ConsInitCore is unused in this build (only its message survives in .rodata).
 struct ConsRoom {
+#ifdef TARGET_PC
+    re4_port::BE<u32> num;
+    re4_port::BE<u32> bits[1];  // (num >> 5) + 1 words, followed by u32 values[num]
+#else
     u32 num;
     u32 bits[1];  // (num >> 5) + 1 words, followed by u32 values[num]
+#endif
 };
 
 static u32 ConsRoomDefault[12] = {
@@ -41,8 +54,13 @@ int ConsInitRoom(ConsRoom* p)
 u32 ConsGetRoomValue(u32 id)
 {
     ConsRoom* r = pConsRoom;
+#ifdef TARGET_PC
+    re4_port::BE<u32>* bits;
+    re4_port::BE<u32>* values;
+#else
     u32* bits;
     u32* values;
+#endif
 
     if (r == 0) {
         return ConsRoomDefault[id];
