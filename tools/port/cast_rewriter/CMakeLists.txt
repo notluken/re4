@@ -46,3 +46,15 @@ target_link_libraries(re4_cast_rewriter PRIVATE
   clangBasic
   clangSupport
 )
+
+# Regression test (tests/run_test.sh): a fixture with the three macro shapes that produced real
+# bugs (docs/port-phase2.md section 8's macro-range fix) -- runs the just-built binary, checks the
+# rewritten output both by text pattern and by actually compiling it against a stub re4_port.
+enable_testing()
+execute_process(COMMAND /opt/homebrew/opt/llvm/bin/clang -print-resource-dir
+                 OUTPUT_VARIABLE RE4_CAST_REWRITER_TEST_RESOURCE_DIR
+                 OUTPUT_STRIP_TRAILING_WHITESPACE)
+add_test(NAME re4_cast_rewriter_macro_ranges
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_test.sh
+                 $<TARGET_FILE:re4_cast_rewriter>
+                 ${RE4_CAST_REWRITER_TEST_RESOURCE_DIR})

@@ -192,6 +192,28 @@ private:
         if (!S)
             return;
         if (auto *CE = dyn_cast<ExplicitCastExpr>(S)) {
+            // A macro-produced nested cast (its own ExprLoc is a macro ID) is already handled by
+            // its own independent RecursiveASTVisitor visit to handleCast -- either SKIPped
+            // (macro-in-header) or rewritten in place at the #define's own text (MacroBody, a macro
+            // defined in this TU's own file). Composing it a second time *here*, inline at this
+            // call site, double-processes it: measured on src/game/dvd.cpp's `(u32) DVD_BUFF2`
+            // (`#define DVD_BUFF2 ((void*) 0x80360000)`, defined in dvd.cpp itself) -- the literal
+            // `0x80360000` a level down is itself macro-produced, and composing it here produced
+            // text mixing the call site's macro *name* with the definition's internal cast, wrong
+            // either way E->getSubExpr() and the get-fixed macro body were meant to agree. Leave it
+            // alone; buildSubexprText's caller falls back to getSourceText, which returns the
+            // macro invocation's own call-site text unchanged (still correct C++ once the macro's
+            // own body has been separately rewritten, if it needed to be).
+            // Only skip when we are not already inside a macro-body composition (UseSpelling):
+            // when UseSpelling is true, this nested cast's macro-ness is the SAME enclosing macro
+            // whose body text we are currently splicing together (e.g. DATA_PTR's outer `(void*)
+            // (... + (u32) (d))`, mercenaries.cpp -- the inner `(u32) (d)` is part of that same
+            // #define and must still be spliced in, since its own independent handleCast visit
+            // gets SKIPped as "already rewritten" -- nested inside the outer's just-recorded
+            // range). When UseSpelling is false, a macro-produced nested cast is always a
+            // *different*, independently-handled site (see the comment above).
+            if (!UseSpelling && CE->getExprLoc().isMacroID())
+                return;
             std::string Repl = tryBuildCastReplacement(CE, UseSpelling, nullptr);
             if (!Repl.empty()) {
                 SourceManager &SM = Context.getSourceManager();
@@ -222,9 +244,14 @@ private:
     {
         Expr *Stripped = E->IgnoreParens();
         if (auto *CE = dyn_cast<ExplicitCastExpr>(Stripped)) {
-            std::string Composed = tryBuildCastReplacement(CE, UseSpelling, nullptr);
-            if (!Composed.empty())
-                return Composed;
+            // Same reasoning as collectNestedCasts's guard just below: a macro-produced cast that
+            // is NOT part of the macro body we are already composing (UseSpelling) is handled by
+            // its own independent handleCast visit, not composed again here.
+            if (UseSpelling || !CE->getExprLoc().isMacroID()) {
+                std::string Composed = tryBuildCastReplacement(CE, UseSpelling, nullptr);
+                if (!Composed.empty())
+                    return Composed;
+            }
         }
         std::string Base = getSourceText(E, UseSpelling);
         if (Base.empty())
@@ -285,16 +312,32 @@ private:
         } else if (!SM.isWrittenInMainFile(Loc)) {
             return true; // only rewrite casts physically in this TU's own file, not #included ones
         } else {
-            // Not itself macro-bodied, but the cast's own end token can still be a macro ID -- its
-            // *argument* can be another object-like macro (`(u32) DVD_BUFF2`,
-            // `#define DVD_BUFF2 ((void*) 0x80360000)`): E->getSourceRange() then reports a macro-ID
-            // end location. Using getSpellingLoc there would jump to DVD_BUFF2's own #define text
-            // (wrong file position entirely -- measured, produced a corrupted double-text edit);
-            // getExpansionLoc keeps it at the actual call site, which Rewriter::ReplaceText needs.
+            // Not itself macro-bodied, but the cast's own begin/end token can still be a macro ID --
+            // its *argument* (or, one level further, its subexpression) can be another macro call,
+            // object-like (`(u32) DVD_BUFF2`, `#define DVD_BUFF2 ((void*) 0x80360000)`) or
+            // function-like with its own nested expansions (`(u32) WEP_ARC_PTR(no)`, which expands
+            // through PL_ARC_PTR's body). E->getSourceRange() then reports a macro-ID end location.
+            // Using getSpellingLoc there would jump to the macro's own #define text (wrong file
+            // position entirely -- measured, produced a corrupted double-text edit).
+            // getExpansionLoc(Loc) always collapses to the *start* of the expansion that produced
+            // Loc -- SourceManager's own doc: "the expansion location referenced by the ID" resolves
+            // through ExpansionLocStart regardless of whether Loc was itself a begin or an end token
+            // -- so using it for EditEnd truncates the replaced range to the macro invocation's
+            // opening token (measured: `(u32) WEP_ARC_PTR(0x7)` rewritten to
+            // `(u32)re4_port::GC32(...)(0x7)`, the trailing `(0x7)` left over because EditEnd landed
+            // right after the macro name instead of after the closing `)`, with `arc`/`no` verbatim
+            // from the macro body's spelling text since MacroBody was false so buildSubexprText's
+            // getSourceText() spelling-fallback picked up the #define's own text, not the call
+            // site's substituted arguments). getExpansionRange(Loc).getEnd() instead reports "the
+            // range of tokens covered by the expansion in the ultimate file", i.e. the real end of
+            // the whole macro invocation at the call site -- exactly what Rewriter::ReplaceText
+            // needs. Begin already worked with getExpansionLoc precisely because a begin location's
+            // expansion-start *is* the correct answer; kept as-is for clarity, but pinned through
+            // the same ultimate-file-range accessor for symmetry.
             if (EditBegin.isMacroID())
-                EditBegin = SM.getExpansionLoc(EditBegin);
+                EditBegin = SM.getExpansionRange(EditBegin).getBegin();
             if (EditEnd.isMacroID())
-                EditEnd = SM.getExpansionLoc(EditEnd);
+                EditEnd = SM.getExpansionRange(EditEnd).getEnd();
         }
 
         SourceRange EditRange(EditBegin, EditEnd);
@@ -331,24 +374,41 @@ private:
     // parameter name like `p`, not whatever argument a particular call site substituted), which is
     // exactly what belongs in the rewritten #define.
     //
-    // Falls back to spelling-based text whenever the requested mode's range is a macro ID, rather
-    // than giving up: a non-macro-body call site whose *argument* is itself another object-like
-    // macro (e.g. `(u32) DVD_BUFF2` where `#define DVD_BUFF2 ((void*) 0x80360000)`) has a
-    // subexpression whose *tokens* are spelled inside DVD_BUFF2's own definition even though the
-    // call site itself is ordinary code -- found live in src/game/dvd.cpp, composing through
-    // buildSubexprText's recursive cast handling failed silently before this fallback existed
-    // (docs/port-phase2.md section 9's boot-path work).
+    // Falls back to the *expansion* range (the call site's own verbatim text in the ultimate file,
+    // e.g. `WEP_ARC_PTR(0x7)` or `DVD_BUFF2`) whenever the requested (non-spelling) mode's range is
+    // a macro ID, rather than giving up: a non-macro-body call site whose *argument* is itself
+    // another macro call -- object-like (`(u32) DVD_BUFF2`, `#define DVD_BUFF2 ((void*)
+    // 0x80360000)`, src/game/dvd.cpp) or function-like with parameters (`(u32)
+    // WEP_ARC_PTR(0x7)` -> `PL_ARC_PTR(arc, no)`'s body, src/game/objRocket.cpp) -- has a
+    // subexpression whose non-argument *tokens* are spelled inside that macro's own #define text.
+    // getSpellingLoc-per-endpoint used to be used here unconditionally: for a *function-like*
+    // macro it collapses the whole range to the literal parameter names (`arc`, `no`) as written in
+    // the header, not the actual argument text a given call site substituted (`pG->pWep`, `0x7`) --
+    // measured as literal `arc`/`no` in the rewritten output, "use of undeclared identifier"
+    // downstream. getExpansionRange(...).getBegin()/.getEnd() instead reports the range of tokens
+    // covered by the expansion *in the ultimate (call-site) file* -- exactly the macro invocation as
+    // written at the call site, valid C++ on its own and correctly substituted when the real
+    // compiler later expands it, so composing it verbatim into the GC32()/GCPTR<T>() wrapper is
+    // both simpler and correct; no need to reconstruct the macro's internals here (any cast genuinely
+    // inside the macro's own header definition is a separate, already-skipped site -- handleCast's
+    // "SKIP macro-in-header", not this function's job).
     std::string getSourceText(Expr *E, bool useSpelling = false)
     {
         SourceManager &SM = Context.getSourceManager();
         const LangOptions &LO = Context.getLangOpts();
         SourceRange R = E->getSourceRange();
-        if (!useSpelling && !R.getBegin().isMacroID() && !R.getEnd().isMacroID()) {
+        if (!R.getBegin().isMacroID() && !R.getEnd().isMacroID()) {
             CharSourceRange CR = CharSourceRange::getTokenRange(R);
             return Lexer::getSourceText(CR, SM, LO).str();
         }
-        SourceRange SpellR(SM.getSpellingLoc(R.getBegin()), SM.getSpellingLoc(R.getEnd()));
-        CharSourceRange CR = CharSourceRange::getTokenRange(SpellR);
+        if (useSpelling) {
+            SourceRange SpellR(SM.getSpellingLoc(R.getBegin()), SM.getSpellingLoc(R.getEnd()));
+            CharSourceRange CR = CharSourceRange::getTokenRange(SpellR);
+            return Lexer::getSourceText(CR, SM, LO).str();
+        }
+        SourceLocation EB = SM.getExpansionRange(R.getBegin()).getBegin();
+        SourceLocation EE = SM.getExpansionRange(R.getEnd()).getEnd();
+        CharSourceRange CR = CharSourceRange::getTokenRange(SourceRange(EB, EE));
         return Lexer::getSourceText(CR, SM, LO).str();
     }
 };
