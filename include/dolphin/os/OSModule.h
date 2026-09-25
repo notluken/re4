@@ -91,11 +91,17 @@ struct OSModuleHeader {
 #endif
 };
 
-// (u32) first: under TARGET_PC, sectionInfoOffset is OSModU32 (BE<u32>, port/be.h) -- a class type
-// with only an `operator T()` conversion, not directly castable to a pointer type with one C-style
-// cast (needs the explicit intermediate u32 step); a no-op on the GameCube-matching build, where
-// sectionInfoOffset is already a plain u32.
+// Under TARGET_PC, sectionInfoOffset is OSModU32 (BE<u32>, port/be.h) -- a class type with only an
+// `operator T()` conversion, not directly castable to a pointer type with one C-style cast (needs
+// the explicit intermediate (u32) step). The GameCube-matching build keeps the vendor's original
+// macro text unconditionally, even though the extra cast would compile to identical bytes there too
+// (sectionInfoOffset is already a plain u32) -- the rule is that the original build sees the
+// original source, not a host-motivated rewrite that happens not to change anything this time.
+#ifdef TARGET_PC
 #define OSGetSectionInfo(module) ((OSSectionInfo*)(u32)(((OSModuleInfo*)(module))->sectionInfoOffset))
+#else
+#define OSGetSectionInfo(module) ((OSSectionInfo*)(((OSModuleInfo*)(module))->sectionInfoOffset))
+#endif
 
 struct OSSectionInfo {
     OSModU32 offset;
