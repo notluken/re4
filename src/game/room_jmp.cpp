@@ -16,6 +16,10 @@
 #include "room_jmp.h"
 #include "ref_access.h"
 
+#ifdef TARGET_PC
+#include "port/be.h" // re4_port::detail::bswap for the raw on-disc u32 table reads below
+#endif
+
 // Room jump tool work (0x38 bytes)
 struct test {
     s8 state;      // 0x00  tbl index
@@ -76,7 +80,16 @@ cRoomJmp::cRoomJmp(void* p)
     CRoomInfo* info;
 
     tbl = (u32*) p;
+#ifdef TARGET_PC
+    // roomInfoAddr is a raw on-disc big-endian table read straight through u32* here (unlike
+    // ArcFile/PlArc/RoomArc, global.h, which wrap their on-disc u32 fields in BE<u32>) -- every raw
+    // word this file reads out of it (stage count, per-stage offset, per-stage room count) needs an
+    // explicit swap under TARGET_PC. Byte-sized reads (CRoomInfo::stage/room, the getIndexNum s8
+    // read below) need no swap: a single byte is the same regardless of host endianness.
+    for (stage = 0; stage < re4_port::detail::bswap((std::uint32_t) tbl[0]); stage++) {
+#else
     for (stage = 0; stage < tbl[0]; stage++) {
+#endif
         if (getIndexNum(stage) == 0) {
             continue;
         }
@@ -107,7 +120,11 @@ cRoomJmp::cRoomJmp(void* p)
 s8 cRoomJmp::getIndexNum(s8 stage)
 {
     u32* p = tbl;
+#ifdef TARGET_PC
+    u32 ofs = re4_port::detail::bswap((std::uint32_t) ofsTbl(p)[stage]);
+#else
     u32 ofs = ofsTbl(p)[stage];
+#endif
 
     if (ofs == 0) {
         return 0;
@@ -140,6 +157,13 @@ CRoomInfo* cRoomJmp::getRoomInfo(u8 st, u8 idx)
     u32 n;
     u32 base;
 
+#ifdef TARGET_PC
+    if (st >= re4_port::detail::bswap((std::uint32_t) p[0])) {
+        return 0;
+    }
+    ofs = re4_port::detail::bswap((std::uint32_t) (p + 1)[st]);
+    n = re4_port::detail::bswap(*(std::uint32_t*) ((u8*) p + ofs));
+#else
     if (st >= p[0]) {
         return 0;
     }
@@ -147,6 +171,7 @@ CRoomInfo* cRoomJmp::getRoomInfo(u8 st, u8 idx)
     // allocates ofs before n (ofs r0, n r11) and global-alloc can give base the freed r0.
     do { ofs = (p + 1)[st]; } while (0);
     n = *(u32*) ((u8*) p + ofs);
+#endif
     base = (u32) p + ofs;
     if (idx >= n) {
         return 0;
