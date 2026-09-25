@@ -1722,3 +1722,156 @@ why the screenshot thread (`src/port/vi.cpp`'s `RunPresentLoop()`) isn't firing 
 Verified no regression on both fixes above (each checked independently, see their own paragraphs);
 default host build (`RE4_U32_32=OFF`) `re4_game_all -k 0` failing-file set unchanged (33 files) across
 both changes.
+
+## 31. GXMatrixIndex1u8 routed to Aurora, real GXWGFifo backing, eprintf/card fixes, first stable
+    frame loop (2026-09-24/25)
+
+Coordinator follow-up to section 30. Four fixes, in order, each verified independently.
+
+### 1. `GXMatrixIndex1u8` and every other static-inline GX shadow, audited
+
+No `GXMatrixIndex1x8` (or any similarly-named) symbol exists anywhere in Aurora (`grep`ped
+`../aurora/include`/`../aurora/lib` directly, not assumed) -- the real SDK has no dedicated GX*()
+entry point for a per-vertex matrix-index write at all, confirming section 30's note. Routed through
+`GXParam1u8` instead (a real, exported Aurora symbol that appends one raw byte to the same software
+FIFO `GXColor4u8`/etc. use internally -- identical effect to a raw `GXWGFifo->u8` write).
+
+A second, larger `include/gx.h` bug surfaced while wiring this up: `src/game/mes.cpp`'s
+`RomFont::draw()` (and `src/game/dbmodule.cpp`, still excluded) write straight to `GXWGFifo->field`
+themselves, bypassing every `GX*()` wrapper -- exactly the "bypasses GX* functions" scenario the
+coordinator's original brief anticipated, just in a different file than expected. Fixed generally, not
+per-call-site: `GXWGFifo` is now (`src/port/gx_wgfifo.cpp`, `TARGET_PC` only) a real object whose
+per-field `operator=` calls the matching `GXParam1xx()`/`GXCmd1xx()` Aurora symbol, so
+`GXWGFifo->s16 = x;` (unchanged vendor source) genuinely reaches Aurora's FIFO now, covering this
+call site and any future one the same way, not just the ones found this pass.
+
+**Every other header was scanned for the same shadow pattern** (`grep -rn "static inline.*GX\b"`
+across `include/*.h`): only `include/snd_sdk.h`'s `GXEnd` remained, confirmed (by the file's own
+comment plus a `grep` for its call sites) to be genuinely dead code kept only so its two string
+literals land in `.rodata` in the vendor's original order -- never actually called, so left untouched
+(no fix needed, and touching it risks the byte-identity of an untouched region for zero benefit).
+
+**Verified**: `re4_boot`/`build-pc` rebuild clean, `ctest` 4/4 (`ON`)/3/3 (`OFF`), `re4_game_all -k 0`
+unchanged (33 files). Remote-verified (commit `46a3d70d`): `dtk shasum` 0 non-OK, `asmcheck.py --all`
+TOTAL 231.
+
+### 2. `EprintfDrawing()` null-pointer crash: root-caused and fixed (a real 64-bit pointer-size bug)
+
+Not a `Debug_alloc()`/heap-readiness problem as first suspected (confirmed live: `mess_ptr_buff`/
+`mess_keep_buffer` were real, non-null, valid pointers at every `EprintfInit()` call, checked with a
+conditional lldb breakpoint that never fired). The real bug, found live with lldb (`frame variable`
+inside the crash, then `expr` on both access paths): `eprintf.cpp`'s `MESS_PTR(i)` macro
+(`((char**) mess_ptr_buff)[i]`) strides by `sizeof(char*)` -- 4 bytes on the original 32-bit target
+(matching the file's own `mess_ptr_buff + i * 4` / `Debug_alloc(MESS_PTR_NUM * 4, ...)` arithmetic for
+the *same* table) but 8 bytes on this 64-bit host. At `i=41`: the loop condition's hardcoded 4-byte
+read (`*(u32*)(mess_ptr_buff + i*4)`) saw `1` (nonzero, entered the loop), but `MESS_PTR(41)`'s
+8-byte-strided read landed on a different, zeroed part of the buffer, producing a null `p` and the
+observed `EXC_BAD_ACCESS(address=0x0)`. Not a vendor bug (byte-identical-correct on the real 32-bit
+target) and not caught by the cast rewriter (`char*` -> `char**` is a bitcast, not the pointer<->
+integer cast class it rewrites).
+
+Fixed by making the table what its surrounding `*4`/`Debug_alloc(N*4)` arithmetic already says it is:
+an array of `re4_port::Ptr32<char>` (4-byte compressed handles), the same class every other such slot
+in this port uses -- under `TARGET_PC` only, `#else` branch byte-identical to the original. One local
+wrinkle: the read call site casts to `u8*` (`(u8*) MESS_PTR(i)`), which a C-style cast cannot reach
+through `Ptr32<char>`'s only conversion operator (`operator char*()`) plus a further `char*`->`u8*`
+reinterpret (not a standard conversion, so the two don't compose into one cast) -- a small
+file-local wrapper (`MessPtrSlot`, `eprintf.cpp`, not a change to the shared `include/port/ptr32.h`)
+adds the one extra explicit `u8*` conversion this one call site needs, alongside the `==NULL`/
+assignment usage the rest of the file already relies on.
+
+Per the coordinator's instruction ("must work or be cleanly disabled, not crash") -- this is a real
+fix, not a disable: the debug-text overlay now genuinely draws through this table instead of being
+turned off.
+
+### 3. `cCard::initSub()` null-pointer crash (new frontier once #2 was fixed)
+
+Reached only after #2's fix let the frame loop run far enough: `cCard::initSub()`
+(`src/game/card.cpp`) unconditionally dereferences `SndMem.sub_adr` (`pSubData->ofs[0]`/`ofs[1]`) --
+real hardware shares the sound driver's MRAM arena with the card/sub-screen archive by convention, but
+`SndMem.sub_adr` is one of the fields `SndInit()`'s `TARGET_PC` stub (section 15/23, Phase 5 sound
+deferral) never populates, so it reads as 0. Guarded both call sites under `TARGET_PC` (`if
+(SndMem.sub_adr != 0)`), the same pattern section 15/23 already established for every other
+unconditional `SndMem`-state read the sound stub exposes; `#else` branches byte-identical.
+
+**Verified** (#2 and #3 together): remote build (commit `19894120`) `dtk shasum` 0 non-OK,
+`asmcheck.py --all` TOTAL 231; `ctest` 4/4 (`ON`)/3/3 (`OFF`); `re4_game_all -k 0` unchanged (33
+files).
+
+### 4. Milestone: the boot sequence now runs in a stable, repeating frame loop
+
+With #1-#3 fixed, `re4_boot` no longer crashes at all on this session's runs -- it settles into a
+steady, indefinitely-repeating cycle (`GXEnd` warnings + periodic `[aurora::gpu::cache] Dawn cache
+prune completed` lines, real recurring GPU activity) and stays alive until killed. This is the first
+session this port has run this far without hitting a new crash. The remaining `GXEnd: vertex data not
+evenly divisible` warnings (241/266/257 bytes) are very likely a Aurora-side false positive, not a
+missed byte: Aurora's own comment on this check says it is a "best-effort" heuristic that cannot
+account for non-vertex FIFO commands (state changes) landing between two draws' byte-counts, and the
+two real vendor draw call sites reached at this point (`main_sub.cpp`'s `DrawTexture`,
+`eprintf.cpp`'s `font_draw`) write exactly their declared vertex format's byte count with no
+`GXMatrixIndex1u8`/indexed attribute involved at all -- not chased further this pass (non-fatal,
+budget), flagged for whoever next works on rendering fidelity.
+
+### Screenshot mechanism: fixed and root-caused, window-specific capture found to have a real macOS limitation
+
+`src/port/screenshot.cpp`/`include/port/screenshot.h` (new): finds this process's own on-screen
+`CGWindowID` via `CGWindowListCopyWindowInfo`, matched by this process's own PID (robust, not a
+name/title match), then `screencapture -x -l <id>`; falls back to a whole-screen capture (previous
+behavior) if that fails, logging which path fired either way. Also logs when the screenshot thread is
+armed (`"screenshot thread armed, firing in N ms -> path"`), fixing the coordinator's "verify it
+fires" ask -- the earlier silent no-op (section 30) is now always distinguishable from a real attempt.
+
+**Root cause of the earlier silent no-op**: never a mechanism bug -- confirmed live, the `getenv`
+branch always fired; the previous session's runs simply crashed (a real `SIGSEGV`) before the
+1500 ms/500 ms delay elapsed, and the crashing thread's death raced the logging thread's own buffered
+`stderr` writes when both were redirected into the same file, losing the "screenshot attempted" line
+even on occasion where the capture itself might have run. Now visible either way.
+
+**Window-specific capture (`-l <windowid>`) reliably fails** in every run this session
+(`"could not create image from window"`, macOS `screencapture`'s own error) -- confirmed this is a
+real capture-API limitation, not a permissions or logic bug: a region capture at the exact same
+window's own bounds (`screencapture -x -R x,y,w,h`) fails identically ("could not create image from
+rect"), while a whole-screen capture of the same live process succeeds every time. The window is a
+`CGWindowListCopyWindowInfo`-visible, correctly PID-matched entry (confirmed by printing its ID/
+bounds live), but its content is evidently presented through a path (Aurora/Dawn's Metal swapchain,
+likely an exclusive-fullscreen or otherwise not-fully-window-server-composited surface) that the
+per-window/per-region screen-capture APIs cannot read from, while the whole-display capture path can.
+**TO VERIFY**: whether this reproduces in a normal interactive login session (this session's captures
+all ran from the same automated/scripted context throughout) or is specific to how Aurora presents its
+swapchain on this port; not chased further this pass -- the whole-screen fallback is a complete,
+working substitute for now.
+
+**Screenshots captured and viewed this session** (whole-screen fallback, both real, both viewed
+directly, not assumed): two captures (1.5 s and 5 s after the window opens) both show a solid black
+field filling the entire 2940x1912 capture, no menu bar/dock/desktop visible at all (consistent with
+the game window covering the whole display, matching the "exclusive/fullscreen surface" hypothesis
+above) and no visible geometry -- the same "clear color only" milestone section 29 first reported,
+now reconfirmed after two more real render-path fixes (#1-#3 above) with the process still alive and
+looping stably rather than having already crashed. `Render()` (`trans.cpp`, the main 3D scene pass)
+remains excluded/stubbed (section 26) -- the only real draws reaching this point are 2D overlay quads
+(`font_draw`/`DrawTexture`), and neither one's content was visibly distinguishable at either capture
+moment (message buffer likely empty, or title texture not yet bound/blended visibly) -- not
+root-caused further this pass.
+
+**Verified**: `ctest` 4/4 (`ON`)/3/3 (`OFF`); `re4_game_all -k 0` unchanged (33 files); only
+`src/port`/`include/port`/`CMakeLists.txt` touched by the screenshot commit, no remote round trip
+needed per the port rules.
+
+### Commits this pass (all remote-verified where required, pushed to `fork/port/macos-arm64`)
+
+- `46a3d70d` -- GX shadow fixes (#1)
+- `19894120` -- eprintf/card fixes (#2, #3)
+- `ce1d568f` -- screenshot mechanism (#4, port-only, no remote round trip needed)
+
+### Next steps for whoever picks this up
+
+- Chase the "vertex data not evenly divisible" warnings properly (confirm the false-positive
+  hypothesis with Aurora's own FIFO byte log, or find a real missed write) before trusting rendered
+  output.
+- Un-exclude `trans.cpp` (`Render()`) -- the real 3D scene pass, needed for anything beyond the title
+  screen's 2D overlay; section 26 already scoped its two remaining error classes (`PTR_INVALID`
+  macro-driven truncation casts, fixable the same way as `main_sub.cpp`'s; real paired-single asm for
+  skinning, genuine Phase 5/4 work).
+- Once `Render()` is live, re-screenshot -- the two 2D overlay draws already reaching Aurora's FIFO
+  this session suggest the title archive/font system may already be closer to visible than the black
+  frames suggest, but nothing will be conclusively visible until the main scene pass runs for real.
