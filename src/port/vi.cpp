@@ -4,6 +4,7 @@
 #endif
 
 #include "port/vi.h"
+#include "port/screenshot.h"
 
 #include <dolphin/vi/vifuncs.h>
 #include <dolphin/vi/vitypes.h>
@@ -120,25 +121,25 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
     std::fprintf(stderr, "re4_boot: Aurora window opened\n");
 
     // Screenshot-from-inside-the-process (docs/port-boot.md section 29): the boot sequence
-    // currently crashes 1-2 real seconds after the window opens, too fast for an external
+    // currently crashes within a few real seconds of the window opening, too fast for an external
     // `screencapture` invocation to reliably beat -- so, only if RE4_PORT_SCREENSHOT is set (a
     // destination .png path), fire a detached thread that sleeps briefly (RE4_PORT_SCREENSHOT_DELAY_MS,
-    // default 1500) then shells out to `screencapture -x` at the whole screen (not a specific window
-    // -- CGWindowList-based window targeting would need extra Objective-C/CoreGraphics glue this
-    // pass didn't add) while the process (and its window) is still alive. Best-effort: if the
-    // process has already crashed by the time this fires, the capture simply shows the desktop --
-    // `view` the PNG afterward to tell which happened, don't assume.
+    // default 1500) then captures just this process's own window (re4_port::CaptureOwnWindowScreenshot,
+    // src/port/screenshot.cpp -- finds the window by CGWindowID via this process's own PID, falls
+    // back to a whole-screen capture if that fails) while the process (and its window) is still
+    // alive. Best-effort: if the process has already crashed by the time this fires, the capture
+    // simply shows the desktop -- `view` the PNG afterward to tell which happened, don't assume.
     if (const char* path = std::getenv("RE4_PORT_SCREENSHOT")) {
         int delayMs = 1500;
         if (const char* delayEnv = std::getenv("RE4_PORT_SCREENSHOT_DELAY_MS")) {
             delayMs = std::atoi(delayEnv);
         }
         std::string dest(path);
+        std::fprintf(stderr, "re4_boot: screenshot thread armed, firing in %d ms -> %s\n", delayMs,
+                     dest.c_str());
         std::thread([dest, delayMs] {
             std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-            std::string cmd = "/usr/sbin/screencapture -x '" + dest + "'";
-            std::system(cmd.c_str());
-            std::fprintf(stderr, "re4_boot: screenshot attempted -> %s\n", dest.c_str());
+            re4_port::CaptureOwnWindowScreenshot(dest.c_str());
         }).detach();
     }
 
