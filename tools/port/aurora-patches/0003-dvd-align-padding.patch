@@ -1,0 +1,32 @@
+diff --git a/lib/dolphin/dvd/dvd.cpp b/lib/dolphin/dvd/dvd.cpp
+index 3272a56..538fa1d 100644
+--- a/lib/dolphin/dvd/dvd.cpp
++++ b/lib/dolphin/dvd/dvd.cpp
+@@ -282,6 +282,27 @@ s32 readFromHandle(CommandDataBase* handle, void* out, s32 length, s32 offset, u
+     totalRead += static_cast<s32>(read);
+     remaining -= static_cast<s32>(read);
+   }
++  // re4-port: DVDReadAsyncPrio's own bounds check (above, `offset + length < fileInfo->length +
++  // DVD_MIN_TRANSFER_SIZE`) explicitly documents that a request may extend up to
++  // DVD_MIN_TRANSFER_SIZE (32) bytes past a file's logical end -- real GameCube DVD reads are
++  // always whole 32-byte-aligned sector transfers, so a caller that rounds its request size up to
++  // the next 32-byte boundary (src/game/dvd.cpp's cDvdQueue::fileReadAsync: `ALIGN32(size)`) gets
++  // those trailing alignment bytes for free from whatever real data follows on the disc, never a
++  // short/failed read. `handle->read()` above stops at the *file's own* logical EOF (its FST-
++  // registered length) rather than the physical disc image, so this padding request would
++  // otherwise come back short and get reported as a real transfer-size mismatch by the caller's own
++  // callback (result != length) -- a false DVD read error the real hardware would never raise.
++  // Zero-fill the (small, spec-bounded) shortfall instead of truncating the reported count, exactly
++  // the same way the real disc's physical padding bytes are never inspected by the caller anyway
++  // (dvd.cpp only copies out the file's own true, unpadded length once the transfer completes).
++  // A shortfall bigger than DVD_MIN_TRANSFER_SIZE is a real short read (wrong offset/length, or a
++  // genuinely truncated disc image), not alignment padding -- left as a real (correctly reported)
++  // short/failed transfer.
++  if (remaining > 0 && remaining <= DVD_MIN_TRANSFER_SIZE) {
++    std::memset(writePtr + totalRead, 0, static_cast<size_t>(remaining));
++    totalRead += remaining;
++    remaining = 0;
++  }
+ 
+   if (transferredOut != nullptr) {
+     *transferredOut = static_cast<u32>(totalRead);
