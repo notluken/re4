@@ -37,6 +37,17 @@ std::atomic<u32> g_nextField{0};
 void* g_nextFrameBuffer = nullptr;
 std::atomic<bool> g_black{false};
 
+// Set once by RunPresentLoop() (host main thread) right after aurora_initialize() returns -- i.e.
+// once the window/surface genuinely exist. BeginGxFrame() (game thread) waits on this before its
+// very first call: the game thread is started (boot_main.cpp's CreateThreadOnStack) BEFORE
+// RunPresentLoop() is even entered, so without this wait the game's first GX frame can (and, timed
+// live, reliably does -- docs/port-boot.md section 44) reach aurora_begin_frame() before Aurora's
+// window exists at all, which is a strictly stronger failure than "window not presentable yet"
+// (is_presentable() would still see g_window == nullptr and return false the same way, but the
+// real bug is the missing wait, not is_presentable()'s own logic). This is a one-time gate, not a
+// per-frame cost: once true it stays true for the rest of the process.
+std::atomic<bool> g_windowReady{false};
+
 // Advances virtual time by exactly one retrace, synchronously, on the calling (game) thread: bumps
 // the counter/field, then invokes the registered pre/post callbacks directly (safe here the same
 // way DrainPendingCallbacks() already is -- only ever called from the one real thread that is
@@ -192,14 +203,44 @@ void BeginGxFrame()
     // operator new override can't otherwise tell "host GPU backend bookkeeping" apart from a real
     // game allocation on the same thread), silently eating into the tiny per-heap budgets the
     // vendor's own code sizes exactly (docs/port-boot.md's card-heap "6.8 KB short" symptom).
+    // One-time wait for the host main thread to actually create Aurora's window/surface (see
+    // g_windowReady's own comment above) -- only ever blocks on this frame's first call, in
+    // practice the game's very first GX frame of the whole process. Bounded (5 s) so a genuinely
+    // broken/headless environment still reaches the discard path below instead of hanging forever;
+    // logs once either way so a real hang here is diagnosable rather than silent.
+    if (!g_windowReady.load(std::memory_order_acquire)) {
+        std::fprintf(stderr, "re4_port: BeginGxFrame: waiting for Aurora window to open...\n");
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!g_windowReady.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        std::fprintf(stderr, "re4_port: BeginGxFrame: %s\n",
+                     g_windowReady.load(std::memory_order_acquire)
+                         ? "window ready, proceeding"
+                         : "timed out waiting for window -- proceeding anyway (this frame's GX "
+                           "work will be safely discarded, not fatal, if the session still can't "
+                           "open -- see aurora-patches/0007)");
+    }
+
     re4_port::HostAllocScope hostAlloc;
     t_gxFrameActive = aurora_begin_frame();
     if (!t_gxFrameActive) {
+        // Real hardware always has somewhere to render, so the vendor's own Render()/DrawOTag call
+        // sites run unconditionally every frame regardless of what this returns (main.cpp's frame
+        // loop, unchanged). When there genuinely is no presentable surface this frame (window
+        // minimized/occluded, or -- see above -- still opening), aurora-patches/0007-gx-fifo-
+        // discard-without-session.patch makes Aurora's own fifo::drain()/process_to() discard
+        // whatever GX bytes this frame writes instead of forwarding them to the gfx recording layer
+        // with no active session (which is what used to fatal here, docs/port-boot.md section 43).
+        // This is a policy choice, not a workaround: a frame with no presentable target has no
+        // correct place to put its draw output anyway (no offscreen target is maintained for this
+        // case -- TO VERIFY whether the title screen ever needs one, e.g. for a screenshot taken
+        // while occluded), so dropping it is the same "this field never got displayed" behavior a
+        // real console has when nothing is watching the video output.
         std::fprintf(stderr, "re4_port: aurora_begin_frame() returned false -- this frame's GX "
-                              "submission has no active recording session (window minimized/GPU "
-                              "not ready); Render()/DrawOTag still run unconditionally (main.cpp's "
-                              "own frame loop, unchanged) -- TO VERIFY whether that risks the same "
-                              "\"No active recording session\" abort this function exists to avoid\n");
+                              "work will be discarded (no active recording session; window "
+                              "minimized/GPU not ready)\n");
     }
 }
 
@@ -235,6 +276,8 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
     config.mem2Size = 0; // already owns MEM1/ARAM sizing -- do not let Aurora allocate its own.
 
     aurora_initialize(0, nullptr, &config);
+    g_windowReady.store(true, std::memory_order_release); // unblocks BeginGxFrame() on the game
+                                                            // thread -- see its own comment
     std::fprintf(stderr, "re4_boot: Aurora window opened\n");
 
     // Screenshot-from-inside-the-process (docs/port-boot.md section 29): the boot sequence

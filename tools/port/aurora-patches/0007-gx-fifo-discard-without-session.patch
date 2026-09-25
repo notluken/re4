@@ -1,0 +1,30 @@
+--- a/lib/gx/fifo.cpp
++++ b/lib/gx/fifo.cpp
+@@ -268,6 +268,27 @@
+   ZoneScoped;
+   const uint64_t target = sStreamBase + detail::sBufferSize;
+ 
++  // re4-port: a real GameCube always has somewhere to render, so the game calls GX every frame
++  // unconditionally, including frames where the host has no presentable surface at all yet (window
++  // still opening -- re4/docs/port-boot.md section 43/44) or no longer (minimized/occluded).
++  // begin_frame() (this file) only sets sFrameActive when Aurora's own gfx recording session
++  // actually started; when it didn't, the bytes buffered since the last successful drain() have no
++  // recording session to go into -- forwarding them to process_to() used to reach
++  // aurora::gfx::recording with no active session and fatal (CHECK(g_recorder.active(), "No active
++  // recording session")). Match real hardware's own behavior for "nothing is watching this field":
++  // discard the buffered commands instead of processing or fataling. No offscreen target is
++  // maintained for this case (TO VERIFY whether a future need, e.g. screenshotting while occluded,
++  // wants one) -- this is strictly "drop the frame's GX output", not "redirect it".
++  if (!sFrameActive) {
++    Log.debug("drain(): no active recording session this frame -- discarding {} buffered bytes",
++               detail::sBufferSize);
++    std::lock_guard lock{sBufferMutex};
++    sStreamBase = target;
++    detail::sBufferSize = 0;
++    sPendingDraws = 0;
++    return;
++  }
++
+   switch (kProcessingMode) {
+   case ProcessingMode::Drain:
+   case ProcessingMode::Inline:

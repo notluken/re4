@@ -3025,3 +3025,55 @@ of this section's FIFO fix.
 **Host default build**: unaffected -- this patch only touches the Aurora checkout consumed by
 `RE4_BUILD_BOOT`, no `src/`/`include/` change in this repo. `re4_game_all -k 0` / `ctest` not
 re-run this session (no code in this repo changed that either target compiles).
+
+## 44. "No active recording session" fixed: real root cause was a startup race, not a genuine
+    occlusion case (2026-09-25, follow-up to section 43)
+
+**Root cause**: `boot_main.cpp`'s `main()` starts the game thread (`CreateThreadOnStack`) *before*
+calling `RunPresentLoop()` on the host main thread, and `RunPresentLoop()` is what calls
+`aurora_initialize()` (creates the SDL window/WebGPU surface). The game thread runs far enough
+(`OSInit`, several real DVD reads) to reach its first `BeginGxFrame()`/`aurora_begin_frame()` before
+the main thread has created the window at all -- confirmed by the crash log from section 43 never
+containing `"re4_boot: Aurora window opened"` before the fatal. This is exactly "the present loop on
+the main thread hasn't created it yet" from the coordinator's own list of candidates, not a real
+occlusion/minimized-window case.
+
+**Fix, two parts**:
+1. `src/port/vi.cpp`: a one-time gate, `g_windowReady` (`std::atomic<bool>`), set by
+   `RunPresentLoop()` right after `aurora_initialize()` returns. `BeginGxFrame()` waits on it
+   (1 ms poll, 5 s bound) before its first call only -- once true it never blocks again. This is the
+   "wait for the window/surface to be ready before the game's first frame" branch of the task.
+2. `tools/port/aurora-patches/0007-gx-fifo-discard-without-session.patch`: belt-and-suspenders for
+   the genuine case (window minimized/occluded later, or the 5 s bound above is somehow exceeded) --
+   `aurora::gx::fifo::drain()` now checks `sFrameActive` first and, if no recording session is
+   active, discards the buffered FIFO bytes (advances `sStreamBase`, clears the buffer, logs a debug
+   line) instead of forwarding them to `process_to()` / `aurora::gfx::recording` with nothing to
+   record into. Matches real hardware's own behavior for "a field nobody is watching": the game
+   still calls GX every frame unconditionally (`main.cpp`'s frame loop, unchanged, as real hardware
+   requires), the output for that field is just dropped, not redirected to any offscreen target (no
+   such target is maintained -- **TO VERIFY** whether a future need, e.g. screenshotting an occluded
+   window, wants one).
+
+**Verified**: clean `cmake --build build-pc-boot --target re4_boot` (patches 0006+0007 both applied
+and stack correctly, `git apply --check`/`--reverse --check` confirmed for each individually against
+the other already applied). Running `re4_boot` (`RE4_PORT_FIXED_VI=1`, 25 s real time, screenshot at
+4 s): log now shows `"re4_port: BeginGxFrame: waiting for Aurora window to open..."` immediately
+followed by real Aurora/WebGPU/Metal initialization, `"re4_boot: Aurora window opened"`, then
+`"re4_port: BeginGxFrame: window ready, proceeding"` -- no fatal, no hang. The process runs far past
+the previous blocker: title data loads (`SS/cmn/title.snd`, `ss/cmn/save_e.dat`), memory-card probing
+runs (`[error] [aurora::card] Failed to open file: bh4_data00..19` -- expected, no save data present,
+not investigated further this pass), and the process is still alive and producing frames when killed
+at the 25 s mark (not a crash-then-stop). Screenshot at 4 s shows the same debug overlay shape as
+every prior screenshot but with visibly different content this time (yellow bar segment where it was
+previously black/short, digits `100`/`0` instead of `7`/`0`) -- the renderer is genuinely producing
+different output frame to frame now, not repeating the same static first frame. Still not the title
+screen itself.
+
+**Verified / not broken**: host default build `re4_game_all -k 0` still 32 failing files (same set);
+`ctest` 6/6 (`build-pc`, unaffected -- `src/port/vi.cpp` compiles the same way there). No `src/`/
+`include/` file outside `src/port/`/`include/port/` touched this section, so the Docker remote
+byte-identity loop does not apply per this repo's own port rules.
+
+**Not reached this pass (budget)**: the title screen itself (still same debug HUD, further along);
+`trans.cpp`'s locked-cache design (task 2/3, not started this pass either); memory-card open failures
+above (likely expected/harmless, not confirmed).
