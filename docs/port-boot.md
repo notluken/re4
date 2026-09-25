@@ -2714,3 +2714,88 @@ containing struct's byte count to a member type -- caught and fixed one such fal
 `LifeMeter`, during this pass); does not yet cover every struct in the tree the way the full,
 cross-compiled-against-the-real-SN-toolchain version would -- that heavier tool (item B's "later")
 was not attempted this pass.
+
+## 40. Coordinator follow-up: the systemic version of section 39's fix, `ID_DATA` root-caused, a new
+    post-heap-fix blocker found (2026-09-25, same day)
+
+Section 39's `HostAllocScope` fixed the one call site it found (`aurora_begin_frame`/
+`aurora_end_frame`), but the coordinator correctly pointed out this is a whole *class* of bug: any
+Aurora/SDK-shim code the game calls synchronously (GX*, PAD*, DVD*, CARD*, OS* shims, their
+internal libc++ containers) can allocate, and every one of them was silently eligible for the game
+heap too, one undiscovered call site at a time.
+
+**Systemic fix implemented (route by caller's own compiled code, not by thread)**:
+`include/port/game_section.h` (`#pragma clang section text="__TEXT,__re4game"`, forced-included
+*first* into every real vendor `src/game/*.cpp` translation unit `re4_boot_game` compiles, nothing
+else) tags all actual game code -- including inline/template code instantiated inside those TUs --
+into one named Mach-O section. `re4_port::IsGameCodeAddress()` (`src/port/alloc.cpp`) checks an
+address against that section's bounds via ld64's synthesized `section$start$__TEXT$__re4game`/
+`section$end$...` pseudo-symbols (declared `weak`: several other targets link the same
+`re4_port` static library without ever producing a `__re4game` section at all, e.g. `test_arena`;
+verified live that ld64 then resolves both symbols to the *same* address rather than erroring,
+making the range empty and the check correctly always-false there, no separate ifdef needed).
+`operator new`/`new[]` (`main_mem.cpp`) now call `ShouldUseGameHeapFor(__builtin_return_address(0))`
+-- thread-ready-and-heaps-ready AND the immediate caller is inside `__re4game`.
+`re4_port::HostAllocScope` (section 39) stays as the documented fallback/override, unused by
+default now that the section check covers its one known case on its own.
+
+**Verified this generalizes, not just re-derives section 39's own fix**: a temporary trace (added,
+tested, reverted before committing -- same discipline as section 39) logging every `new` the old
+thread-only rule would have routed to the game heap but the new caller check does not, over a real
+30-second run: **49 divergences**, `atos`-symbolicated a sample -- `aurora::imgui::DrawData::Impl`,
+`aurora::(anonymous)::end_frame()`'s lambda, `wgpu::CommandBuffer` (all section 39's already-known
+case, now caught without the explicit scope) -- **and two the per-call-site fix never touched**:
+`C_MTXRotTrig`/`C_VECReflect` (Aurora's own SDK-compat paired-single math shims,
+`lib/dolphin/mtx.c`/`vec.c`, called directly from real vendor code that expects `MTXRotTrig`/
+`VECReflect`) -- confirming the coordinator's premise that per-call-site wrapping would have kept
+missing cases like this one. Zero regressions: `IDSystem::unitPtr(...): Not found`/`malloc failed`
+still absent; default host build unaffected (`re4_game_all -k 0`: same 33 failing files; `ctest`
+5/5). One cosmetic ld64 warning per game object (`missing 'regular,pure_instructions' section
+flag`) -- harmless (confirmed the binary links and every check above passes), not silenced this
+pass.
+
+**Found and fixed along the way (unrelated, blocked the rebuild)**: `tools/port/aurora-patches/`
+`0002`/`0004` had drifted out of sync with each other -- `0002` alone no longer passed its own
+`git apply --reverse --check` once `0004` (built on top of it) was also applied, because `0004`'s
+insertions shifted the context lines `0002`'s own hunks depend on; genuinely reversible
+independently was never guaranteed once two patches touch overlapping regions of the same file.
+Consolidated into one patch (current `0002-gx-implicit-end.patch`, `0004` retired) that reverse-
+checks cleanly against the pristine original blob (`git cat-file blob 789ed14`, verified byte-for-
+byte). Unrelated to this session's actual task; found only because a CMake reconfigure re-ran the
+patch step.
+
+**`ID_DATA`'s +16 bytes (docs/port-layout-parity.md), root-caused, not fixed**: `include/model.h`'s
+`cCoord` (which `ID_DATA` derives from, `include/t_id.h`) has its own un-ported `cCoord* pParent`
+(a raw pointer, +4 bytes on host); its base `cUnit` (`include/cManager.h`) has both an un-ported
+`cUnit* pNext` (+4) *and* three virtual functions (`~cUnit`, `beginEvent`, `endEvent`) which the
+GameCube's GNU v2 ABI implements with a 4-byte vptr, ELF64/host's Itanium ABI with 8 bytes (+4).
+That accounts for +12 of the confirmed +16; the last 4 were not traced further (plausibly padding
+shifted by the above, not chased -- **TO VERIFY**). Not fixed this pass: `cUnit` is the base of the
+entire object chain (`cUnit -> cCoord -> cModel`, docs/overview.md) -- Ptr32-ifying `pNext` and
+deciding what to do about the vptr width (the coordinator's own boot-prompt already named this
+exact dilemma: "a vtable pointer can't be Ptr32 -- think carefully... consider whether the budget
+computations can instead be adjusted under TARGET_PC to use host sizeof") is a cross-cutting change
+touching most of `src/game`, not a local fix, and needs its own session.
+
+**New blocker found, a direct consequence of section 39's fix reaching further into the frame loop,
+not investigated (budget)**: `re4_boot` no longer gets stuck in the card-heap failure loop, but now
+runs several seconds further and then aborts, deterministically, the same way whether or not
+scripted input is used: `STUB: cDataCtrl::check() called` / `STUB: PPCSync() called` /
+`STUB: OSGetResetButtonState() called`, then `libc++abi: terminating due to uncaught exception of
+type re4_port::(anonymous namespace)::ThreadExitException`. `ThreadExitException` is a real,
+deliberate mechanism (`src/port/os_thread.cpp`'s `OSExitThread()` unwind, caught at line 266 on
+whatever thread starts there) -- this occurrence is escaping uncaught somewhere, not a new kind of
+crash invented this pass. Root cause not traced (which code path decides to exit the thread here,
+and why the catch that should be there isn't) -- **TO VERIFY**, next session's likely next blocker
+now that the card-heap issue is genuinely gone.
+
+**Not reached this pass (budget)**: confirming `SndCall : blk 0 No.5 Illegal SE No.` is harmless,
+`math_sub.cpp`/`trans.cpp` un-exclusion (`frsqrte`/`fcmpu`), and the title screen itself -- the new
+`ThreadExitException` blocker above is almost certainly what the next session hits first regardless
+of which of those it starts with.
+
+**Remote-verified** (touches `src/game/main_mem.cpp`, outside `src/port`/`include/port`):
+115/115 SHA-1 OK, `asmcheck.py --all` TOTAL 231 unchanged (unchanged from every prior pass' count).
+Commits `c8a58935` (Aurora patch consolidation, tools-only, no verification needed),
+`a513d51c` (the systemic allocator fix) -- both fast-forwarded from `port/wip-phase1` onto
+`port/macos-arm64` and pushed after the remote check passed.
