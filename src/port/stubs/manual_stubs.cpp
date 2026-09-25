@@ -113,25 +113,8 @@ void OSResetStopwatch(OSStopwatch* sw) { (void) sw; }
 void OSStartStopwatch(OSStopwatch* sw) { (void) sw; }
 void OSStopStopwatch(OSStopwatch* sw) { (void) sw; }
 
-// OSLink/OSUnlink: real DLL-module relocation (config/G4BE08's REL loader) -- no host equivalent
-// exists yet (Phase 4+ territory, module RELs are not loaded by re4_boot at all). BOOL FALSE (0)
-// is the documented "failed" return every real caller of these already checks (main_sub.cpp's
-// own DLL_EPILOG-guarded call sites), not a silent success.
-BOOL OSLink(OSModuleInfo* newModule, void* bss)
-{
-    (void) newModule;
-    (void) bss;
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSLink() called\n"); warned = true; }
-    return 0;
-}
-BOOL OSUnlink(OSModuleInfo* oldModule)
-{
-    (void) oldModule;
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: OSUnlink() called\n"); warned = true; }
-    return 0;
-}
+// OSLink/OSUnlink: now defined for real by src/port/rel.cpp (the host module registry, see
+// include/port/rel.h), removed from here to avoid a duplicate-symbol link error.
 
 // VISetBlack/VISetNextFrameBuffer/VIGetNextField: real implementations, src/port/vi.cpp
 // (docs/port-boot.md's frame-presentation milestone).

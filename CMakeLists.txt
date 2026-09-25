@@ -313,6 +313,10 @@ if (RE4_PC_BUILD_TESTS)
   target_link_libraries(test_arena PRIVATE re4_port)
   add_test(NAME test_arena COMMAND test_arena)
 
+  add_executable(test_rel src/port/lowmem.cpp tests/port/test_rel.cpp)
+  target_link_libraries(test_rel PRIVATE re4_port)
+  add_test(NAME test_rel COMMAND test_rel)
+
   add_executable(test_be src/port/lowmem.cpp tests/port/test_be.cpp)
   target_link_libraries(test_be PRIVATE re4_port)
   add_test(NAME test_be COMMAND test_be)
