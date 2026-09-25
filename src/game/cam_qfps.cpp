@@ -1194,7 +1194,15 @@ void CameraQuasiFPS::init()
     m_depression_ratio = fz;
     m_direction_ratio = fz;
     { s16& r_ = m_search_cnt; r_ = zero; }
+#ifndef TARGET_PC
     asm("" : "=m"(m_floor_ratio) : "r"(one), "r"(two), "r"(zero), "f"(fz), "r"(fl));  // COMPILER-DIFF: #13 (keep-alive)
+#else
+    (void) one;
+    (void) two;
+    (void) zero;
+    (void) fz;
+    (void) fl;
+#endif
     if (pPL) {
         setPlayerLocation(pPL->mat, pPL->pFloor_norm);
     }

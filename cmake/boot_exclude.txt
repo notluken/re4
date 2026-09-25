@@ -6,8 +6,6 @@
 #
 # Phase 5 (real PPC paired-single/GQR asm, invalid register constraints on arm64):
 src/game/at_mod.cpp
-src/game/cam_qfps.cpp
-src/game/db_cam.cpp
 src/game/dbmodule.cpp
 src/game/esp04.cpp
 src/game/esp08.cpp
@@ -20,30 +18,27 @@ src/game/objRobo.cpp
 src/game/pendulum.cpp
 src/game/pl_wep.cpp
 src/game/sce_at.cpp
-src/game/shadow.cpp
-src/game/shape.cpp
 # src/game/math_sub.cpp: un-excluded (docs/port-boot.md section 41/42) -- its four asm blocks
 # (SQRTF's frsqrte, SINF/COSF's paired-single Taylor series, LIMIT_ANGLE's fcmpu loop) now have
 # documented, tested (tests/port/test_math_sub.cpp) TARGET_PC C equivalents; every other function
 # in the file was already plain, portable C++.
-# src/game/trans.cpp: STILL excluded, but for a narrower reason now (docs/port-boot.md section
-# 46) -- its own whole-function real PPC asm (CalcSk1_x/CalcSk1_x2, the vertex-skinning inner
-# loop; MakeWeightPalette/MakeWeightPaletteExt's PSQ_L_U8_TO/PSMTXReorder-into-locked-cache;
-# setupGQR6) now has TARGET_PC C equivalents, independently cross-checked against the vendor's
-# own asm executed by tools/port/ppcsim (a from-scratch PowerPC interpreter) on randomized
-# synthetic inputs, bit-for-bit (tests/port/test_trans_skin.cpp) -- and compiles clean under
-# RE4_U32_32/TARGET_PC. It is excluded from re4_boot only because it LINKS against three other
-# still-excluded/incomplete units it calls directly: shape.cpp's ResetShape/CalculateShape_new
-# and shadow.cpp's ShadowTrans/GetSelfShadowMng/GetCastShadowMngPtr/isSelfUse/g_SelfShdNum/
-# shd_ofs/shd_tex_scale_x (both still Phase 5 real-asm exclusions, above -- trans.cpp cannot link
-# until they are ported too, its own math is not the blocker any more), cloth.cpp's ClothDraw
-# (a different, already-known Ptr32 exclusion, below), and drawGround (shape.cpp) plus three GX
-# entry points Aurora's GX library does not yet implement (GXSetDrawSync,
-# GXSetDrawSyncCallback, __GXSetIndirectMask) -- not attempted this session.
-src/game/trans.cpp
+# src/game/shape.cpp, src/game/shadow.cpp: un-excluded (see the commit that added their
+# TARGET_PC C for GQR5's psq_l/psq_st and the codeless register-allocation pins) -- both compile
+# clean under RE4_U32_32/TARGET_PC now.
+# src/game/db_cam.cpp, src/game/cam_qfps.cpp: un-excluded -- each had exactly one asm site, both
+# also codeless register-allocation/keep-alive pins (see the commit), no real instruction ever
+# emitted from either.
+# src/game/cloth.cpp: un-excluded -- see the Ptr32<T>/array-size fixes below, now removed from
+# that section too.
+# src/game/trans.cpp: un-excluded (docs/port-boot.md section 46/47) -- its own whole-function real
+# PPC asm (CalcSk1_x/CalcSk1_x2, MakeWeightPalette/MakeWeightPaletteExt, setupGQR6) has TARGET_PC
+# C equivalents cross-checked against the vendor's own asm executed by tools/port/ppcsim, bit-for-
+# bit (tests/port/test_trans_skin.cpp); the three units it links against (shape.cpp, shadow.cpp,
+# db_cam.cpp for drawGround, cloth.cpp for ClothDraw) all now compile; and Aurora gained
+# GXSetDrawSync/GXReadDrawSync/GXSetDrawSyncCallback/__GXSetIndirectMask
+# (tools/port/aurora-patches/, see that patch's header for what each does and does not model).
 
 # Ptr32<T>/array-pointee/Sema interaction bugs (Phase 2 step 5 follow-up, not Phase 5):
-src/game/cloth.cpp
 src/game/Espgen43.cpp
 
 # Remaining direct/macro pointer<->integer casts, not yet hand-fixed (Phase 2 step 4 candidates,
