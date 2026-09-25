@@ -134,7 +134,16 @@ int ShdInit(ShdHeader* data)
                 e->shdCol = 0xFF;
             }
         }
+#ifdef TARGET_PC
+        // The offset table is raw big-endian on-disc data (docs/port-phase3.md), same bug class as
+        // cSmd::getBinPtr's own fix (scroll.cpp): reading it as a plain u32* on this little-endian
+        // host produced a garbage offset, landing modelInit() on unrelated (zeroed) memory --
+        // "not bin data" (model.cpp's notBinData()) live-locking the frame.
+        if (obj->modelInit((u8*) ofsTbl + ((re4_port::BE<u32>*) ofsTbl)[e->model],
+                            (void*) (pG->pCore->ofs_10 + (u32) pG->pCore)) == 0) {
+#else
         if (obj->modelInit((u8*) ofsTbl + ofsTbl[e->model], (void*) (pG->pCore->ofs_10 + (u32) pG->pCore)) == 0) {
+#endif
             ObjMgr.destroy(obj);
             continue;
         }
