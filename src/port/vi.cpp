@@ -17,9 +17,11 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 namespace {
 
@@ -34,15 +36,48 @@ std::atomic<u32> g_nextField{0};
 void* g_nextFrameBuffer = nullptr;
 std::atomic<bool> g_black{false};
 
+// Real, byte-matching game code registers callbacks here (src/game/main.cpp's postVSyncCallback,
+// via VISetPostRetraceCallback) that call straight into src/port/os_thread.cpp's fiber scheduler
+// (postVSyncCallback -> iTaskSuspend() -> OSSuspendThread()) -- that scheduler has exactly one
+// real host thread it is ever safe to call into (docs/port-boot.md section 34's whole reason for
+// existing: no lock anywhere in it, by construction, since only one fiber is ever running). This
+// present loop runs on a DIFFERENT real host thread (the process main thread, AppKit's event
+// loop -- see include/port/vi.h's own design note), so calling a registered callback directly from
+// here would be exactly the two-real-threads-touching-scheduler-state bug that whole rewrite
+// exists to eliminate. Fixed the way the coordinator's design asked for interrupt-context
+// callbacks in general: queue them here (this mutex is the only lock touching this queue -- it
+// never reaches into os_thread.cpp's own state) and let VIWaitForRetrace() -- called by the GAME
+// thread once per frame, src/game/main.cpp's own real, unchanged call sites -- drain and run them
+// there instead, right after the very retrace tick they were queued for. This is a real, if bounded
+// (well under one frame, in practice the very next VIWaitForRetrace() call), latency shift on
+// exactly when postVSyncCallback's vsync_cnt++/haltExecCheck() side effects land relative to a real
+// hardware interrupt; every call still happens, in order, exactly once per real tick.
+std::mutex g_cbMutex;
+std::deque<std::pair<VIRetraceCallback, u32>> g_pendingCallbacks;
+
 } // namespace
 
 extern "C" {
 
 void VIWaitForRetrace(void)
 {
-    std::unique_lock<std::mutex> lock(g_mutex);
-    u32 start = g_retraceCount.load();
-    g_cv.wait(lock, [start] { return g_retraceCount.load() != start; });
+    {
+        std::unique_lock<std::mutex> lock(g_mutex);
+        u32 start = g_retraceCount.load();
+        g_cv.wait(lock, [start] { return g_retraceCount.load() != start; });
+    }
+    // Drain and run whatever RunPresentLoop() queued for the tick(s) up to and including the one
+    // that just woke this wait -- on THIS (the game) thread, safe to call into the fiber scheduler.
+    std::deque<std::pair<VIRetraceCallback, u32>> due;
+    {
+        std::lock_guard<std::mutex> lock(g_cbMutex);
+        due.swap(g_pendingCallbacks);
+    }
+    for (auto& [cb, count] : due) {
+        if (cb) {
+            cb(count);
+        }
+    }
 }
 
 u32 VIGetRetraceCount(void)
@@ -174,8 +209,9 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
         // GX recording session must be active on whichever thread issues the real GX submission
         // calls (the game thread), not this one.
 
-        // One "retrace": bump the counter and run the game's registered callbacks, on this thread
-        // (see include/port/vi.h for why this is deliberately not the game thread).
+        // One "retrace": bump the counter and QUEUE the game's registered callbacks (they run on
+        // the game thread instead, drained by VIWaitForRetrace() -- see g_pendingCallbacks' own
+        // comment above for why this stopped calling them directly on this thread).
         VIRetraceCallback pre;
         VIRetraceCallback post;
         {
@@ -185,11 +221,14 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
         }
         u32 count = g_retraceCount.fetch_add(1) + 1;
         g_nextField.fetch_add(1);
-        if (pre) {
-            pre(count);
-        }
-        if (post) {
-            post(count);
+        if (pre || post) {
+            std::lock_guard<std::mutex> lock(g_cbMutex);
+            if (pre) {
+                g_pendingCallbacks.emplace_back(pre, count);
+            }
+            if (post) {
+                g_pendingCallbacks.emplace_back(post, count);
+            }
         }
         g_cv.notify_all();
 
