@@ -39,7 +39,48 @@ GXTexObj fontTexObj;
 static Mtx fontTMtx;
 int eprintf_init = 0;
 static char* mess_ptr_buff;  // MESS_PTR_NUM message pointers
+#ifdef TARGET_PC
+// `((char**) mess_ptr_buff)[i]` strides by sizeof(char*) -- 4 bytes on the original 32-bit target
+// (matching the `mess_ptr_buff + i * 4`/`Debug_alloc(MESS_PTR_NUM * 4, ...)` arithmetic used
+// everywhere else in this file for the *same* table), but 8 bytes on this 64-bit host: every
+// `MESS_PTR(i)` for i >= 1 silently read/wrote the wrong slot, and the writer
+// (`MESS_PTR(i) = dst;`, below) stored a real 8-byte host pointer where the reader's hardcoded
+// 4-byte-stride loop-condition check (`*(u32*) (mess_ptr_buff + i * 4)`) only ever sees half of it
+// -- confirmed live in lldb: at i=41, the loop condition read the value `1` (the low half of a
+// stored host pointer, happened to be nonzero) and entered the loop body, but `MESS_PTR(41)`
+// itself (the 8-byte-strided read) landed on an unrelated, zeroed part of the buffer, producing a
+// null `p` and the observed `EXC_BAD_ACCESS (address=0x0)` in EprintfDrawing(). Not a vendor bug
+// (this macro is byte-identical-correct on the real 32-bit target) and not caught by the cast
+// rewriter (a char*->char** reinterpret is a bitcast, not the pointer<->integer cast class it
+// rewrites) -- fixed by treating the table as what its surrounding *4/Debug_alloc(N*4) arithmetic
+// already says it is: an array of 4-byte compressed handles, the same Ptr32<T> class every other
+// "4-byte pointer-shaped slot" in this port uses.
+//
+// One wrinkle: the read call site casts the result to `u8*` (`(u8*) MESS_PTR(i)`), but
+// Ptr32<char>'s only conversion operator targets `char*` -- a C-style cast cannot chain that
+// user-defined conversion with the further char*->u8* reinterpret (not a standard conversion,
+// so the two don't compose into one cast the way a plain `char*` value would). A local wrapper
+// (not a change to the shared include/port/ptr32.h) adds the one extra explicit `u8*` conversion
+// this one call site needs, alongside the existing `== NULL`/assignment usage the rest of this
+// file already relies on.
+namespace {
+struct MessPtrSlot {
+    re4_port::Ptr32<char>& slot;
+    void operator=(char* v) const { slot = v; }
+    bool operator==(std::nullptr_t) const { return slot == nullptr; }
+    bool operator!=(std::nullptr_t) const { return slot != nullptr; }
+    explicit operator char*() const { return static_cast<char*>(slot); }
+    explicit operator u8*() const { return reinterpret_cast<u8*>(static_cast<char*>(slot)); }
+};
+inline MessPtrSlot MessPtr(char* buf, int i)
+{
+    return MessPtrSlot{((re4_port::Ptr32<char>*) buf)[i]};
+}
+} // namespace
+#define MESS_PTR(i) (MessPtr(mess_ptr_buff, i))
+#else
 #define MESS_PTR(i) (((char**) mess_ptr_buff)[i])
+#endif
 static char* mess_keep_buffer;
 static char* mess_keep_ptr;
 

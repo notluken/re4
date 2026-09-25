@@ -1834,7 +1834,19 @@ int cCard::initSub()
         return 0;
     }
     pSubData = (CardArc*) SndMem.sub_adr;
+#ifdef TARGET_PC
+    // SndMem.sub_adr (src/game/snd.cpp's SndInit()) is one of the fields SndInit()'s TARGET_PC stub
+    // never populates (docs/port-boot.md section 15/23: no Aurora audio backend exists yet, Phase 5
+    // scope) -- real hardware shares the sound driver's MRAM arena with the card/sub-screen archive
+    // by convention (a genuine cross-subsystem coupling, not a card.cpp bug), so `pSubData` is null
+    // here on this port until sound is un-stubbed. Guarded the same way section 15/23 already
+    // guards every other unconditional SndMem-state dereference this stub exposes.
+    if (SndMem.sub_adr != 0) {
+        calcTplAddr((TEXPalette*) (pSubData->ofs[0] + (u32) pSubData));
+    }
+#else
     calcTplAddr((TEXPalette*) (pSubData->ofs[0] + (u32) pSubData));
+#endif
     if (!(pG->CardStatus & 0x80)) {
         void* addr;
         int req;
@@ -1845,7 +1857,13 @@ int cCard::initSub()
         }
         m_IdDataAddr = addr;
     }
+#ifdef TARGET_PC
+    if (SndMem.sub_adr != 0) {
+        MesData.ptr[0] = (u8*) (pSubData->ofs[1] + (u32) pSubData);
+    }
+#else
     MesData.ptr[0] = (u8*) (pSubData->ofs[1] + (u32) pSubData);
+#endif
     return 1;
 }
 
