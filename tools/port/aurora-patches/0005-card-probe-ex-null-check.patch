@@ -1,0 +1,25 @@
+diff --git a/lib/dolphin/card.cpp b/lib/dolphin/card.cpp
+index d1eb5a0..ce22408 100644
+--- a/lib/dolphin/card.cpp
++++ b/lib/dolphin/card.cpp
+@@ -716,8 +716,18 @@ s32 CARDProbeEx(const s32 chan, s32* memSize, s32* sectorSize) {
+ 
+   // ReSharper disable once CppUseStructuredBinding
+   const aurora::card::ProbeResults probeData = card->probeCardFile(cardPaths[chan]);
+-  *memSize = probeData.x4_cardSize;
+-  *sectorSize = probeData.x8_sectorSize;
++  // re4-port: the real SDK's CARDProbeEx (src/lib/CARDMount.c in the re4 decompilation) only
++  // writes through memSize/sectorSize `if (memSize)`/`if (sectorSize)` -- both are documented,
++  // legitimately-nullable "don't care" output parameters (e.g. Resident Evil 4's own
++  // cCard::errorDisp() calls this with both null, wanting only the result code). This
++  // implementation dereferenced them unconditionally, a null-pointer crash the very first time a
++  // real caller did that (confirmed live, re4 side).
++  if (memSize) {
++    *memSize = probeData.x4_cardSize;
++  }
++  if (sectorSize) {
++    *sectorSize = probeData.x8_sectorSize;
++  }
+ 
+   return static_cast<s32>(probeData.x0_error);
+ }
