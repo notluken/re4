@@ -2,6 +2,9 @@
 #define TITLE_H
 
 #include "types.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
 struct IdUnit;
 
@@ -61,9 +64,14 @@ struct TitleWork {
     u8 pad_74[0x9C - 0x74];
 };
 
-// Offset table at the head of title.dat / omk_tX.dat: byte offsets of the sub-files.
+// Offset table at the head of title.dat / omk_tX.dat: byte offsets of the sub-files. On-disc,
+// big-endian (Phase 3, docs/port-phase3.md) -- BE<u32> under TARGET_PC.
 struct TitleArc {
+#ifdef TARGET_PC
+    re4_port::BE<u32> ofs[0x10];
+#else
     u32 ofs[0x10];
+#endif
 };
 // Same reasoning as global.h's PL_ARC_PTR: `arc` is a live host buffer, `ofs[no]` a plain offset.
 #ifdef TARGET_PC
