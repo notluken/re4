@@ -88,6 +88,14 @@ void EndGxFrame();
 // polling loop that needs it.
 void PumpPendingVICallbacks();
 
+// RE4_PORT_FIXED_VI=1 (read once, lazily): each VIWaitForRetrace()/PumpPendingVICallbacks() call
+// advances virtual time by exactly one retrace synchronously, on the game thread, independent of
+// real wall-clock time -- RunPresentLoop() keeps presenting frames but stops being the tick source.
+// For deterministic debugging (a given RE4_PORT_INPUT script produces byte-identical logs run to
+// run); off by default (real-time pacing stays the default for interactive play). Declared here so
+// other port files (DVD/CARD glue) can consult the same flag; src/port/vi.cpp owns the actual state.
+bool IsFixedViMode();
+
 } // namespace re4_port
 
 #endif // RE4_PORT_VI_H

@@ -36,6 +36,29 @@ std::atomic<u32> g_nextField{0};
 void* g_nextFrameBuffer = nullptr;
 std::atomic<bool> g_black{false};
 
+// Advances virtual time by exactly one retrace, synchronously, on the calling (game) thread: bumps
+// the counter/field, then invokes the registered pre/post callbacks directly (safe here the same
+// way DrainPendingCallbacks() already is -- only ever called from the one real thread that is
+// allowed to touch the fiber scheduler). No wall-clock wait, no dependency on RunPresentLoop().
+void TickOneRetraceNow()
+{
+    VIRetraceCallback pre;
+    VIRetraceCallback post;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        pre = g_preRetrace;
+        post = g_postRetrace;
+    }
+    u32 count = g_retraceCount.fetch_add(1) + 1;
+    g_nextField.fetch_add(1);
+    if (pre) {
+        pre(count);
+    }
+    if (post) {
+        post(count);
+    }
+}
+
 // Real, byte-matching game code registers callbacks here (src/game/main.cpp's postVSyncCallback,
 // via VISetPostRetraceCallback) that call straight into src/port/os_thread.cpp's fiber scheduler
 // (postVSyncCallback -> iTaskSuspend() -> OSSuspendThread()) -- that scheduler has exactly one
@@ -75,10 +98,36 @@ void DrainPendingCallbacks()
 
 } // namespace
 
+namespace re4_port {
+
+// RE4_PORT_FIXED_VI=1 (docs/port-boot.md, coordinator's determinism request): read once, lazily,
+// the first time any of VIWaitForRetrace()/PumpPendingVICallbacks()/RunPresentLoop() runs. In this
+// mode RunPresentLoop() (the real host main thread, real wall-clock ~60 Hz pacing) stops being the
+// tick source entirely: it still pumps aurora_update() so the window stays responsive and
+// screenshots still work, but it neither bumps `g_retraceCount` nor queues a callback. Instead,
+// every call that would otherwise wait for/drain a tick becomes the tick itself (TickOneRetraceNow(),
+// above) -- a given RE4_PORT_INPUT script then advances through exactly the same sequence of
+// retrace/callback events on every run, with no dependency on real elapsed time anywhere in that
+// path.
+bool IsFixedViMode()
+{
+    static const bool fixed = [] {
+        const char* env = std::getenv("RE4_PORT_FIXED_VI");
+        return env != nullptr && env[0] == '1' && env[1] == '\0';
+    }();
+    return fixed;
+}
+
+} // namespace re4_port
+
 extern "C" {
 
 void VIWaitForRetrace(void)
 {
+    if (re4_port::IsFixedViMode()) {
+        TickOneRetraceNow();
+        return;
+    }
     {
         std::unique_lock<std::mutex> lock(g_mutex);
         u32 start = g_retraceCount.load();
@@ -155,6 +204,15 @@ void EndGxFrame()
 
 void PumpPendingVICallbacks()
 {
+    if (IsFixedViMode()) {
+        // main.cpp's own `while (vsync_cnt < GetSystemVcnt() - 1) { ...; PumpPendingVICallbacks(); }`
+        // spins (include/port/vi.h's own header comment on this function) are this mode's other real
+        // tick source besides VIWaitForRetrace() itself -- RunPresentLoop() no longer produces
+        // anything for them to drain, so each call here has to be the tick, the same as
+        // VIWaitForRetrace(), or those spins would never terminate in fixed mode.
+        TickOneRetraceNow();
+        return;
+    }
     DrainPendingCallbacks();
 }
 
@@ -223,28 +281,35 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
         // GX recording session must be active on whichever thread issues the real GX submission
         // calls (the game thread), not this one.
 
-        // One "retrace": bump the counter and QUEUE the game's registered callbacks (they run on
-        // the game thread instead, drained by VIWaitForRetrace() -- see g_pendingCallbacks' own
-        // comment above for why this stopped calling them directly on this thread).
-        VIRetraceCallback pre;
-        VIRetraceCallback post;
-        {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            pre = g_preRetrace;
-            post = g_postRetrace;
-        }
-        u32 count = g_retraceCount.fetch_add(1) + 1;
-        g_nextField.fetch_add(1);
-        if (pre || post) {
-            std::lock_guard<std::mutex> lock(g_cbMutex);
-            if (pre) {
-                g_pendingCallbacks.emplace_back(pre, count);
+        // RE4_PORT_FIXED_VI=1: this loop no longer drives game time at all -- VIWaitForRetrace()/
+        // PumpPendingVICallbacks() self-tick on the game thread instead (TickOneRetraceNow(), above).
+        // Skip the counting/queueing below entirely so the two tick sources can never double-count
+        // or race each other; still run aurora_update() every iteration (window stays responsive,
+        // screenshots still fire) at this same real ~60 Hz pace, just for presentation, not timing.
+        if (!IsFixedViMode()) {
+            // One "retrace": bump the counter and QUEUE the game's registered callbacks (they run on
+            // the game thread instead, drained by VIWaitForRetrace() -- see g_pendingCallbacks' own
+            // comment above for why this stopped calling them directly on this thread).
+            VIRetraceCallback pre;
+            VIRetraceCallback post;
+            {
+                std::lock_guard<std::mutex> lock(g_mutex);
+                pre = g_preRetrace;
+                post = g_postRetrace;
             }
-            if (post) {
-                g_pendingCallbacks.emplace_back(post, count);
+            u32 count = g_retraceCount.fetch_add(1) + 1;
+            g_nextField.fetch_add(1);
+            if (pre || post) {
+                std::lock_guard<std::mutex> lock(g_cbMutex);
+                if (pre) {
+                    g_pendingCallbacks.emplace_back(pre, count);
+                }
+                if (post) {
+                    g_pendingCallbacks.emplace_back(post, count);
+                }
             }
+            g_cv.notify_all();
         }
-        g_cv.notify_all();
 
         nextTick += kFieldPeriod;
         auto now = clock::now();
