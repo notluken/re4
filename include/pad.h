@@ -4,6 +4,10 @@
 #include "types.h"
 #include "joy.h"
 
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
+
 // Dolphin PAD (the SDK header pulls in the CodeWarrior libc).
 struct PADStatus {
     u16 button;       // 0x00
@@ -25,23 +29,40 @@ struct PADStatus {
 #define PAD_ERR_NOT_READY -2
 #define PAD_ERR_TRANSFER -3
 
-// Vibration pattern table (VibSetData): offsets from the table start to VibData blocks.
+// Vibration pattern table (VibSetData): offsets from the table start to VibData blocks. On-disc, big
+// -endian (Phase 3, docs/port-phase3.md) -- BE<u16>/BE<u32> under TARGET_PC; lvl0/lvl1 are single
+// bytes and need no swap.
 struct VibDataEntry {
+#ifdef TARGET_PC
+    re4_port::BE<u16> type;  // 0x00
+    re4_port::BE<u16> wait;  // 0x02
+    re4_port::BE<u16> time;  // 0x04
+#else
     u16 type;  // 0x00
     u16 wait;  // 0x02
     u16 time;  // 0x04
+#endif
     u8 lvl0;   // 0x06  start level
     u8 lvl1;   // 0x07  end level
 };
 
 struct VibData {
+#ifdef TARGET_PC
+    re4_port::BE<u32> num;
+#else
     u32 num;
+#endif
     VibDataEntry e[1];
 };
 
 struct VibDataTbl {
+#ifdef TARGET_PC
+    re4_port::BE<u32> num;
+    re4_port::BE<u32> ofs[1];
+#else
     u32 num;
     u32 ofs[1];
+#endif
 };
 
 extern "C" {

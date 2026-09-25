@@ -442,10 +442,22 @@ void VibSetDataCore(VibData* d, u32 flag)
 // Plays pattern `no` of a rumble table (damage / weapon / event tables in the archives).
 void VibSetData(VibDataTbl* t, u32 no, u32 type)
 {
+#ifdef TARGET_PC
+    // `t` is always a live host pointer straight into an already-loaded archive buffer (every call
+    // site builds it via ARC_PTR/PL_ARC_PTR/G_ARC_PTR -- pG->pCore->ofs_1C + (u32) pG->pCore, or
+    // title.cpp's G_ARC_PTR(ofs_1C)), never a compressed arena handle (include/port/ptr32.h) -- so
+    // `ofs[no]` is plain same-buffer pointer arithmetic, same reasoning as global.h's ARC_PTR/
+    // PL_ARC_PTR TARGET_PC branch, not a GC32/GCPTR round trip. Cast-rewriter left alone on purpose:
+    // this is pointer + integer -> pointer, no integer<->pointer cast for it to touch.
+    if (no < t->num && t->ofs[no]) {
+        VibSetDataCore((VibData*) ((u8*) t + (u32) t->ofs[no]), type);
+    }
+#else
     u32* ofs = t->ofs;
     if (no < t->num && ofs[no]) {
         VibSetDataCore((VibData*) (ofs[no] + (u32) t), type);
     }
+#endif
 }
 
 // Cancels the running rumbles whose type has one of the low 4 bits of `type`.
