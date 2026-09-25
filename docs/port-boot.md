@@ -3320,3 +3320,31 @@ isolation -- the run that reached `boot_1.png` used the same `RE4_PORT_INPUT` sc
 sessions, whose scripted `A`/`START` presses drive straight through the title screen into the debug
 save/load menu; a title-screen-only screenshot (no scripted input, or input that stops before the
 first `A` press) is easy follow-up work, not attempted here given the session's remaining budget.
+
+## 48. Default-build failing-file baseline clarified: 25, not 64 -- wrong target, not a regression
+
+A follow-up session's `RE4_U32_32=OFF` "failing-file count" (64) did not match the 25-33 range every
+prior session recorded (section 8 on, `docs/port-phase2.md` section 9, `docs/port-phase3.md`).
+Root cause: that count came from `cmake --build build-pc -j8 -- -k 0` with **no `--target`**, which
+builds every default target in `build-pc` -- `re4_game_core` (small representative slice) *and*
+`re4_rel_all` (every REL module source) *in addition to* `re4_game_all` (every `src/game/*.cpp`,
+the target every prior session's number actually tracks). `re4_game_core`/`re4_rel_all` have their
+own, separate, always-broader failing sets (pointer-cast/asm-register issues in files
+`re4_game_all` doesn't even compile a second time, plus `ss_debug.cpp` and friends under
+`re4_rel_all` -- REL modules are a different error-inventory axis entirely, `CMakeLists.txt`'s own
+`-- re4_rel_all` comment). Building only the tracked target,
+`cmake --build build-pc --target re4_game_all -j8 -- -k 0`, gives **25 failing files**, the correct,
+comparable number.
+
+**The real baseline going forward: `re4_game_all -k 0`, 25 failing files** (list below), unaffected
+by this session's other changes (diffed directly against a `git stash`-based before/after, identical
+set both times):
+```
+act_btn.cpp at_mod.cpp block.cpp dbmodule.cpp esp04.cpp esp08.cpp esp0a.cpp esp12.cpp esp16.cpp
+esp3f.cpp espgen02.cpp Espgen42.cpp Espgen43.cpp espgen45.cpp event.cpp game.cpp mercenaries.cpp
+model.cpp objRobo.cpp pendulum.cpp pl_class.cpp sce_at.cpp sce_sys.cpp scheduler.cpp sofdec.cpp
+```
+25 dropped from the 32-34 range earlier sessions saw because of unrelated fixes landing in between
+(cast-rewriter un-exclusions, etc.) -- not something this session changed. Any future session
+reporting a "default build failing-file count" should always name the target (`re4_game_all -k 0`,
+not the whole `build-pc` project) to stay comparable across sessions.
