@@ -16,9 +16,18 @@ void DCZeroRange(void* addr, u32 nBytes);
 void DCTouchRange(void* addr, u32 nBytes);
 void ICInvalidateRange(void* addr, u32 nBytes);
 
+#ifdef TARGET_PC
+// Real hardware: a fixed 16 KB scratch RAM window at a hardware address, `#define`d below for the
+// matching build. No such window exists on the host; Aurora's own copy of this header (kept in
+// sync by hand, `../aurora/include/dolphin/os/OSCache.h`) already has this identical branch,
+// backed by a real 16 KB static host buffer (`lib/dolphin/os/OSCache.cpp`'s `s_lcData`) -- see
+// docs/port-boot.md section 45/46.
+extern void* LCGetBase(void);
+#else
 #define LC_BASE_PREFIX 0xE000
 #define LC_BASE (LC_BASE_PREFIX << 16)
 #define LCGetBase() ((void*)LC_BASE)
+#endif
 
 void LCEnable(void);
 void LCDisable(void);
