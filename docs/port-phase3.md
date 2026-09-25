@@ -368,3 +368,122 @@ No window renders this session (crash still predates any GX/VI frame submission)
 Sections 2 (Render/VI/GX SDK parity, real render-path units) and the `CRoomInfo`/DVD-size-table BE
 audit the coordinator also asked for were not reached this pass -- the OSThread root-cause fix and
 this new blocker took the full remaining budget.
+
+## 7. Room data formats -- yz2 unit test, `ConsRoom`/`cSmd` endian bugs found and fixed, R120 room
+   loop reached
+
+### yz2 test (`tests/port/test_yz2.cpp`)
+
+`src/game/yz2code.cpp`'s `TARGET_PC` decode loop (added `c4b1a979`) had no automated test. Added
+`tests/port/test_yz2.cpp` (wired into `ctest`): links the real `src/game/yz2code.cpp`, and for four
+real room archives of different sizes/stages (`st1/r120.das` ~1.5 MB, `st1/r117.das` ~3.3 MB,
+`st2/r200.das` ~2.4 MB unpacked... see the test for exact figures, `st4/r400.das` ~5.4 MB -- the
+smallest-to-largest room archives on disc 1) decodes the same bytes two ways and compares
+byte-for-byte: `tools/motion/yz2.py`'s independent Python reference decoder (via the new
+`tools/port/yz2_extract_room.py`, which walks the disc's own FST to pull each room archive's raw
+yz2 stream straight out of a disc image with no external dependency beyond the stdlib) and
+`Yz2DecodeSet`/`Yz2DecodeExec` themselves. Needs a real disc image (`orig/G4BE08/re4_debug_disc1.iso`
+or `*.gcm`) at test time -- **SKIPs gracefully** (one stderr line, exit 0) when neither is present,
+per the port rules (never commit disc data or anything derived from it: both extracted files are
+written under the CMake binary dir, gitignored, not the repo). `ctest --test-dir build-pc -R
+test_yz2`: pass, all four rooms byte-identical to the reference. `re4_game_all -k 0`: unaffected
+(yz2code.cpp is not in the 25-file baseline).
+
+An encoder-based test (task brief's preferred option) was not attempted: matching the vendor's
+adaptive range coder bit-for-bit on the *encode* side (carry propagation through the same
+renormalisation thresholds the decoder reverses) is a second, independent reverse-engineering
+project on top of the decoder port already done, and the task brief itself allows the real-room-file
+fallback when an encoder is impractical -- taken here given the session budget.
+
+### Room archive (`stN/rNNN.das`) sub-file formats -- the tags `GetDataExt()` resolves
+
+A room archive on disc is `[0x400-byte container header][yz2 stream]`; `read.cpp`'s `decodeData()`
+decompresses the yz2 body into `pG->pRoom`, and every sub-file below is then looked up by 4-byte tag
+through `GetDataExt()` (`read.cpp:1009`, `DataExtHeader` -- already `BE<u32>`'d, Phase 3 section 2's
+own table). Every room in this checkout's disc 1 exposes at least `RTP`/`MDT`/`OSD`/`EMI`
+(`read.cpp:204-207`); the rest are looked up from `game.cpp`'s room-start sequence (`R120Init`'s
+generic counterpart) or the subsystem that owns them. Audited this pass (loader + struct + current
+`BE<T>` status); **not exhaustive** -- `st1/r120.das` alone carries 13 tagged sub-files per
+`yz2code.cpp`'s own comment, some of which (`RTP`, `OSD`, door/floor/effect tables not listed by
+tag name anywhere near `game.cpp`) were not traced to a struct this pass.
+
+| Tag | Loader (file:line) | Struct (file:line) | `BE<T>`/`Ptr32` status |
+|---|---|---|---|
+| `CNS` | `game.cpp:384` `ConsInitRoom` | `cons.cpp:11` `ConsRoom` | **Fixed this pass**: `num`/`bits[]` (and the `values[]` view over the same array) were entirely raw `u32` -- `re4_port::BE<u32>` under `TARGET_PC` now. This was the actual crash the task brief pointed at: `ConsGetRoomValue(CONS_R_NMODELINFO)` (feeding `cModInfoMgr::create`'s array count) read `r->num` as a garbage host-native value, so almost every id either fell through to `ConsRoomDefault[]` or read `values[id]` off a wrong array base. |
+| `SMD` (main + common, `no` 0/1) | `game.cpp:386,388`, `block.cpp:542,643` | `scroll.h:9` `SmdWork`, `scroll.h:27` `cSmd` | **Fixed this pass**: `cSmd::nModel`/`BinTblOfs`/`TplTblOfs`/`MotTblOfs`/`grp.nGroup`/`grp.num[]` were raw; now `BE<u16>`/`BE<u32>`. `SmdWork::pos`/`rot`/`scale` were plain `Vec` (raw `f32` triplets read straight off disc, same class of bug as `id_sys.h`'s `IdData::pos`/`vtx`/`rot` before Phase 2/3); now `SmdVec` (new, same `BeVec` pattern as `id_sys.h`/`room_jmp.h`). `SmdWork::flags`/`.b.attr` union: `flags` is now `BE<u32>`, `.b.attr` (byte 3, the *physical* last-address byte on both a real GameCube and this host, since `BE<T>` never moves bytes) is untouched -- same "single-byte union view needs no swap" reasoning as `CRoomInfo::.stage`/`.room` (docs/port-boot.md section 49). This closed `SmdGetObjNum()`'s own contribution to the same array-count bug (`n = ConsGetRoomValue(...) + SmdGetObjNum()`, `game.cpp:391` etc.) -- `SmdGetObjNum()` returns `nScrWork = pSmd->getWorkNum()`, which reads `nModel`/`grp.nGroup`/`grp.num[]` directly. |
+| `SMX` | `game.cpp:387` | `scroll.h:52` `SmxWork`, `scroll.h:66` `cSmx` | **Not converted** (`SelectMask`/`flags`/`color`/`color2`/`uvScrollU`/`uvScrollV` all raw) -- **TO VERIFY**, not reached by this pass's crash chain but same bug class as `SmdWork`. |
+| `LIT` (`no` 0/1) | `game.cpp:421-422` | `light.h:221` `cLit` | Already `BE<u16>`/`BE<u32>` (Phase 3, earlier session, `9c4b303c`). |
+| `SAT` | `game.cpp:444` | `atari.h` (`cSatMgr`/piece structs, not individually re-audited this pass) | **Not converted** -- raw, **TO VERIFY**. |
+| `EAT` | `game.cpp:454` | `atari.h`/`at_sub2.h` (`cEatMgr`) | **Not converted** -- raw, **TO VERIFY**. |
+| `AEV`/`ITA` | `game.cpp:467` `SceAtInit` | `sce_at.cpp` (not traced to a header struct this pass) | **Not converted** -- **TO VERIFY**. |
+| `SHD` | `game.cpp:477` | `shadow.h:56` `ShdHeader` | **Not converted** -- raw, **TO VERIFY**. |
+| `EFF` | `game.cpp:478`, `emdata.cpp:97` | not traced to a header struct this pass (`EffData`-shaped name not found under `include/`) | **Not converted** -- **TO VERIFY**, loader itself not located. |
+| `EAR`/`SAR` | `game.cpp:481,484` | not traced this pass | **TO VERIFY**. |
+| `TEX` | `game.cpp:487` | likely `tpl.h` (already `BE<T>`'d, Phase 3 section 2) via the same `TEXHeader` family -- **not confirmed this pass** that this call site is the same struct family. | **TO VERIFY**. |
+| `ITM`/`ETM`/`ETS` | `game.cpp:490,493,497` | not traced this pass | **TO VERIFY**. |
+| `CAM` | `game.cpp:504` | not traced this pass | **TO VERIFY**. |
+| `BLK` | `game.cpp:513` | `block.cpp` (`cSmd`-shaped block data, reuses `SMD`'s own structs per `block.cpp:542`) | Covered by the `SMD` fix above. |
+| `EVS` | `game.cpp:515` | not traced this pass | **TO VERIFY**. |
+| `ESE` | `se_at.cpp:21` | `snd.h:184` `SeAtHead` | **Not converted** -- raw, **TO VERIFY**. |
+| `FSE` | `flr_at.cpp:27` | `flr_at.h:54` `FlrAtHead` | **Not converted** -- raw, **TO VERIFY**. |
+| `STB` | `snd.cpp:1654` | `snd.h:31` `SndRoomHdr` | **Not converted** -- raw, **TO VERIFY** (Phase 3 section 2 already flagged `SndBgmTbl`/sound-related structs as Phase 5 territory; `pG->pRoom`'s own `STB` header may still need the swap independent of that). |
+| `DSE` | `snd.cpp:1749` | `SndDoorSe` (name referenced, not found as a struct under `include/` this pass) | **TO VERIFY**, loader not fully traced. |
+| `RTP`/`MDT`/`OSD`/`EMI` | `read.cpp:204-207` | `embarrel.h:21` `EmiData` (EMI); `RTP`/`MDT`/`OSD` structs not traced this pass | `EmiData`: **not converted**, raw. `RTP`/`MDT`/`OSD`: **TO VERIFY**, not located. |
+
+**Net for this pass**: 2 of the formats above (`CNS`, `SMD`/`BLK`) converted and confirmed to fix a
+real, previously-blocking bug; the remaining ~15 are surveyed only (loader/struct location where
+found) and left raw, flagged `TO VERIFY` -- converting all of them was not achievable in this
+session's budget once the live crash chain (below) needed to be followed past `CNS`/`SMD` to know
+whether they were even the right fix.
+
+**Verification of the `CNS`/`SMD` fix**: clean `cmake --build build-pc --target re4_game_all -j8 --
+-k 0` -- same 25-file baseline as `docs/port-boot.md` section 48 (`cons.cpp`/`scroll.cpp` both
+compile clean; `block.cpp` still fails, confirmed via `git stash` to be its own pre-existing,
+unrelated `(int) pointer` cast error, unchanged by this pass). `ctest --test-dir build-pc`: 10/10
+(9 previous + the new `test_yz2`).
+
+### Boot progress: R120 room loop reached
+
+Re-ran New Game -> AREA JUMP -> OPENING (`RE4_PORT_INPUT="300:UP,340:A,400:DOWN,440:DOWN,480:START"`,
+realtime, `build-pc-boot/re4_boot orig/G4BE08/files orig/G4BE08/re4_debug_disc1.iso`) after the
+`CNS`/`SMD` fix. The room archive read/decode completes (`DataReadTime`/`DataEncodeTime` both print),
+`st1_0` REL module links (`OSLink: module 'st1_0' (id 74) fresh link`), `-- R120 ----------` prints
+(the room's own init banner), and the log then shows per-frame room content (`ESP : ID[xx] TEX/ANM
+ptn num diff[...]` lines, `alloc[...]:free[...] roomdata.cpp(503/504)`) followed by a steady stream
+of `PrimitiveBuff :  work remain under 1/10` -- a real, pre-existing debug warning
+(`debug.cpp:346`), not a crash: it means `pG->nPrim` (`ConsGetRoomValue(CONS_R_NPRIM)`) is a small
+budget relative to what the room draws, printed once per frame by `PrimitiveBuffDisp()`. The process
+kept running (frame loop, not stuck) until killed after ~14 s; no HALT/abort/segfault. This satisfies
+the task brief's stopping condition ("the room loop runs (R120Init once, R120Main per frame)") on
+the run where it happened -- `R120Init`'s own banner (`-- R120 ----------`) printed exactly once
+across that run.
+
+**Not reliably reproducible -- honestly flagged, not glossed over**: two further repeats of the
+*identical* command (one with `RE4_PORT_SCREENSHOT`/`_DELAY_MS=9000`, one without) did **not** reach
+`R120` -- both instead looped `cDatTbl::end : memory failed` (a known heap/save subsystem stub
+message from earlier sessions, docs/port-boot.md's `IdUnit` sizing note) and stayed on the title
+menu. This looks like real-time input-script jitter: `RE4_PORT_INPUT`'s frame-numbered script assumes
+a frame arrives roughly on schedule under `realtime` pacing, and host load (this session ran three
+`re4_boot` instances back to back) shifts exactly when frame N's input is sampled, so the scripted
+`START` press can land one menu frame off and never fire. This is a pre-existing property of the
+frame-numbered `RE4_PORT_INPUT` mechanism under realtime pacing, not something this pass's `CNS`/
+`SMD` edits caused (both fixes are read-only-format changes with no effect on frame timing).
+
+**Made reliable with `RE4_PORT_FIXED_VI=1`**: the same command with `RE4_PORT_FIXED_VI=1` added
+reached `-- R120 ----------` on every one of 2 repeats tried (including one with
+`RE4_PORT_SCREENSHOT`/`_DELAY_MS=9000`) -- this is the deterministic-timestep mode docs/port-boot.md
+names for exactly this kind of jitter, and it fixes it here too. **The screenshot captured under
+`RE4_PORT_FIXED_VI=1`** (9 s in, room loop confirmed still running in the log) shows neither the
+title screen nor a 3D room render: it is the debug build's own memory-usage HUD screen (a yellow/
+green usage bar gauge, "96/100" and two hex readouts `3F3100`/`403100` bottom-of-screen) with a large
+`BSS SIZE OVER!!!` message printed in the middle -- a real, pre-existing debug-tool overlay this
+disc's debug build has (not a crash: the process kept running and logging `PrimitiveBuff` lines
+after the shot), most likely toggled onto the screen by one of the `RE4_PORT_INPUT` script's own
+button presses landing on a debug-menu shortcut rather than only game-menu buttons, or a real (and
+possibly genuine, given this port's various stub sizes) BSS-budget overrun the vendor's own debug
+build warns about instead of crashing on. **Not root-caused this pass** -- flagged here rather than
+asserted either way; a screenshot of the actual R120 3D room render (as opposed to this debug HUD
+screen) was still not captured this session.
+
+No REL-module-missing stop was hit this pass (`wep01` or otherwise) -- the run was terminated by the
+session budget while still cycling in the room's per-frame loop, not by a further crash.
