@@ -207,11 +207,24 @@ void cRoomJmp::setNextPos(u8 Stage, u8 Room)
 s8 cRoomJmp::getNextStageNo(s8 stage, int add)
 {
     u32* p = tbl;
+    // On-disc, big-endian (Phase 3, docs/port-phase3.md), same raw table as getIndexNum()/
+    // getRoomInfo() above -- unlike those, this read was still plain, giving the debug room-jump
+    // menu's UP/DOWN stage navigation a garbage stage count/offset on this little-endian host
+    // (found live while chasing a separate NaN in Leon's cModel::pos; this fix alone did not
+    // resolve that one, but the raw read here is wrong regardless).
+#ifdef TARGET_PC
+    u32 n = re4_port::detail::bswap((std::uint32_t) p[0]);
+#else
     u32 n = p[0];
+#endif
 
     do {
         stage = (n + stage + add) % n;
+#ifdef TARGET_PC
+    } while (re4_port::detail::bswap((std::uint32_t) ofsTbl(p)[stage]) == 0);
+#else
     } while (ofsTbl(p)[stage] == 0);
+#endif
     return stage;
 }
 
@@ -273,7 +286,13 @@ s8 cRoomJmp::getNextPointNo(s8 stage, s8 room, s8 point, s8 add)
 // `room` when it is a valid record of `stage`, else -1.
 s8 cRoomJmp::checkRoomNo(s8 stage, s8 room)
 {
+    // Same raw-table bug as getNextStageNo() above.
+#ifdef TARGET_PC
+    if ((u8) stage >= re4_port::detail::bswap((std::uint32_t) tbl[0]) || getIndexNum(stage) == 0 ||
+        getRoomInfo(stage, room) == 0) {
+#else
     if ((u8) stage >= tbl[0] || getIndexNum(stage) == 0 || getRoomInfo(stage, room) == 0) {
+#endif
         return -1;
     }
     return room;

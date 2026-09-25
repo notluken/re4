@@ -1337,7 +1337,12 @@ void getBoundingBox(cModelData* d, ModelBound* pBox)
     u32 n = d->nVtx;
     u8 shift = d->shift;
 #ifdef TARGET_PC
-    s16* v = (s16*) (u8*) d->vtxOrig; // Ptr32<u8> -> u8* (implicit) -> s16* (reinterpret)
+    // On-disc, big-endian (Phase 3, docs/port-phase3.md): raw as a plain s16* this read the wrong
+    // 2 bytes' worth of each coordinate on this little-endian host, producing garbage model.bound
+    // values (found live while chasing a separate NaN in Leon's cModel::pos, C_MTXLightPerspective's
+    // `fovY` assert; this fix alone did not resolve that one, but the raw read here is wrong
+    // regardless -- every model's bounding box/light volume was affected).
+    re4_port::BE<s16>* v = (re4_port::BE<s16>*) (u8*) d->vtxOrig; // Ptr32<u8> -> u8* (implicit) -> BE<s16>* (reinterpret)
 #else
     s16* v = (s16*) d->vtxOrig;
 #endif
