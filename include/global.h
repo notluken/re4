@@ -326,6 +326,22 @@ struct SYSTEM_SAVE_WORK {
 extern SYSTEM_SAVE_WORK SystemSave;
 
 // stage_no/room_no read as one u16 (stage << 8 | room), as cRoomData::getRoomSavePtr wants it.
+//
+// TARGET_PC NOTE (found while porting room_jmp.cpp, not fixed here -- see the room_jmp commit
+// message / port session report): this raw `*(u16*) &pG->stage_no` overlay, and the plain `u16
+// room_id` union member it aliases (global.h's GlobalWork), only combine/split into the intended
+// `stage << 8 | room` value on a real (big-endian) GameCube. On this little-endian host, ANY single
+// view used consistently for both the write and the later read/compare (room_id <-> room_id, or
+// stage_no/room_no <-> stage_no/room_no) stays internally self-consistent regardless of host
+// endianness -- the bug only surfaces where a value crosses between the two views (e.g. title.cpp's
+// `G_ROOM_ID = pRj->getRoomInfo(...)->roomNo` builds a combined value from a table read that itself
+// produces correctly-ordered stage_no/room_no *bytes*, then stores it through the combined-u16 view,
+// which reorders those same two bytes on a little-endian host). Fixing this needs a full audit of
+// every stage_no/room_no <-> room_id crossing (title.cpp, save/load, possibly more) plus every
+// `pG->room_id`/`G_ROOM_ID` use inside a variadic call (sprintf/eprintf -- ~20+ sites, same class of
+// bug as the info->name fix in this same commit) before any of the ~150 direct `pG->room_id`
+// call sites can safely become BE<u16>; out of scope for this pass. Left as plain u16/the raw
+// overlay, unchanged, matching current (partially-by-luck) working behavior.
 #define G_ROOM_ID (*(u16*) &pG->stage_no)
 
 // Flag helpers: `f |= b` / `f &= ~b` through a reference. Not an aliasing device: the pG reload after a

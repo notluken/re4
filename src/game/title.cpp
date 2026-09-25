@@ -1605,7 +1605,14 @@ void titleDebugMenu(TitleWork* w)
     y = w->menu_y;
     info = pRj->getRoomInfo(w->Stage, w->Room[w->Stage] + w->JumpPoint);
     if (pRj->checkRoomNo(w->Stage, w->Room[w->Stage]) == w->Room[w->Stage]) {
-        eprintf(x, y - 16, 4, 0, "%s", info->name);
+        // (const char*) matters only under TARGET_PC: info->name is re4_port::Ptr32<char> there
+        // (room_jmp.h), and C's `...` never calls a class's user-defined conversion operator (it
+        // isn't one of the standard/lvalue-to-rvalue/array-to-pointer conversions ellipsis performs)
+        // -- an uncast Ptr32<char> silently passes its raw 4-byte handle through as if it were
+        // already a real pointer, corrupting whatever bytes eprintf_main's va_arg(ap, char*) then
+        // reads next to it. On the original target info->name is already `char*`, so this cast is a
+        // no-op (bytes unchanged).
+        eprintf(x, y - 16, 4, 0, "%s", (const char*) info->name);
     }
     for (i = 0; i < lines; i++) {
         int col = 0;
