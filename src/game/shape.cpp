@@ -10,6 +10,9 @@
 #include "model.h"
 #include <string.h>
 #include "motion.h"
+#ifdef TARGET_PC
+#include "port/gqr.h"
+#endif
 
 extern "C" {
 int ShapeMove(cModelInfo* info);
@@ -180,8 +183,26 @@ struct ShapeEntry {
 };
 
 // Apply the shape `data` at `rate` to the vertex buffer `dst` (8-byte vertices, s16 xyz).
+//
+// Both macros go through GQR5, which main.cpp's systemStartInit()/scheduler.cpp set once, at boot,
+// to a fixed value (`mtspr 917, r3` with r3 = 7 | (7<<16), i.e. LD_TYPE=ST_TYPE=S16,
+// LD_SCALE=ST_SCALE=0) and never change afterwards -- so unlike trans.cpp's GQR6 (set per call by
+// setupGQR6, tracked with a host mirror), GQR5's fields are a compile-time constant here.
+#ifdef TARGET_PC
+// PSQ_L_S16(p) reads a real GameCube-native (big-endian) s16 out of the on-disc shape delta table
+// (`src`, see below); PSQ_ST_S16(f, p) writes into `tmp`, a local host-order scratch array (not
+// GameCube data), so its store side needs no byte swap.
+inline s16 Shape_LoadBE16(const void* p)
+{
+    const u8* b = (const u8*) p;
+    return (s16) ((b[0] << 8) | b[1]);
+}
+#define PSQ_L_S16(p) (port::GqrDequantize(Shape_LoadBE16(p), 0))
+#define PSQ_ST_S16(f, p) (*(p) = (s16) port::GqrQuantize((f), port::GQR_TYPE_S16, 0))
+#else
 #define PSQ_L_S16(p) ({ f32 f_; asm volatile("psq_l %0,0(%1),1,5" : "=f"(f_) : "b"(p)); f_; })
 #define PSQ_ST_S16(f, p) asm volatile("psq_st %0,0(%1),1,5" : : "f"(f), "b"(p) : "memory")
+#endif
 
 // Applies shape `data` at frame `rate` to the vertex buffer `dst`: for every channel flagged 4 the
 // Hermite weight (percent / 100, x1.37 with shapeFlags bit3) scales that channel's delta list

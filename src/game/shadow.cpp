@@ -699,9 +699,15 @@ void make_comn_fit_light(ShadowMng* mng, cModel* m)
     {
         // COMPILER-DIFF: 13 (local-alloc qty order): r11 pinned after the 1.0 load and before the
         // conversion's lfd, so the fpmem loadaddr cannot take r11 and the 1.0 pool high gets it.
+#ifndef TARGET_PC
+        // Codeless register-allocation pin (empty asm templates: no instruction is ever emitted,
+        // so this has zero effect on the values computed) -- meaningless on arm64, where 'f' is
+        // not a valid constraint for a scalar float bound to a general register anyway. Skipped
+        // outright rather than translated, same as main.cpp's GQR setup asm.
         register u32 k asm("r11");
         asm("" : "=r"(k) : "f"(1.0f));
         asm("" : "=m"(pos.x) : "r"(k));
+#endif
         if (mng->fov < 1.0f) {
             mng->fov = 1.0f;
         }
@@ -774,9 +780,12 @@ void make_comn_parallel_light(ShadowMng* mng, cModel* m)
     mng->fov -= w->angleSub;
     {
         // COMPILER-DIFF: 13 (local-alloc qty order): see make_comn_fit_light.
+#ifndef TARGET_PC
+        // Codeless register-allocation pin, see make_comn_fit_light's identical block.
         register u32 k asm("r11");
         asm("" : "=r"(k) : "f"(1.0f));
         asm("" : "=m"(pos.x) : "r"(k));
+#endif
         if (mng->fov < 1.0f) {
             mng->fov = 1.0f;
         }
