@@ -62,3 +62,25 @@ void useDataPtrLike(void* pData, u32 byteOfs)
     void* p = DATA_PTR_LIKE(pData, byteOfs);
     (void) p;
 }
+
+// (d) src/game/read.cpp's real PL_DATA_ADDR/DVD_READ_N bug: a function-like macro (READ_N_LIKE,
+// like DVD_READ_N) invoked with an argument that is itself an IntegralToPointer cast of a plain
+// object-like macro (FIXED_ADDR_LIKE, like PL_DATA_ADDR -- no cast of its own at the #define, so
+// it is NOT a "MacroBody" rewrite site the way OBJECT_LIKE_PTR above is). The cast's own ExprLoc is
+// then a macro-ARGUMENT location (isMacroID() true), which must not be confused with a cast
+// spelled inside a macro's own definition body: doing so chases getSpellingLoc(EditEnd) through
+// FIXED_ADDR_LIKE's *own* #define text (a different, earlier point in this file) instead of
+// stopping at this call site, producing a nonsensical reversed edit range that the tool then
+// silently drops as "already rewritten" -- leaving the original, unconverted `(void*)
+// FIXED_ADDR_LIKE` in the output. Real-world consequence (read.cpp): a GameCube fixed-MEM1-address
+// literal handed to a host function verbatim, instead of through GCPTR -- a real host-memory crash.
+#define FIXED_ADDR_LIKE 0x807EC000
+#define READ_N_LIKE(dst, mode) doReadLike(dst, mode)
+
+int doReadLike(void* dst, int mode);
+
+void useFixedAddrAsMacroArg()
+{
+    int r = READ_N_LIKE((void*) FIXED_ADDR_LIKE, 0x8100);
+    (void) r;
+}

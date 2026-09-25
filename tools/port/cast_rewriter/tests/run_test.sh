@@ -59,6 +59,15 @@ grep -q 're4_port::GC32(OBJECT_LIKE_PTR)' "$OUT" || fail "outer cast at OBJECT_L
 grep -q '#define DATA_PTR_LIKE(d, ofs) (re4_port::GCPTR<void>((std::uint32_t)((\*(u32\*) ((u8\*) (d) + (ofs)) + (u32)re4_port::GC32((d))))))' "$OUT" || \
     fail "DATA_PTR_LIKE's own #define body was not rewritten with its nested cast composed in"
 
+# (d): FIXED_ADDR_LIKE, passed as READ_N_LIKE's argument under an outer (void*) cast, must be
+# rewritten to GCPTR<void> at the call site -- not left as the original raw `(void*)
+# FIXED_ADDR_LIKE` (the read.cpp PL_DATA_ADDR/DVD_READ_N bug: a macro-argument cast wrongly
+# classified as a macro-body cast, silently dropped).
+grep -q 'READ_N_LIKE(re4_port::GCPTR<void>((std::uint32_t)(FIXED_ADDR_LIKE)), 0x8100)' "$OUT" || \
+    fail "FIXED_ADDR_LIKE cast as a macro argument (READ_N_LIKE) was not rewritten to GCPTR"
+grep -Eq '\(void\*\) FIXED_ADDR_LIKE' "$OUT" && \
+    fail "original unrewritten '(void*) FIXED_ADDR_LIKE' cast still present in the output"
+
 # And the whole thing must actually compile against a stub re4_port::GC32/GCPTR<T> -- the strongest
 # check, catches anything the text patterns above do not.
 /usr/bin/c++ -std=c++17 -include "$HERE/re4_port_stub.h" -fsyntax-only "$OUT" || \

@@ -297,10 +297,40 @@ private:
         //  - the macro is #define'd in a header (spelling location elsewhere): left alone entirely,
         //    that is the hand-edited TARGET_PC-branch path (section 6), with real-file review and
         //    remote verification, not this tool's job.
+        // `Loc.isMacroID()` alone conflates two different things: a cast spelled inside a macro's
+        // own #define BODY (the MacroBody case below), and a cast that is merely *passed as an
+        // argument* to some other macro call (e.g. `DVD_READ_N(name, (void*) PL_DATA_ADDR, ...)`,
+        // src/game/read.cpp -- the cast is written directly at the call site, not inside
+        // DVD_READ_N's #define text, but substituting it into DVD_READ_N's replacement list still
+        // makes its ExprLoc a macro ID). Treating the latter as MacroBody chases
+        // getSpellingLoc(EditEnd) through *its own* subexpression's macro expansion (PL_DATA_ADDR's
+        // #define, a different, earlier point in the file) instead of stopping at the call site,
+        // producing a nonsensical reversed edit range that either corrupts the buffer or gets
+        // silently dropped as "already rewritten" -- either way the original, unconverted cast is
+        // left in the output (measured: read.cpp's `(void*) PL_DATA_ADDR` handed to DvdReadN
+        // verbatim, a real host-pointer-vs-GC-address bug, not just cosmetic).
+        //
+        // But checking `SM.isMacroBodyExpansion(Loc)` on the *immediate* (topmost) layer alone is
+        // not enough either: a macro whose own #define body genuinely does contain the cast
+        // (`#define CORE_DATA_ADDR ((void*) 0x80578000)`, read.cpp) can ITSELF be invoked as another
+        // macro's argument (`DVD_READ(3, CORE_DATA_ADDR, ...)`) -- the argument-substitution layer
+        // then sits on TOP of that macro's own body-expansion layer, so `Loc`'s immediate/topmost
+        // layer is argument-kind even though the cast is genuinely spelled inside CORE_DATA_ADDR's
+        // own definition (a real MacroBody site, needing the deep-spelling #define-body rewrite, not
+        // the argument-only call-site handling). Peel argument layers first (one level of
+        // `getImmediateSpellingLoc` each -- an argument's own spelling always aims at "the argument
+        // as substituted", never chasing past it into some unrelated macro two calls away) to see
+        // what's genuinely underneath: if a macro ID still remains, it can only be a body-expansion
+        // (every argument layer has been peeled away), so this is the MacroBody case; if peeling
+        // reaches a plain, non-macro location, the cast's own tokens are written directly at some
+        // call site and this is the argument-only case instead.
         bool MacroBody = false;
         SourceLocation EditBegin = E->getSourceRange().getBegin();
         SourceLocation EditEnd = E->getSourceRange().getEnd();
-        if (Loc.isMacroID()) {
+        SourceLocation UnderArgLoc = Loc;
+        while (UnderArgLoc.isMacroID() && SM.isMacroArgExpansion(UnderArgLoc))
+            UnderArgLoc = SM.getImmediateSpellingLoc(UnderArgLoc);
+        if (UnderArgLoc.isMacroID()) {
             SourceLocation SpellLoc = SM.getSpellingLoc(Loc);
             if (!SM.isWrittenInMainFile(SpellLoc)) {
                 SLog.log("SKIP macro-in-header " + siteLoc(SM, SpellLoc));
@@ -309,6 +339,40 @@ private:
             MacroBody = true;
             EditBegin = SM.getSpellingLoc(EditBegin);
             EditEnd = SM.getSpellingLoc(EditEnd);
+        } else if (Loc.isMacroID()) {
+            // Not a MacroBody site (no body-expansion layer survived peeling every argument layer
+            // above): the cast's own tokens are written directly at some call site, itself passed as
+            // an argument to another macro (PL_DATA_ADDR's case, not CORE_DATA_ADDR's).
+            // The cast itself (not just its subexpression) is a macro ARGUMENT: written directly at
+            // some other macro's call site (e.g. `DVD_READ_N(name, (void*) PL_DATA_ADDR, ...)`), but
+            // substituted into that macro's body, so its ExprLoc is a macro ID of the "argument"
+            // kind, not "body" kind. An argument SLocEntry's *spelling* chain points toward wherever
+            // the argument's own (already macro-prescanned) tokens ultimately came from -- for a
+            // plain token like the `(void*)` here, that IS the call site (one level of
+            // `getImmediateSpellingLoc` reaches a non-macro, main-file location directly); for a
+            // token that is itself the result of another macro's expansion (`PL_DATA_ADDR`'s
+            // resulting integer literal here), one level instead reaches *that* macro's own body
+            // expansion (still a macro ID, but now of "body" kind, not "argument"), which the
+            // existing subexpression-is-a-macro-call handling just below (getExpansionRange) already
+            // resolves correctly back to the call site -- exactly the same shape as `(u32)
+            // DVD_BUFF2`. Do NOT use `getExpansionRange`/`getImmediateMacroCallerLoc` directly on the
+            // still-argument-wrapped location for this first peel: both resolve outward to the
+            // *enclosing* macro invocation's own bounds (measured: replaced the entire
+            // `DVD_READ_N(...)` call, not just this argument), the opposite of what one level of
+            // *spelling* resolution gives for an argument entry.
+            if (EditBegin.isMacroID() && SM.isMacroArgExpansion(EditBegin))
+                EditBegin = SM.getImmediateSpellingLoc(EditBegin);
+            if (EditEnd.isMacroID() && SM.isMacroArgExpansion(EditEnd))
+                EditEnd = SM.getImmediateSpellingLoc(EditEnd);
+            SourceLocation CheckLoc = EditBegin.isMacroID() ? SM.getExpansionLoc(EditBegin) : EditBegin;
+            if (!SM.isWrittenInMainFile(CheckLoc)) {
+                SLog.log("SKIP macro-arg-not-in-main-file " + siteLoc(SM, Loc));
+                return true;
+            }
+            if (EditBegin.isMacroID())
+                EditBegin = SM.getExpansionRange(EditBegin).getBegin();
+            if (EditEnd.isMacroID())
+                EditEnd = SM.getExpansionRange(EditEnd).getEnd();
         } else if (!SM.isWrittenInMainFile(Loc)) {
             return true; // only rewrite casts physically in this TU's own file, not #included ones
         } else {
@@ -406,8 +470,23 @@ private:
             CharSourceRange CR = CharSourceRange::getTokenRange(SpellR);
             return Lexer::getSourceText(CR, SM, LO).str();
         }
-        SourceLocation EB = SM.getExpansionRange(R.getBegin()).getBegin();
-        SourceLocation EE = SM.getExpansionRange(R.getEnd()).getEnd();
+        // A macro-ARGUMENT-wrapped location's *expansion* range resolves outward to the enclosing
+        // macro call, not this token's own call-site span (read.cpp's PL_DATA_ADDR/DVD_READ_N bug:
+        // `(u32) DVD_READ_N(..., (void*) PL_DATA_ADDR, ...)`'s subexpression PL_DATA_ADDR is itself
+        // wrapped in DVD_READ_N's own argument layer here, and resolving its expansion range without
+        // peeling that layer first pulled in the whole DVD_READ_N(...) call as SubText). Peel every
+        // argument layer (one level each, via spelling -- see handleCast's matching comment) before
+        // falling back to expansion-range resolution for whatever body/object-macro layer remains.
+        SourceLocation EB = R.getBegin();
+        SourceLocation EE = R.getEnd();
+        while (EB.isMacroID() && SM.isMacroArgExpansion(EB))
+            EB = SM.getImmediateSpellingLoc(EB);
+        while (EE.isMacroID() && SM.isMacroArgExpansion(EE))
+            EE = SM.getImmediateSpellingLoc(EE);
+        if (EB.isMacroID())
+            EB = SM.getExpansionRange(EB).getBegin();
+        if (EE.isMacroID())
+            EE = SM.getExpansionRange(EE).getEnd();
         CharSourceRange CR = CharSourceRange::getTokenRange(SourceRange(EB, EE));
         return Lexer::getSourceText(CR, SM, LO).str();
     }
