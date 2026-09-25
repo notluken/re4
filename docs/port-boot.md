@@ -3142,3 +3142,107 @@ translation) -- not attempted here given this session's remaining budget after s
 status` in this repo confirms no source changed this section); the title screen (still blocked behind
 task 3, since `Render()` for real 3D geometry needs the skinning kernels working, not just the FIFO
 handshake fixed).
+
+## 46. `trans.cpp`'s locked-cache/skinning asm ported and independently verified with a
+    from-scratch PowerPC interpreter; file stays excluded (now for a narrower, different reason)
+    (2026-09-25, follow-up to section 45)
+
+**Simulator (task 1)**: `tools/port/ppcsim/` -- `gqr.py` (GQR quantize/dequantize, formula cited
+from the IBM PowerPC 750CL manual's "Paired Single Load and Store Instructions" section and
+cross-checked against Dolphin's own `m_dequantizeTable`/`m_quantizeTable` and this repo's own
+`include/dolphin/base/PPCArch.h` bit masks -- all three agree), `sim.py` (a tiny interpreter for
+exactly the opcodes `CalcSk1_x`/`CalcSk1_x2` use: `lha`/`lbz`/`subi`/`li`/`mulli`/`addis`/`mtctr`,
+`psq_l`/`psq_lu`/`psq_st`/`psq_stu` with GQR quantization, `ps_madds0`/`ps_madds1`), `calc_sk1.py`
+(runs the vendor's own asm text, copied verbatim from `trans.cpp` and checked byte-for-byte against
+it every run). `test_gqr.py` (known-value unit tests for the quantizer, `python3
+tools/port/ppcsim/test_gqr.py`) and `test_calc_sk1.py` (randomized + edge-case cross-check of the
+simulator's execution of the real asm against a closed-form formula derived by hand instruction-by-
+instruction, `python3 tools/port/ppcsim/test_calc_sk1.py`) both pass. The hand derivation: the
+"ROMtx" `PSMTXReorder` writes into locked cache is column-major (`M[col*3+row]`), and the vendor's
+own `ps_madds0`/`ps_madds1` chain, decoded lane-by-lane, computes exactly the plain row-major
+affine transform `out[r] = M[r]*x + M[3+r]*y + M[6+r]*z + M[9+r]` as three chained fused multiply-
+adds -- i.e. the transpose `PSMTXReorder` performs and the specific accumulation order the asm uses
+cancel out algebraically to an ordinary `Mtx * vec` skin, just fed to the paired-single unit in a
+layout chosen for this instruction sequence. Confirmed by the simulator agreeing with this formula
+on 20+20 randomized trials (two GQR6 values for `CalcSk1_x`, one for `CalcSk1_x2`) plus max/min s16
+and zero-vertex edge cases -- not merely assumed.
+
+**Locked cache (task 2)**: simpler than the original brief assumed (section 45 already found this):
+Aurora's `include/dolphin/os/OSCache.h` has a `#ifdef TARGET_PC` branch (`extern void*
+LCGetBase(void);`, backed by a real 16 KB static host buffer in `lib/dolphin/os/OSCache.cpp`) --
+but this repo's OWN copy of the same header did NOT have that branch (verified with `-H`: the
+compiler resolves `<dolphin/os/OSCache.h>` to `include/dolphin/os/OSCache.h`, this repo's own,
+`${RE4_ROOT}/include` coming before `${RE4_AURORA_DIR}/include` in every target's include path --
+Aurora's copy is never actually seen by any `src/game/*.cpp` unit). Without this fix `LCGetBase()`
+would have macro-expanded to the literal hardware address `((void*)0xE0000000)` even under
+TARGET_PC -- caught before it caused a segfault, by checking the actual preprocessor resolution
+rather than assuming section 45's finding transferred unchanged. Fixed by adding the identical
+`#ifdef TARGET_PC` branch to this repo's `include/dolphin/os/OSCache.h` (mirrors Aurora's copy,
+`#else` unchanged for the matching build).
+
+**Task 3 (the whole-function asm itself), ported**: `CalcSk1_x`/`CalcSk1_x2`/`setupGQR6` now have
+TARGET_PC C definitions, split into their own new translation unit (`src/port/trans_skin.cpp` +
+`include/port/trans_skin.h`, added to the `re4_port` static library) rather than inline in
+`trans.cpp`, specifically so they can be unit-tested without the rest of `trans.cpp`'s dependency
+graph (RE4_U32_32, the cast rewriter, dozens of unrelated symbols). `trans.cpp` itself keeps the
+original whole-function asm byte-for-byte in `#ifndef TARGET_PC` (previously bare) blocks; its own
+`extern "C"` declaration (from `trans.h`) already covers the TARGET_PC definitions living in the
+new file, no new include needed. `MakeWeightPalette`/`MakeWeightPaletteExt`'s two `PSMTXReorder`
+call sites get a `ReorderMtxToLC()` TARGET_PC branch (a plain transpose into `LCGetBase()+idx*0x30`,
+staying in `trans.cpp` since `PSMTXReorder` itself is Metrowerks-only `asm void` code
+(`src/lib/psmtx.c`) never compiled for the host at all); `PSQ_L_U8_TO`/`PSQ_L_U8` (the GQR2 u8-to-
+float read `MakeWeightPalette`/`MakeWeightPaletteExt` use for weight percentages) get a TARGET_PC
+branch too, a plain unscaled byte read (GQR2 is fixed at boot, u8 type/scale 0 on both load and
+store, `main.cpp`'s own `#ifndef TARGET_PC` GQR setup -- never actually read on the host, so this is
+just doing in C what that fixed encoding already meant). Two pre-existing `Ptr32<u8>`-cast bugs
+fixed along the way, exactly as section 45 predicted: `(WeightExt*)`/`(Weight*)` casts from
+`d->pWeight` need an intermediate `(u8*)` cast first (same shape as `CalcTplAddrC8`'s existing
+fix), and `CalcTplAddrC8`'s two `td->...->data = (void*) (...)` assignments need `(u8*)` instead of
+`(void*)` (a `Ptr32<u8>` field has no implicit conversion from `void*`).
+
+**A real bug caught by the test, not assumed away**: the first draft of `CalcSk1_x`'s C port read/
+wrote the vertex buffers as host-native (little-endian) `s16` directly. `tests/port/
+test_trans_skin.cpp` (comparing the compiled port against `tools/port/ppcsim`'s reference vectors,
+which are genuinely big-endian, matching real hardware's native byte order for a GX vertex buffer)
+failed immediately with every byte pair swapped. Fixed with explicit `LoadBE16`/`StoreBE16` helpers
+in `trans_skin.cpp` (hand-rolled, not `include/port/be.h`'s `BE<T>`, since `d->vtxOrig`/
+`info->pPosBuf` are opaque packed byte buffers in `include/model.h`, not a `BE<T>`-wrapped struct
+field) -- `CalcSk1_x2`'s s8 elements need no such fix (single bytes). `ctest` (`test_trans_skin`,
+12 cases: 8 `CalcSk1_x` + 4 `CalcSk1_x2`, covering both GQR6 values `trans.cpp` actually uses for
+positions/default normals plus the extended s8-normal value, randomized inputs plus max/min/zero
+edge cases) now passes, bit-for-bit against the interpreter-derived reference.
+
+**Un-exclusion attempted, reverted for a narrower reason**: removing `trans.cpp` from
+`cmake/boot_exclude.txt` and building `re4_boot` now gets past compiling (confirmed: the file
+compiles clean under `RE4_U32_32`/`TARGET_PC`, cast-rewriter included) but fails to LINK --
+`trans.cpp` calls `ResetShape`/`CalculateShape_new`/`drawGround` (`shape.cpp`) and
+`ShadowTrans`/`GetSelfShadowMng`/`GetCastShadowMngPtr`/`isSelfUse`/`g_SelfShdNum`/`shd_ofs`/
+`shd_tex_scale_x` (`shadow.cpp`) directly -- both still excluded for their OWN whole-function real
+PPC asm (Phase 5, unrelated to and not attempted this session), plus `ClothDraw` (`cloth.cpp`,
+already a separate known exclusion) and three GX entry points Aurora's GX library does not yet
+implement (`GXSetDrawSync`, `GXSetDrawSyncCallback`, `__GXSetIndirectMask`). `trans.cpp` went back
+into `cmake/boot_exclude.txt`, with the comment rewritten to record that its own math is solved and
+the remaining blockers are three other units' worth of unrelated work -- not bundled into this
+session, per the same "one fully verified thing beats several half-verified" judgment call as
+section 45's own deferral.
+
+**Verified**: `python3 tools/port/ppcsim/test_gqr.py` and `test_calc_sk1.py` both pass. Host
+`ctest` in `build-pc-boot` (`RE4_U32_32=ON`): 8/8 (added `test_trans_skin`, 12/12 cases). `re4_boot`
+still builds and links clean with `trans.cpp` back in the exclude list (no regression from the
+`OSCache.h`/CMakeLists changes, which are otherwise unused while it stays excluded). Host default
+build (`re4_game_all -k 0`, `RE4_U32_32=OFF`, `RE4_PC_BUILD_ALL_GAME=ON`): 31 files fail to compile
+now, `trans.cpp` itself compiles clean (its `TARGET_PC`-gated `Ptr32`/`BE` fields, per
+`include/model.h`/`include/tpl.h`, are gated on `TARGET_PC` alone, not `RE4_U32_32`, so this was
+already reachable independent of that flag) -- **TO VERIFY**: the exact prior failing-file set was
+not saved before this session to diff against one-for-one; nothing in this session's diff touches
+any file other than `trans.cpp`/`CMakeLists.txt`/`include/dolphin/os/OSCache.h`/the two new
+`src/port`+`include/port` files, so a regression in an unrelated file is very unlikely, but the
+remote clean-rebuild/SHA-1/`asmcheck.py` loop is the actual judge for the matching build, run
+separately (see the commit history around this section for the result).
+
+**Not reached this pass**: `shape.cpp`/`shadow.cpp`/`cloth.cpp`'s own whole-function asm (each its
+own session, same as this section's own scope discipline); the three missing Aurora GX entry
+points; `pendulum.cpp` (a separate, still-excluded unit hitting the identical locked-cache pattern
+-- not on `trans.cpp`'s own call path, so not touched); the title screen itself (still blocked
+behind `trans.cpp`'s full un-exclusion, now behind `shape.cpp`/`shadow.cpp` instead of its own
+math).

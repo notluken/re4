@@ -26,16 +26,20 @@ src/game/shape.cpp
 # (SQRTF's frsqrte, SINF/COSF's paired-single Taylor series, LIMIT_ANGLE's fcmpu loop) now have
 # documented, tested (tests/port/test_math_sub.cpp) TARGET_PC C equivalents; every other function
 # in the file was already plain, portable C++.
-# src/game/trans.cpp: still excluded -- NOT the same shape as math_sub.cpp. Besides the two
-# Ptr32-cast-site bugs (fixable), it contains whole-function real PPC asm that reads/writes the
-# GameCube's *locked cache* (a fixed hardware scratch RAM window used as a matrix palette,
-# `0xE0000000`+offset -- CalcSk1_x/CalcSk1_x2, the vertex-skinning inner loop, plus
-# MakeWeightPalette/MakeWeightPaletteExt's paired-single `PSQ_L_U8_TO` reads and `PSMTXReorder`
-# writes into that same window) with no host memory-mapped equivalent. Porting this needs a design
-# decision (model the locked cache as an ordinary host buffer GXWORK() owns, then rewrite the
-# skinning kernels in portable C against it) that is cross-cutting (src/game/pendulum.cpp,
-# also still excluded above, hits the identical `0xE0000000` pattern) and belongs in its own
-# session, not bundled into this one's math_sub.cpp fix.
+# src/game/trans.cpp: STILL excluded, but for a narrower reason now (docs/port-boot.md section
+# 46) -- its own whole-function real PPC asm (CalcSk1_x/CalcSk1_x2, the vertex-skinning inner
+# loop; MakeWeightPalette/MakeWeightPaletteExt's PSQ_L_U8_TO/PSMTXReorder-into-locked-cache;
+# setupGQR6) now has TARGET_PC C equivalents, independently cross-checked against the vendor's
+# own asm executed by tools/port/ppcsim (a from-scratch PowerPC interpreter) on randomized
+# synthetic inputs, bit-for-bit (tests/port/test_trans_skin.cpp) -- and compiles clean under
+# RE4_U32_32/TARGET_PC. It is excluded from re4_boot only because it LINKS against three other
+# still-excluded/incomplete units it calls directly: shape.cpp's ResetShape/CalculateShape_new
+# and shadow.cpp's ShadowTrans/GetSelfShadowMng/GetCastShadowMngPtr/isSelfUse/g_SelfShdNum/
+# shd_ofs/shd_tex_scale_x (both still Phase 5 real-asm exclusions, above -- trans.cpp cannot link
+# until they are ported too, its own math is not the blocker any more), cloth.cpp's ClothDraw
+# (a different, already-known Ptr32 exclusion, below), and drawGround (shape.cpp) plus three GX
+# entry points Aurora's GX library does not yet implement (GXSetDrawSync,
+# GXSetDrawSyncCallback, __GXSetIndirectMask) -- not attempted this session.
 src/game/trans.cpp
 
 # Ptr32<T>/array-pointee/Sema interaction bugs (Phase 2 step 5 follow-up, not Phase 5):

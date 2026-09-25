@@ -36,6 +36,10 @@
 #include "gx_sub.h"
 #include "trans_lit.h"
 #include "shape.h"
+// TARGET_PC: CalcSk1_x/CalcSk1_x2/setupGQR6 are defined in src/port/trans_skin.cpp instead of
+// here (docs/port-boot.md section 46); this file's own extern "C" declaration above (from
+// "trans.h") already covers them, so no extra include is needed just for that -- this file's
+// #ifndef TARGET_PC guards around their definitions below are the only change.
 
 #line 1 "D:/Bio4/Prog/trans.cpp"
 
@@ -90,11 +94,19 @@ struct Weight {
 #define PTR_INVALID(p) ((s32) (p) >= 0 || (u32) (p) > 0x82FFFFFF)
 #define PTR_INVALID2(p) ((u32) (p) - 0x80000000 > 0x02FFFFFF)
 
+#ifdef TARGET_PC
+// GQR2 is set up once at boot (main.cpp, `#ifndef TARGET_PC` -- "nothing on the host reads a
+// GQR") to u8 type, scale 0 on both load and store, i.e. a plain unscaled byte-to-float read; the
+// host substitute is just that same read, done in C.
+#define PSQ_L_U8(p) ((f32) (*(const u8*) (p)))
+#define PSQ_L_U8_TO(dst, p) ((dst) = (f32) (*(const u8*) (p)))
+#else
 // u8 -> f32 through GQR2 straight from memory: the compiler only emits psq_l from a stack slot.
 #define PSQ_L_U8(p) ({ f32 f_; asm volatile("psq_l %0,0(%1),1,2" : "=f"(f_) : "b"(p) : "memory"); f_; })
 // Loads straight into the named variable so the asm output shares the variable's (global) register
 // (espgen42/45 too; asm stays in the unit so asmcheck.py counts it).
 #define PSQ_L_U8_TO(dst, p) asm volatile("psq_l %0,0(%1),1,2" : "=f"(dst) : "b"(p) : "memory")
+#endif
 
 // Bit test as 0 / 1 (matching helper).
 static inline int isBit(u32 f, u32 b)
@@ -754,9 +766,9 @@ int commonScreenMatSub(cModel* m, cModelInfo* info)
         }
         info->pNrmBuf[pG->DblBufIdx] = buf;
         if (d->weight_ext_num > 0xFF) {
-            MakeWeightPaletteExt((WeightExt*) d->pWeight, d->weight_ext_num);
+            MakeWeightPaletteExt((WeightExt*) (u8*) d->pWeight, d->weight_ext_num);
         } else {
-            MakeWeightPalette((Weight*) d->pWeight, d->weight_palette_num);
+            MakeWeightPalette((Weight*) (u8*) d->pWeight, d->weight_palette_num);
         }
         setupGQR6(((d->shift << 24) | (d->shift << 8)) | 0x00070007);
         src = d->vtxOrig;
@@ -814,6 +826,25 @@ void calcWeightMat(cModel* m)
     }
 }
 
+#ifdef TARGET_PC
+// Host equivalent of `PSMTXReorder(src, dest)` writing straight into the locked-cache matrix
+// palette at LCGetBase()+idx*0x30: real hardware's PSMTXReorder (src/lib/psmtx.c, a Metrowerks
+// `asm void` function never compiled for the host -- see docs/port-boot.md section 45 and
+// tools/port/ppcsim/calc_sk1.py's docstring) transposes the 3x4 matrix into a column-major
+// "ROMtx" (dest[col][row] = src[row][col]); CalcSk1_x/CalcSk1_x2's own C port below reads that
+// exact layout back out, so the transpose has to actually happen here, not be skipped as
+// algebraically redundant.
+static inline void ReorderMtxToLC(const Mtx src, int idx)
+{
+    f32* dst = (f32*) ((u8*) LCGetBase() + idx * 0x30);
+    for (int r = 0; r < 3; r++) {
+        for (int c = 0; c < 4; c++) {
+            dst[c * 3 + r] = src[r][c];
+        }
+    }
+}
+#endif
+
 // Builds the blended skinning matrices for the extended weight table (u8 percentages, more than
 // 255 palette entries). Returns the count.
 int MakeWeightPaletteExt(WeightExt* w0, int n)
@@ -855,7 +886,11 @@ int MakeWeightPaletteExt(WeightExt* w0, int n)
             m[2][3] += *s++ * rate;
             cnt++;
         }
+#ifdef TARGET_PC
+        ReorderMtxToLC(m, i);
+#else
         PSMTXReorder(m, (f32(*)[3]) (0xE0000000 + i * 0x30));
+#endif
     }
 #undef w
     return cnt;
@@ -907,7 +942,11 @@ int MakeWeightPalette(Weight* w0, int n)
             m[2][3] += *s++ * rate;
             cnt++;
         }
+#ifdef TARGET_PC
+        ReorderMtxToLC(m, i);
+#else
         PSMTXReorder(m, (f32(*)[3]) (0xE0000000 + i * 0x30));
+#endif
     }
 #undef w
     return cnt;
@@ -2496,6 +2535,14 @@ static void primBuffDebugDisp(int n)
 
 // Skin `n` vertices (s16 x/y/z + s16 matrix index, 8 bytes) from src into dst (s16 x/y/z, 6 bytes)
 // with the matrix palette in locked cache (0xE0000000, ROMtx 0x30 each). GQR6 holds the fixed point scale.
+//
+// TARGET_PC: defined in src/port/trans_skin.cpp instead (include/port/trans_skin.h), not here --
+// independently derived instruction-by-instruction from this same asm (docs/port-boot.md section
+// 45/46) and cross-checked against it by executing this exact asm text in a from-scratch
+// PowerPC interpreter (tools/port/ppcsim/test_calc_sk1.py), split into its own translation unit
+// so it can be unit-tested (tests/port/test_trans_skin.cpp) without the rest of this file's
+// dependency graph.
+#ifndef TARGET_PC
 void CalcSk1_x(void* dst, void* src, u32 n)
 {
     asm volatile(
@@ -2530,8 +2577,11 @@ void CalcSk1_x(void* dst, void* src, u32 n)
         "addis 9, 9, 0xE000\n"
         "bdnz 1b\n");
 }
+#endif
 
 // Same for s8 normals (s8 x/y/z + u8 matrix index, 4 bytes) into s8 x/y/z (3 bytes).
+// TARGET_PC: see src/port/trans_skin.cpp (same note as CalcSk1_x above).
+#ifndef TARGET_PC
 void CalcSk1_x2(void* dst, void* src, u32 n)
 {
     asm volatile(
@@ -2566,12 +2616,16 @@ void CalcSk1_x2(void* dst, void* src, u32 n)
         "addis 9, 9, 0xE000\n"
         "bdnz 1b\n");
 }
+#endif
 
 // Sets GQR6 (the paired-single quantisation register the skinning loads use).
+// TARGET_PC: see src/port/trans_skin.cpp (same note as CalcSk1_x above).
+#ifndef TARGET_PC
 void setupGQR6(u32 v)
 {
     asm volatile("mtspr 918, %0" : : "r"(v));
 }
+#endif
 
 // Relocate a TPL whose texture headers also carry a CLUT (thermo palette).
 void CalcTplAddrC8(TEXPalette* tpl)
@@ -2589,10 +2643,10 @@ void CalcTplAddrC8(TEXPalette* tpl)
     for (i = 0; i < tpl->numDescriptors; i++) {
         TEXDescriptor* td = &tpl->descriptorArray[i];
         td->textureHeader = (TEXHeader*) ((u8*) tpl + td->textureHeader.raw_handle());
-        td->textureHeader->data = (void*) ((u8*) tpl + td->textureHeader->data.raw_handle());
+        td->textureHeader->data = (u8*) tpl + td->textureHeader->data.raw_handle();
         if (td->CLUTHeader != 0) {
             td->CLUTHeader = (CLUTHeader*) ((u8*) tpl + td->CLUTHeader.raw_handle());
-            td->CLUTHeader->data = (void*) ((u8*) tpl + td->CLUTHeader->data.raw_handle());
+            td->CLUTHeader->data = (u8*) tpl + td->CLUTHeader->data.raw_handle();
         }
     }
 #else
