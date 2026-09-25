@@ -19,7 +19,21 @@
 #define RE4_PORT_GAME_SECTION_H
 
 #ifdef TARGET_PC
-#pragma clang section text="__TEXT,__re4game"
+// The trailing `,regular,pure_instructions` is load-bearing, not decorative: without it ld64 does
+// not recognize `__re4game` as a code section (it only infers that from the conventional
+// `__text`'s name otherwise) and silently skips generating compact-unwind/`__unwind_info` entries
+// for anything placed in it -- confirmed with a standalone repro (a `try`/`catch` in a
+// `#pragma clang section text="__TEXT,__re4game"`-tagged TU calling a throwing function in the
+// same section: the exception escapes uncaught, `libc++abi: terminating due to uncaught
+// exception`, exactly this bug) and by `image show-unwind` on a real `re4_boot`: functions in the
+// old, attribute-less `__re4game` section had no "sourced from the compiler: yes" compact-unwind
+// plan at all (only the generic arm64 default), while ordinary `__text` functions did. The one
+// ld64 warning this used to produce ("missing 'regular,pure_instructions' section flag",
+// docs/port-boot.md section 40) was NOT cosmetic -- it was ld64 accurately describing the exact
+// defect this comment fixes. Any exception that needs to unwind through `src/game` code (every
+// `OSExitThread()` call via scheduler.cpp's `TaskExit`/`TaskChain`, at minimum) was silently
+// fatal before this fix.
+#pragma clang section text="__TEXT,__re4game,regular,pure_instructions"
 #endif
 
 #endif // RE4_PORT_GAME_SECTION_H
