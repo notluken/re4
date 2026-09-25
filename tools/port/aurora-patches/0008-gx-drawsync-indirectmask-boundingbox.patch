@@ -1,0 +1,163 @@
+diff -ruN aurora_a/include/dolphin/gx/GXManage.h aurora_b/include/dolphin/gx/GXManage.h
+--- a/include/dolphin/gx/GXManage.h	2026-09-25 08:10:49
++++ b/include/dolphin/gx/GXManage.h	2026-09-25 07:48:59
+@@ -15,11 +15,32 @@
+ GXDrawDoneCallback GXSetDrawDoneCallback(GXDrawDoneCallback cb);
+ void GXDrawDone(void);
+ void GXSetDrawDone(void);
++// re4-port: token-valued analog of GXSetDrawDone/GXDrawDone -- GXSetDrawSync(token) queues a BP
++// write carrying an arbitrary 16-bit token (rather than a boolean "done" flag); GXReadDrawSync()
++// returns the most recent token the FIFO has actually reached; the callback set by
++// GXSetDrawSyncCallback (already declared above) fires with that token. See fifo.cpp/
++// command_processor.cpp for how "reached" is defined under this port's synchronous Drain mode.
++void GXSetDrawSync(u16 token);
++u16 GXReadDrawSync(void);
++// re4-port: real hardware's indirect-stage cache mask (BP reg, gates which of GX's 4 indirect
++// stages the SU texture-region logic considers "dirty"); every src/game call site passes 0
++// (trans.cpp) meaning "no stages masked off" -- Aurora's own __GXSetSUTexRegs/__GXUpdateBPMask
++// (GXManage.cpp) don't currently model per-stage masking at all, so this only records the value
++// for GXGetIndirectMask()-style introspection (none exists yet) rather than changing any
++// rendering decision. TO VERIFY if a future non-zero caller needs the real masking behavior.
++void __GXSetIndirectMask(u32 mask);
+ void GXFlush(void);
+ void GXPixModeSync(void);
+ void GXTexModeSync(void);
+ void GXSetMisc(GXMiscToken token, u32 val);
+ void GXAbortFrame(void);
++// re4-port: resets real hardware's per-primitive screen-space bounding-box accumulator (read back
++// with GXReadBoundingBox, e.g. for scissor/viewport optimization). Nothing in Aurora tracks this
++// state and no src/game call site (only shadow.cpp's GXClearBoundingBox, no GXReadBoundingBox
++// anywhere) ever reads it back, so this is a correct no-op rather than a partial implementation --
++// see lib/dolphin/gx/GXFrameBuffer.cpp's own pre-existing "TODO GXClearBoundingBox" for where a
++// real implementation would go if a future caller needs GXReadBoundingBox too.
++void GXClearBoundingBox(void);
+ 
+ #ifdef __cplusplus
+ }
+diff -ruN aurora_a/lib/dolphin/gx/GXManage.cpp aurora_b/lib/dolphin/gx/GXManage.cpp
+--- a/lib/dolphin/gx/GXManage.cpp	2026-09-25 08:10:49
++++ b/lib/dolphin/gx/GXManage.cpp	2026-09-25 07:49:03
+@@ -3,6 +3,7 @@
+ 
+ #include "../../gx/fifo.hpp"
+ #include "dolphin/gd/GDGeometry.h"
++#include "dolphin/gd/GDPixel.h"
+ 
+ #include <cstring>
+ 
+@@ -274,6 +275,33 @@
+ }
+ 
+ GXDrawDoneCallback GXSetDrawDoneCallback(GXDrawDoneCallback cb) { return aurora::gx::fifo::set_draw_done_callback(cb); }
++
++// re4-port: GXSetDrawSync/GXReadDrawSync/GXSetDrawSyncCallback -- see dolphin/gx/GXManage.h and
++// aurora::gx::fifo::set_last_token's comment for how "reached" is defined under Drain mode.
++// Unlike GXSetDrawDone (which flushes the FIFO immediately, GXDrawDone actually drains it),
++// GXSetDrawSync only queues the BP writes -- real hardware's GXSetDrawSync does not block either;
++// the token is only actually reached once the FIFO drains up to this point (the next GXDrawDone,
++// frame swap, or explicit drain), exactly mirroring GXSetDrawDone/GXDrawDone's own split.
++void GXSetDrawSync(u16 token) {
++  GXFlush();
++  GX_WRITE_RAS_REG(BP_TOKEN(token, GX_BP_REG_PETOKENINT));
++  GX_WRITE_RAS_REG(BP_TOKEN(token, GX_BP_REG_PETOKEN));
++  aurora::gx::fifo::publish();
++}
++
++u16 GXReadDrawSync() { return aurora::gx::fifo::get_last_token(); }
++
++GXDrawSyncCallback GXSetDrawSyncCallback(GXDrawSyncCallback cb) { return aurora::gx::fifo::set_draw_sync_callback(cb); }
++
++// re4-port: see dolphin/gx/GXManage.h's declaration comment -- every src/game call site passes 0
++// (trans.cpp), and this port's SU-texture-region logic (__GXSetSUTexRegs/__GXUpdateBPMask, both
++// below) does not model per-stage indirect masking, so there is no rendering decision for this
++// value to change yet; recorded for introspection/future use only.
++static u32 sIndirectMask = 0;
++void __GXSetIndirectMask(u32 mask) { sIndirectMask = mask; }
++
++// re4-port: see dolphin/gx/GXManage.h's declaration comment -- no-op, justified there.
++void GXClearBoundingBox() {}
+ 
+ void GXFlush() {
+   if (__gx->dirtyState) {
+diff -ruN aurora_a/lib/gx/command_processor.cpp aurora_b/lib/gx/command_processor.cpp
+--- a/lib/gx/command_processor.cpp	2026-09-25 08:10:49
++++ b/lib/gx/command_processor.cpp	2026-09-25 07:43:32
+@@ -3,6 +3,7 @@
+ #include "../gfx/depth_peek.hpp"
+ #include "../gfx/recording.hpp"
+ #include "../internal.hpp"
++#include "fifo.hpp"
+ #include "dolphin/gd/GDGeometry.h"
+ #include "dolphin/gx/GXAurora.h"
+ #include "gx.hpp"
+@@ -228,8 +229,16 @@
+     case CP_CMD_LOAD_BP_REG: {
+       const u32 value = reader.read<u32>();
+       handle_bp(value);
+-      if (reg_get(value, 8, 24) == GX_BP_REG_DRAWDONE) {
++      const u32 bpReg = reg_get(value, 8, 24);
++      if (bpReg == GX_BP_REG_DRAWDONE) {
+         return {static_cast<u32>(reader.offset()), true};
++      }
++      // re4-port: GXSetDrawSync's token BP writes (dolphin/gx/GXManage.h) -- GDSetDrawSync
++      // (GDPixel.cpp) writes PETOKENINT (0x48) then PETOKEN (0x47) with the same token value;
++      // only act on the second, "committing" write so a callback/GXReadDrawSync observer never
++      // sees the token before both halves of the real hardware sequence have gone by.
++      if (bpReg == GX_BP_REG_PETOKEN) {
++        set_last_token(static_cast<u16>(reg_get(value, 16, 0)));
+       }
+       break;
+     }
+diff -ruN aurora_a/lib/gx/fifo.cpp aurora_b/lib/gx/fifo.cpp
+--- a/lib/gx/fifo.cpp	2026-09-25 08:10:49
++++ b/lib/gx/fifo.cpp	2026-09-25 07:42:34
+@@ -65,6 +65,8 @@
+ std::atomic<uint32_t> sWorkerWake{0};
+ thread::Thread sWorkerThread;
+ std::atomic<DrawDoneCallback> sDrawDoneCallback{nullptr};
++std::atomic<DrawSyncCallback> sDrawSyncCallback{nullptr};
++std::atomic<uint16_t> sLastToken{0};
+ 
+ void dispatch_draw_done() noexcept {
+   if (const auto callback = sDrawDoneCallback.load(std::memory_order_acquire); callback != nullptr) {
+@@ -218,6 +220,19 @@
+ DrawDoneCallback set_draw_done_callback(DrawDoneCallback callback) noexcept {
+   return sDrawDoneCallback.exchange(callback, std::memory_order_acq_rel);
+ }
++
++DrawSyncCallback set_draw_sync_callback(DrawSyncCallback callback) noexcept {
++  return sDrawSyncCallback.exchange(callback, std::memory_order_acq_rel);
++}
++
++void set_last_token(uint16_t token) noexcept {
++  sLastToken.store(token, std::memory_order_release);
++  if (const auto callback = sDrawSyncCallback.load(std::memory_order_acquire); callback != nullptr) {
++    callback(token);
++  }
++}
++
++uint16_t get_last_token() noexcept { return sLastToken.load(std::memory_order_acquire); }
+ 
+ void finish_draw() noexcept {
+   if (!sFrameActive || kProcessingMode == ProcessingMode::Drain || detail::sInDisplayList) {
+diff -ruN aurora_a/lib/gx/fifo.hpp aurora_b/lib/gx/fifo.hpp
+--- a/lib/gx/fifo.hpp	2026-09-25 08:10:49
++++ b/lib/gx/fifo.hpp	2026-09-25 07:42:26
+@@ -99,6 +99,17 @@
+ using DrawDoneCallback = void (*)();
+ DrawDoneCallback set_draw_done_callback(DrawDoneCallback callback) noexcept;
+ 
++// re4-port: token-valued analog of the draw-done callback above, for GXSetDrawSync/
++// GXReadDrawSync/GXSetDrawSyncCallback (dolphin/gx/GXManage.h). set_last_token() is called by
++// command_processor.cpp's BP handler the moment it processes the token BP write -- under this
++// port's synchronous Drain processing mode that happens inside drain()/process_to(), i.e. on the
++// game thread, at the point in the command stream the token was queued at, never on a worker
++// thread (there isn't one in Drain mode).
++using DrawSyncCallback = void (*)(uint16_t token);
++DrawSyncCallback set_draw_sync_callback(DrawSyncCallback callback) noexcept;
++void set_last_token(uint16_t token) noexcept;
++uint16_t get_last_token() noexcept;
++
+ // Display list recording
+ void begin_display_list(uint8_t* buf, uint32_t size);
+ uint32_t end_display_list();
