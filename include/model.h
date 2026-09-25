@@ -250,9 +250,15 @@ public:
     cModel* getPos(cModel* m, Vec* out);  // light origin of `m` (the parts x52 - 1 selects); returns the coord it belongs to
 };
 
-// One sequence key (MotionData sequence table entry / MotionWork::key*).
+// One sequence key (MotionData sequence table entry / MotionWork::key*). On-disc/relocated
+// (game/motion.cpp reads it straight off the .das/.drs buffer): frame is BE<u16> under TARGET_PC
+// (docs/port-phase3.md); Se/Free are single bytes, no swap needed either way.
 struct MotionSeqKey {
+#ifdef TARGET_PC
+    re4_port::BE<u16> frame;  // 0x00  motion frame in 10.6 fixed point
+#else
     u16 frame;  // 0x00  motion frame in 10.6 fixed point
+#endif
     u8 Se;      // 0x02  sound number + 1 to play at this key, 0 = none (PS2 SEQUENCE_DATA.Se)
     u8 Free;    // 0x03  free bits: player sound kind (low 3 bits) / object event bits (PS2 SEQUENCE_DATA.Free)
 };
@@ -260,8 +266,16 @@ struct MotionSeqKey {
 // Key-frame data header (the `data` given to MotionSetCore). Packed:
 //   u16 maxFrame (low 14 bits), u8 nParts, u16 parts[nParts], u8 partsNo[nParts],
 //   4-aligned u32 keyOfs[nParts] (relocated in place to absolute key pointers).
+// On-disc: maxFrame is BE<u16> under TARGET_PC (docs/port-phase3.md); nParts is a single byte, no
+// swap needed. The packed arrays after this header (parts[]/partsNo[]/keyOfs[]) are read through
+// MotionWorkSub's own pJoint_kind/pJoint_no/pHermite_data pointers (game/motion.cpp), not through
+// this struct -- see motion.h for their TARGET_PC types.
 struct MotionData {
+#ifdef TARGET_PC
+    re4_port::BE<u16> maxFrame;  // 0x00
+#else
     u16 maxFrame;  // 0x00
+#endif
     u8 nParts;     // 0x02
 };
 
@@ -271,7 +285,18 @@ struct AttachCamera;   // cam_ctrl.h
 // a blend motion (MotionWork::blend, the enemy works' blendMot) is, and the prefix of cModel::Motion.
 struct MotionWorkSub {
     MotionData* pMot;     // 0x00  NULL = no motion
-    u32* pHermite_data;          // 0x04  per parts key data
+    // 0x04  per parts key data: MotionSetCore relocates a packed on-disc array of big-endian
+    // 4-byte file offsets (one per parts) into absolute key pointers, the same "raw offset until
+    // relocated, then a pointer" shape as cModelData::blendTbl/flipTbl (docs/port-phase2.md step
+    // 5). Ptr32<u8> is exactly 4 bytes and handles the big-endian storage transparently both
+    // before relocation (a raw file offset) and after (a compressed arena handle) -- a plain u32*
+    // would be 8 bytes per entry under the default RE4_U32_32=OFF build (include/types.h),
+    // corrupting every stride through this array.
+#ifdef TARGET_PC
+    re4_port::Ptr32<u8>* pHermite_data;
+#else
+    u32* pHermite_data;
+#endif
     u16 Key_hist[2][2][3];    // 0x08  root key history [flip][rot/pos][axis]
     f32 Mot_frame_max;         // 0x20
     f32 Mot_frame;            // 0x24
@@ -279,8 +304,17 @@ struct MotionWorkSub {
     f32 Mot_frame_old;       // 0x2C
     u8 Joint_num;            // 0x30
     u8 pad_31[3];
-    u8* pJoint_no;          // 0x34  model parts index per motion parts
-    u16* pJoint_kind;       // 0x38  low byte: kind (1 root pos, 0x40 root rot, 2/4/8/0x30 rot/pos/scale), bits 8-11: attach camera channel, bits 12-15: Fcc type
+    u8* pJoint_no;          // 0x34  model parts index per motion parts (a single-byte array, no swap needed)
+    // 0x38  low byte: kind (1 root pos, 0x40 root rot, 2/4/8/0x30 rot/pos/scale), bits 8-11:
+    // attach camera channel, bits 12-15: Fcc type. Points straight into the on-disc/relocated
+    // .das/.drs buffer (game/motion.cpp MotionSetCore): BE<u16> under TARGET_PC so every element
+    // read auto-swaps (docs/port-phase3.md); BE<u16> is always exactly 2 bytes regardless of
+    // RE4_U32_32, so no stride issue the way pHermite_data's u32 had.
+#ifdef TARGET_PC
+    re4_port::BE<u16>* pJoint_kind;
+#else
+    u16* pJoint_kind;
+#endif
     u16 Null_pos;       // 0x3C  motion parts index of the root position (0xFFFF = none)
     u16 Null_rot;       // 0x3E  motion parts index of the root rotation
     u16 Mot_attr;            // 0x40  bit0: move the model by the root speed, bit1: reverse, bit2: loop, bit3: pause, bit6: flip, bit8, bit10: hokan speed blend, bit12: sequence reverse, bit13: blend parts, bit15: frame from seqFrame

@@ -151,7 +151,13 @@ void MotionSetCore(cModel* m, void* w_, void* data_, void* seq_, int hokan, int 
 {
     MotionWork* w = (MotionWork*) w_;
     MotionData* data = (MotionData*) data_;
+    // seq is the on-disc/relocated sequence table (a u16 count then MotionSeqKey[]); BE<u16> under
+    // TARGET_PC so seq[0] and the pSeq_top cast below read the real value (docs/port-phase3.md).
+#ifdef TARGET_PC
+    re4_port::BE<u16>* seq = (re4_port::BE<u16>*) seq_;
+#else
     u16* seq = (u16*) seq_;
+#endif
     HermitePrm prm;
     HermitePrm* pp = &prm;
     u16 hist0[3] = { 0, 0, 0 };
@@ -159,7 +165,11 @@ void MotionSetCore(cModel* m, void* w_, void* data_, void* seq_, int hokan, int 
     Vec v0;
     Vec v1;
     Vec v2;
+#ifdef TARGET_PC
+    re4_port::Ptr32<u8>* tbl;
+#else
     u32* tbl;
+#endif
     cModel* p;
     AttachCamera* cam;
     int f;
@@ -224,7 +234,11 @@ void MotionSetCore(cModel* m, void* w_, void* data_, void* seq_, int hokan, int 
     }
     w->Mot_frame_max = (f32) w->pMot->maxFrame;
     w->Joint_num = w->pMot->nParts;
+#ifdef TARGET_PC
+    w->pJoint_kind = (re4_port::BE<u16>*) ((u8*) w->pMot + 3);
+#else
     w->pJoint_kind = (u16*) ((u8*) w->pMot + 3);
+#endif
     w->pJoint_no = (u8*) w->pMot + (w->Joint_num * 2 + 3);
     if (!(w->Mot_flag & 0x10000000)) {
         IKInit(m, w);
@@ -234,16 +248,33 @@ void MotionSetCore(cModel* m, void* w_, void* data_, void* seq_, int hokan, int 
 #ifdef TARGET_PC
     // tbl/pJoint_no are real host pointers, never on-disc fields themselves (MotionWorkSub is a
     // runtime work struct, docs/port-phase2.md "the inventory"): the align-up below stays plain
-    // pointer arithmetic. tbl[] itself is the FCV table -- an array of u32 that, once relocated,
-    // holds a GC32-style value the same way cModelData's blendTbl/flipTbl do (stays u32, not
-    // Ptr32<T>[]); GC32(w->pMot) is what a truncating (u32) w->pMot was standing in for.
-    tbl = (u32*) (w->pJoint_no + w->Joint_num);
-    tbl = (u32*) (((std::uintptr_t) tbl + 3) & ~std::uintptr_t(3));
+    // pointer arithmetic. tbl[] itself is the FCV table: a packed on-disc array of big-endian
+    // 4-byte file offsets, relocated in place to absolute key pointers the same way cModelData's
+    // blendTbl/flipTbl are (docs/port-phase2.md step 5). Ptr32<u8> keeps each entry exactly 4
+    // bytes (a plain u32 is 8 bytes under the default RE4_U32_32=OFF build, include/types.h --
+    // that would silently double the stride through this array) and its storage is transparently
+    // big-endian both before relocation (a raw file offset) and after (a GC32-style compressed
+    // arena handle, via raw_handle()/FromRaw() -- Phase 2 step 5's "reused pointer field" idiom,
+    // not the normal Ptr32(T*) constructor, since the raw offset is never a real pointer).
+    tbl = (re4_port::Ptr32<u8>*) (w->pJoint_no + w->Joint_num);
+    // 4-byte-align tbl using only pointer<->pointer arithmetic (u8* <-> Ptr32<u8>*, never through
+    // an integer that gets cast back to a pointer): the build's cast-rewriter tool
+    // (tools/port/cast_rewriter) cannot tell an already-real host pointer's alignment round-trip
+    // apart from a genuine GC-handle relocation and wraps every integral->pointer cast in GCPTR
+    // (docs/port-phase2.md section 8's documented ambiguity) -- the original one-line
+    // `(T*) ((uintptr_t) tbl + 3) & ~3)` shape hit exactly that, truncating tbl to 32 bits and
+    // reinterpreting it as a GC32 handle (found live via this exact crash, an unrelated small
+    // GC-looking address making Ptr32<u8>::load() segfault a few lines later).
+    {
+        std::uintptr_t addr = reinterpret_cast<std::uintptr_t>(tbl);
+        std::uintptr_t pad = (std::uintptr_t) (0 - addr) & 3;
+        tbl = (re4_port::Ptr32<u8>*) ((u8*) tbl + pad);
+    }
     tbl++;
-    if ((s32) tbl[0] >= 0) {
+    if ((s32) tbl[0].raw_handle() >= 0) {
         u32 gcPMot = re4_port::GC32(w->pMot);
         for (i = 0; i < w->Joint_num; i++) {
-            tbl[i] += gcPMot;
+            tbl[i] = re4_port::Ptr32<u8>::FromRaw(tbl[i].raw_handle() + gcPMot);
         }
     }
 #else
