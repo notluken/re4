@@ -276,14 +276,32 @@ cCard::~cCard()
 // doesn't parse at block scope (linkage-specifications are namespace-scope-only, confirmed with a
 // minimal clang repro), so this needs its own name aliased onto the real symbol, at file scope.
 extern "C" void CARDInitPC(const char* game, const char* maker) asm("_CARDInit");
+#include "port/card.h" // re4_port::InitCardDir() -- must run before CARDInitPC() below
 #endif
 
 // Boot: initialises the CARD library and the CRC table, resets the card serial.
 void CardInit()
 {
 #ifdef TARGET_PC
-    // Null/empty values are fine either way -- setCurrentGame/setCurrentMaker both no-op on null.
-    CARDInitPC(nullptr, nullptr);
+    // Coordinator follow-up (docs/port-boot.md section 37): passing null/empty game+maker made
+    // Aurora's CARDInit() build an empty card path (its own get_card_region() rejects a null
+    // gameName outright), so every card probe genuinely found "no card" and took the error-display
+    // path -- not a bug in that path itself, just never exercising the normal one. Real hardware's
+    // CARDInit(void) has no such parameters at all; it reads the game/maker code straight out of
+    // the disc's own boot header (__CARDSetDiskID(OSPhysicalToCached(0)), src/lib/CARDBios.c). The
+    // host equivalent of "the disc's own boot header" is Aurora's own DVDGetCurrentDiskID() --
+    // populated for real from the mounted disc image's header the moment re4_port::InitDvd() opens
+    // it (aurora_dvd_open(), ../aurora/lib/dolphin/dvd/dvd.cpp), well before this call -- so this
+    // reads the live, real game/maker code (whatever disc is mounted), not a literal hardcoded for
+    // this one disc image.
+    char gameCode[5] = {};
+    char makerCode[3] = {};
+    const DVDDiskID* diskID = DVDGetCurrentDiskID();
+    memcpy(gameCode, diskID->gameName, sizeof(diskID->gameName));
+    memcpy(makerCode, diskID->company, sizeof(diskID->company));
+    re4_port::InitCardDir(); // must run before CARDInitPC (Aurora's CARDSetBasePath() fatals if
+                             // called after CARDInit())
+    CARDInitPC(gameCode, makerCode);
 #else
     CARDInit();
 #endif
