@@ -507,6 +507,11 @@ void* mem_alloc(u32 size, const char* file, int line, int flag, int heap)
     if (flag == 1 && p == NULL) {
         pLog->err(0, 0, "alloc[%x]:free[%x] %s", size, OSCheckHeap(Heap[heap].handle), str);
     }
+#ifdef TARGET_PC
+    if (re4_port::MemTraceEnabled()) {
+        re4_port::TraceHeapAlloc(heap, size, str, p, (u32) OSCheckHeap(Heap[heap].handle));
+    }
+#endif
     return p;
 }
 

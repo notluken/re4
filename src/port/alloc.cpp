@@ -8,6 +8,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 namespace re4_port {
 
@@ -15,7 +17,32 @@ namespace {
 thread_local bool t_isGameThread = false;
 thread_local int t_hostAllocDepth = 0;
 std::atomic<bool> g_heapsReady{false};
+
+int g_memTraceState = -1; // -1: unread, 0: off, 1: on
 } // namespace
+
+bool MemTraceEnabled()
+{
+    if (g_memTraceState < 0) {
+        const char* env = std::getenv("RE4_PORT_MEM_TRACE");
+        g_memTraceState = (env != nullptr && env[0] != '\0' && env[0] != '0') ? 1 : 0;
+    }
+    return g_memTraceState == 1;
+}
+
+void TraceHeapAlloc(int heap, unsigned size, const char* tag, const void* p, unsigned freeAfter)
+{
+    if (!MemTraceEnabled()) {
+        return;
+    }
+    if (p != nullptr) {
+        std::fprintf(stderr, "[memtrace] heap=%d size=0x%x tag=%s p=%p free_after=0x%x\n", heap,
+                     size, tag ? tag : "", p, freeAfter);
+    } else {
+        std::fprintf(stderr, "[memtrace] heap=%d size=0x%x tag=%s FAILED free=0x%x\n", heap, size,
+                     tag ? tag : "", freeAfter);
+    }
+}
 
 void MarkCurrentThreadGame()
 {

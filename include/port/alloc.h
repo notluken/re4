@@ -99,6 +99,18 @@ public:
 // True when the current thread is inside a HostAllocScope right now.
 bool InHostAllocScope();
 
+// Diagnostic tracing for the game heaps (src/game/main_mem.cpp's mem_alloc(), TARGET_PC branch
+// only -- no effect on, and no bytes changed for, the matching build). Off by default; enabled by
+// setting RE4_PORT_MEM_TRACE=1 in the environment before the first call (checked once, cached).
+// When on, TraceHeapAlloc logs every mem_alloc() call (heap index, requested/rounded size, file:line
+// tag, resulting pointer or failure, and OSCheckHeap()'s post-call free-byte count) to stderr, so a
+// heap-exhaustion loop's full allocation history up to the failure can be captured and diffed
+// against the matching build's GameCube struct sizes (`li r3,<size>` before each call site in the
+// target asm). Used to find which allocator group is unexpectedly wider on the host, the same class
+// of bug include/id_sys.h's IdUnit and include/event.h's DatTblEntry fixes already caught.
+bool MemTraceEnabled();
+void TraceHeapAlloc(int heap, unsigned size, const char* tag, const void* p, unsigned freeAfter);
+
 } // namespace re4_port
 
 #endif // RE4_PORT_ALLOC_H
