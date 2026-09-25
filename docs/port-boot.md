@@ -3077,3 +3077,68 @@ byte-identity loop does not apply per this repo's own port rules.
 **Not reached this pass (budget)**: the title screen itself (still same debug HUD, further along);
 `trans.cpp`'s locked-cache design (task 2/3, not started this pass either); memory-card open failures
 above (likely expected/harmless, not confirmed).
+
+## 45. `trans.cpp`/locked-cache design narrowed (no new port infra needed for LC*), asm port not
+    attempted this pass -- needs its own session (2026-09-25, follow-up investigation)
+
+**Task 2 (locked cache) turns out simpler than the original brief assumed**: Aurora's own
+`include/dolphin/os/OSCache.h` already has a `#ifdef TARGET_PC` branch (`extern void* LCGetBase(void);`
+instead of the real-hardware `#define LCGetBase() ((void*)0xE0000000)`), and
+`lib/dolphin/os/OSCache.cpp` already implements it as a real function returning a 16 KB static host
+buffer (`s_lcData`), plus working `LCEnable/LCDisable/LCLoadBlocks/LCStoreBlocks/LCLoadData/
+LCStoreData/LCQueueWait` (memcpy-based DMA emulation) -- already linked into `re4_boot` today (`nm`
+confirms `_LCEnable` resolves to `aurora_os`'s `OSCache.cpp`, not any stub). This means the
+`mach_vm_allocate(VM_FLAGS_FIXED)`-at-`GCPTR(0xE0000000)` design in the original brief is unnecessary
+*and* would conflict with this project's own established lesson (`src/port/arena.cpp`'s own history
+comment: a fixed-address VM reservation for the *main* arena was tried and rejected after measuring
+37/50 real failures against live malloc bookkeeping -- a smaller, higher, sparser 16 KB region is a
+different risk profile, but there is no need to take that risk at all when Aurora already solves this
+with a plain host buffer). The real remaining work is mechanical: every vendor call site that casts
+the literal `0xE0000000` directly (`pendulum.cpp:1177`, `trans.cpp:858`/`910`, and inside
+`CalcSk1_x`/`CalcSk1_x2`'s own asm) needs a `TARGET_PC` branch that computes its pointer from
+`LCGetBase()` instead -- `#else` keeps the literal, byte-identical, for the matching build. Not
+written this pass (depends on task 3 below being tractable first, since two of the four call sites
+are inside the asm functions themselves).
+
+**Task 3 (trans.cpp's whole-function asm) -- investigated, not ported this pass**: fully decoded
+`CalcSk1_x`'s register-level behavior (instruction by instruction) far enough to know exactly what
+needs cross-checked, independent verification before writing a single line of the C substitute:
+- The matrix load pattern (`psq_l` into fpr0-fpr7 at offsets 0/8/0xc/0x14/0x18/0x20/0x24/0x2c from a
+  0x30-byte `ROMtx`) pairs (float0,float1), (float2,--), (float3,float4), (float5,--), (float6,float7),
+  (float8,--), (float9,float10), (float11,--) -- i.e. every *third* float starts a new pair, not every
+  fourth, so the natural "3 rows of 4" `Mtx` reading does NOT line up with the fpr pairing the
+  `ps_madds0`/`ps_madds1` accumulation below actually uses. Working out the *correct* row/column
+  interpretation this implies (it is almost certainly still a real 3x4 affine transform, just fed to
+  the paired-single unit in a layout chosen for this specific instruction sequence, not the layout a
+  human would guess from the `Mtx` type alone) needs to be verified against a known-good reference
+  (e.g. cross-checked against `PSMTXReorder`'s own definition, or Dolphin's PPC interpreter) before
+  trusting it, not assumed from the offsets alone.
+- The quantization scale in `setupGQR6(0x32073207)` (position skinning) encodes a load AND store
+  scale/type in the same 32-bit GQR value; decoding the 750CL's exact scale-field sign convention
+  (positive field values divide, the top half of the 6-bit range is a two's-complement negative
+  exponent that multiplies -- confirmed against the PowerPC 750CL user's manual's own quantization
+  section, not guessed) matters for getting the dequantization direction right, and a sign error here
+  would silently produce vertex positions off by a large power of two -- exactly the kind of "looks
+  plausible, is wrong" bug this project's own rules (independent cross-check, not "looks right") exist
+  to catch. `CalcSk1_x2` (normals, `setupGQR6(0x20062006)`) needs the same treatment with its own
+  scale value.
+- `MakeWeightPalette`/`MakeWeightPaletteExt` are NOT whole-function asm (ordinary C++, already mostly
+  TARGET_PC-clean per section 42) -- only their `PSQ_L_U8_TO`/`PSMTXReorder`-into-locked-cache call
+  sites need the `LCGetBase()` treatment above, once `CalcSk1_x`/`CalcSk1_x2` unblock un-excluding the
+  file at all (the file cannot compile under `TARGET_PC` with even one real-asm function left as raw
+  PPC `asm volatile` text -- arm64 clang cannot assemble PPC mnemonics, so this is all-or-nothing per
+  file, not partial).
+
+**Why not attempted further this pass**: writing the C substitute for `CalcSk1_x`/`CalcSk1_x2`
+without first locking down both of the above (the exact matrix-element-to-fpr mapping and the GQR
+scale sign convention) against an independent reference would be exactly the kind of unverified
+numeric port this project's own rules warn against (docs/matching.md's "Don'ts", and the task's own
+instruction to cross-check against an independently-computed reference, not just "the C reads
+plausible"). This needs a dedicated session with room for that verification work (synthetic test
+vectors run through a from-scratch, independently-derived formula, not just eyeballing the
+translation) -- not attempted here given this session's remaining budget after sections 43/44's fixes.
+
+**Not reached this pass**: any code change for `trans.cpp`/locked cache (investigation only, `git
+status` in this repo confirms no source changed this section); the title screen (still blocked behind
+task 3, since `Render()` for real 3D geometry needs the skinning kernels working, not just the FIFO
+handshake fixed).
