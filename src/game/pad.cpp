@@ -12,6 +12,9 @@
 #include "math_sub.h"
 #include "rnd.h"
 #include "eprintf.h"
+#ifdef TARGET_PC
+#include "port/pad_input.h"
+#endif
 
 static inline void U64Set(u64& d, u64 v) { d = v; }
 
@@ -55,6 +58,12 @@ void PadInit()
     PADSetAnalogMode(3);
     Vib_level = 0;
     Key.old = 0;
+#ifdef TARGET_PC
+    // docs/port-boot.md section 38: real keyboard input for interactive runs (Aurora's own
+    // PADSetKeyboardActive()/PADSetKeyButtonBindings(), real entry points, not stubs) -- must run
+    // after PADInit() above, matching Aurora's own "before/after PADInit()" ordering elsewhere.
+    re4_port::InitKeyboardInput();
+#endif
 }
 
 // Once per frame (main loop): reads the four pads into Joy[] (on / old / trg / rel, repeat masks
@@ -79,6 +88,15 @@ void PadRead()
     asm volatile("");                            // COMPILER-DIFF: #13 (sched barrier, no code)
     PADRead(Pad_data);
     PADClamp(Pad_data);
+#ifdef TARGET_PC
+    // docs/port-boot.md section 38: scripted, deterministic input for automated/non-interactive
+    // runs ($RE4_PORT_INPUT). Channel 0 only, ORed in after the real read -- a real keypress and a
+    // scripted one behave identically from here on (same Pad_data[0].button bits either way).
+    Pad_data[0].button |= re4_port::PollScriptedInput();
+    if (Pad_data[0].err != PAD_ERR_NONE && Pad_data[0].button != 0) {
+        Pad_data[0].err = PAD_ERR_NONE; // scripted input alone still counts as "connected"
+    }
+#endif
     for (i = 0; i < 4; i++) {
         u32 chan = PAD_CHAN0_BIT >> i;
         switch (Pad_data[i].err) {

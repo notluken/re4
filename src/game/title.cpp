@@ -107,6 +107,18 @@ void Title_task()
     ItemMgr.init();
     CoreDataRead();
     OptionDataRead();
+#ifdef TARGET_PC
+    // docs/port-boot.md section 38: MesData.ptr[0..3] (the core/room message tables) are real,
+    // already-compiled vendor code (MessageControl::gameInit(), mes.cpp) but normally only bound
+    // once the player starts/continues a game (game.cpp's gameInit(), via GameTask -- confirmed by
+    // tracing title.cpp's own titleExit(), section 37) -- too late for the memory-card first-check
+    // screen, which runs within the first couple of frames of boot and genuinely needs message
+    // table 0 (docs/port-boot.md section 37's `cardMesSet()` trace). CoreDataRead() just above has
+    // already populated pG->pCore for real (this session's own fix, section 36), so it is safe to
+    // call the same real binding here, directly, rather than waiting for GameTask to exist. Real
+    // vendor code, not reimplemented; only the *call site* is host-only.
+    cMes.gameInit();
+#endif
 #line 114 "D:/Bio4/Prog/title.cpp"
     w = (TitleWork*) MEM_CALLOC(sizeof(TitleWork), 1, 13);
     for (;;) {

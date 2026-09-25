@@ -2499,3 +2499,138 @@ confirmed by reading `createSysfile()`'s actual body this pass.
   remote-verified: 115/115 OK, asmcheck TOTAL 231 unchanged)
 - (pending) -- `mes.cpp`: host-only null-table crash guards (touches outside `src/port`/
   `include/port`, needs the same remote round trip before landing on `port/macos-arm64`)
+
+## 38. Coordinator follow-up: real keyboard input + scripted input infrastructure landed and
+    verified; `cMes.gameInit()` early-bind fix found real but racy; font glyphs/title.dat not
+    reached this pass (2026-09-25)
+
+Coordinator asked four things: (1) document/add real keyboard->PAD mapping; (2) scripted input via
+an env var for automated runs; (3) root-cause+fix font glyph rendering; (4) press through to
+title.dat/the title screen.
+
+### 1. Real keyboard input (item 1) -- Aurora has the API, but ships zero default keys
+
+Read `../aurora/lib/dolphin/pad/pad.cpp` directly: Aurora's real gamepad mapping
+(`g_defaultButtonsStandard`) is a genuine SDL_GAMEPAD-standard-layout GameCube mapping (South=A,
+East=B, West=X, North=Y, Start=Start, Right shoulder=Z-trigger, D-pad=D-pad) -- a real controller
+plugged into this Mac already works with no changes needed. But Aurora's *keyboard* path
+(`g_defaultKeys`/`g_defaultKeyAxis`) ships with **every** scancode set to `PAD_KEY_INVALID` --
+confirmed by reading the array literals, not assumed -- i.e. keyboard input is a real, live code
+path (`PADRead()` checks `g_keyboardBindings[i].m_mappingsSet` and merges keyboard state in) but
+with nothing bound by default. Aurora does expose a real public API to set bindings without
+touching its source (`PADSetKeyButtonBindings()`, `PADSetKeyboardActive()`,
+`include/dolphin/pad.h`), so no Aurora patch was needed -- same "manual extern, no source patch"
+pattern as `src/port/card.cpp`'s `CARDSetBasePath()` (this repo's own `include/dolphin/pad.h`
+mirrors real hardware only and doesn't declare these, and is searched first, so a local `extern
+"C"` redeclaration in the new file sidesteps that, matching the established pattern exactly).
+
+**New**: `include/port/pad_input.h`, `src/port/pad_input.cpp`'s `InitKeyboardInput()`, called from
+`src/game/pad.cpp`'s real `PadInit()` (`TARGET_PC` branch, right after the real `PADInit()` call).
+Minimal mapping, coordinator's own suggestion:
+
+| Key | GameCube button |
+|---|---|
+| `Return`/`Enter` | Start |
+| `Z` | A |
+| `X` | B |
+| `C` | X |
+| `V` | Y |
+| `A` | Z trigger |
+| Arrow keys | D-pad (Up/Down/Left/Right) |
+| (L/R triggers) | left unbound -- no obvious single key, not guessed |
+
+Verified live: `re4_boot`'s own stderr prints `re4_port: keyboard input active on PAD channel 0 --
+...` every run, and `PADSetKeyButtonBindings()`/`PADSetKeyboardActive()` are real Aurora entry
+points (not stubs) -- confirmed by reading their implementations, not merely by the absence of a
+"STUB:" log line.
+
+**For the user to try interactively** (plugging in a real controller needs nothing extra; this is
+for keyboard-only):
+```sh
+cd /Users/luken/Projects/re4
+./build-pc-boot/re4_boot orig/G4BE08/files orig/G4BE08/re4_debug_disc1.iso
+# window must have focus for SDL to see key events; Return=Start, Z=A, X=B, C=X, V=Y, arrows=D-pad
+```
+
+### 2. Scripted input for automated runs (item 2) -- landed, verified to parse and inject correctly
+
+`RE4_PORT_INPUT="frame:BUTTON,frame:BUTTON,..."` (e.g. `RE4_PORT_INPUT="120:A,240:START"`), read
+once (lazily) by `re4_port::PollScriptedInput()` (`src/port/pad_input.cpp`), called from
+`src/game/pad.cpp`'s real `PadRead()` (`TARGET_PC` branch, right after the real `PADRead(Pad_data)`
+call -- ORs the scripted bits into channel 0's `PADStatus.button`, indistinguishable from there
+onward from a real keypress). Each listed button is held for `$RE4_PORT_INPUT_HOLD_FRAMES` frames
+(default 10) starting at its frame number. `BUTTON` one of `A/B/X/Y/START/Z/L/R/UP/DOWN/LEFT/RIGHT`
+(matching the real `PAD_BUTTON_*`/`PAD_TRIGGER_*` names exactly). Frame 0 is the first call to
+`PadRead()` after boot (once per real frame, matching its own real once-per-frame contract).
+
+**Verified mechanically, traced through the real vendor translation, not assumed**:
+`src/game/pad.cpp`'s own `Key_type_tbl[0]` (real, byte-identical data) has index 31 = `0x00000100`
+(`PAD_BUTTON_A`'s own bit value) -- so a scripted `A` press does produce `Key.on`'s bit 31
+(`0x80000000`), the exact bit `mes.cpp`'s `Message::code08()` checks (`Key.trg & 0x80000000`) to
+confirm a yes/no message choice, worked out index-by-index from the real table, not guessed. Log
+lines confirm the parser itself works exactly as intended (`re4_port: RE4_PORT_INPUT: frame 60 ->
+bit 0x0100`, etc., for every run this pass).
+
+**Example** (for the user, or for future automated runs):
+```sh
+RE4_PORT_INPUT="300:A,600:A,900:A" RE4_PORT_INPUT_HOLD_FRAMES=20 \
+  ./build-pc-boot/re4_boot orig/G4BE08/files orig/G4BE08/re4_debug_disc1.iso
+```
+
+### 3/4. A real, further blocker found while trying to press through the card prompt: a race
+    between `cMes.gameInit()`'s early bind and the card-check task -- font glyphs not reached
+
+Pressing scripted A at several plausible frames (300/600/900, later 30/60/90/120/150/180) never
+advanced past `cCard::createSysfile()`'s yes/no prompt in any run this pass. Root-caused with
+`lldb`, not guessed: **this session's own section 37 host-only crash guard
+(`MessageData::getAddr()` returning `NULL` on an unbound table) has a real side effect** --
+`Message::init()`'s existing fallback (real vendor code) leaves `m_pMes` `NULL` when that happens,
+and `Message::move()`'s own guard (also section 37) then returns immediately every frame *forever*
+for that message slot -- never reaching `isCtrlCode()`/`CommandExec()`, which is where the yes/no
+selection control code actually lives inside the message's own byte stream. A message instance
+whose table was unbound at the exact moment `Message::init()` ran can therefore never process input
+later, even once the table becomes valid afterward (`m_pMes` was captured once, not re-fetched).
+
+Given this, section 37's own trace was revisited: `game.cpp`'s real `MessageControl::gameInit()`
+binds `MesData.ptr[0]` using `pG->pCore`, which `CoreDataRead()` (this session's earlier fix)
+already populates for real. Added a **real, no-reimplementation** call to that same, already-
+compiled vendor method (`cMes.gameInit()`, `mes.cpp`) directly from `title.cpp`'s `Title_task()`
+(`TARGET_PC` branch, right after the real `CoreDataRead()`/`OptionDataRead()` calls) -- not
+game.cpp itself (still excluded, unrelated compile errors, section 36), just the one real method
+call this specific gap needs.
+
+**Verified, but only sometimes**: one run (`run40.log`) showed the `Message::init() Msg[44]
+Address Error` line gone entirely (confirming `ptr[0]` was bound in time that run); a second,
+otherwise-identical run (`lldb1.log`, breakpoint-driven) showed the same "Address Error" line
+still present. This is a genuine **race**, not a flake in the test setup: the memory-card
+first-check (`tvModeCheckTask` -> `CardFirstCheck()`, started from `Render_init()` inside
+`systemStartInit()`) and `Title_task` (started afterward, from `systemRestartInit()`) are two
+independent cooperative tasks; whichever one's scheduler turn reaches its own message-display code
+first determines whether `cMes.gameInit()` (now called partway through `Title_task`'s own first
+turn) has already run by the time `cardMesSet()` needs it. **Not resolved this pass** (budget) --
+the real fix is almost certainly moving the `cMes.gameInit()` call earlier still (before
+`Render_init()`'s `SetTvMode()` even starts the tv_mode task, inside `systemStartInit()` itself,
+matching how a real GameCube boot -- one single-core machine, genuinely sequential up to the first
+task switch -- would have gotten this ordering right "for free" without an explicit race existing
+at all), not a scheduler fix.
+
+Font-glyph texture root-causing (`GXInitTexObj`/`GXLoadTexObj`, item 3) was **not reached this
+pass** -- no run got far enough to render a readable prompt; that work stays queued behind fixing
+the race above first, per the coordinator's own ordering (fix the crash path fully before chasing
+rendering).
+
+### Screenshots, honestly described
+
+`boot_38.png`/`boot_39.png`/`boot_40.png` (scratchpad): all three show the same debug-log
+placeholder-bar rendering already described in every prior section (a green mark, dark-navy
+vertical bars at the left, a lavender bar at the right) -- no new geometry, no readable text, not
+the title screen. None of this pass's real, verified fixes (keyboard mapping, scripted input,
+`cMes.gameInit()`) changed what's on screen yet, since the process never got past the still-racy
+card prompt to reach `title.dat`/font-bearing content.
+
+### Commits this pass
+
+- `include/port/pad_input.h`, `src/port/pad_input.cpp`, `src/game/pad.cpp`, `CMakeLists.txt`: real
+  keyboard mapping + scripted input (touches outside `src/port`/`include/port`, needs the remote
+  round trip before landing on `port/macos-arm64`)
+- `src/game/title.cpp`: early `cMes.gameInit()` call (same remote-verification requirement)
