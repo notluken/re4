@@ -3,6 +3,7 @@
 #error "src/port/vi.cpp is host-only (TARGET_PC)"
 #endif
 
+#include "port/alloc.h"
 #include "port/vi.h"
 #include "port/screenshot.h"
 
@@ -184,6 +185,14 @@ namespace re4_port {
 
 void BeginGxFrame()
 {
+    // include/port/alloc.h's HostAllocScope: aurora_begin_frame() runs synchronously on the game
+    // thread (real vendor Render_before() calls it inline, not a separate thread) and allocates its
+    // own renderer-internal bookkeeping (command/resource pools) via plain `new` -- without this
+    // guard that lands in the game's fixed-size GameCube heaps every frame (main_mem.cpp's global
+    // operator new override can't otherwise tell "host GPU backend bookkeeping" apart from a real
+    // game allocation on the same thread), silently eating into the tiny per-heap budgets the
+    // vendor's own code sizes exactly (docs/port-boot.md's card-heap "6.8 KB short" symptom).
+    re4_port::HostAllocScope hostAlloc;
     t_gxFrameActive = aurora_begin_frame();
     if (!t_gxFrameActive) {
         std::fprintf(stderr, "re4_port: aurora_begin_frame() returned false -- this frame's GX "
@@ -197,6 +206,7 @@ void BeginGxFrame()
 void EndGxFrame()
 {
     if (t_gxFrameActive) {
+        re4_port::HostAllocScope hostAlloc; // see BeginGxFrame()
         aurora_end_frame();
         t_gxFrameActive = false;
     }

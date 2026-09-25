@@ -13,6 +13,7 @@ namespace re4_port {
 
 namespace {
 thread_local bool t_isGameThread = false;
+thread_local int t_hostAllocDepth = 0;
 std::atomic<bool> g_heapsReady{false};
 } // namespace
 
@@ -38,7 +39,22 @@ bool HeapsReady()
 
 bool ShouldUseGameHeap()
 {
-    return IsGameThread() && HeapsReady();
+    return IsGameThread() && HeapsReady() && t_hostAllocDepth == 0;
+}
+
+HostAllocScope::HostAllocScope()
+{
+    ++t_hostAllocDepth;
+}
+
+HostAllocScope::~HostAllocScope()
+{
+    --t_hostAllocDepth;
+}
+
+bool InHostAllocScope()
+{
+    return t_hostAllocDepth != 0;
 }
 
 bool IsArenaPointer(const void* p)

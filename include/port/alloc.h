@@ -60,6 +60,27 @@ bool ShouldUseGameHeap();
 // the host's malloc, owns it. nullptr is never an arena pointer.
 bool IsArenaPointer(const void* p);
 
+// Scoped override for ShouldUseGameHeap(), for host code the game thread calls *synchronously*
+// in-line (Aurora's aurora_begin_frame()/aurora_end_frame(), src/port/vi.cpp) -- not a separate
+// thread (IsGameThread() alone can't tell these apart: both run on the same, real game thread),
+// so `new` inside that call has no other way to know it is host bookkeeping, not a game
+// allocation. Nests (thread_local depth counter); host-heap `new` inside is always std::malloc
+// regardless of IsGameThread()/HeapsReady(). Found live: Aurora's aurora::gfx::begin_frame()
+// (renderer-internal command/resource pools, no GameCube equivalent) was routing into the game's
+// fixed-size heaps every frame through the global operator new override, permanently consuming
+// real GameCube-budgeted memory for host-GPU-backend bookkeeping that doesn't exist on real
+// hardware -- exactly the "6.8 KB short" card-heap symptom (docs/port-boot.md).
+class HostAllocScope {
+public:
+    HostAllocScope();
+    ~HostAllocScope();
+    HostAllocScope(const HostAllocScope&) = delete;
+    HostAllocScope& operator=(const HostAllocScope&) = delete;
+};
+
+// True when the current thread is inside a HostAllocScope right now.
+bool InHostAllocScope();
+
 } // namespace re4_port
 
 #endif // RE4_PORT_ALLOC_H
