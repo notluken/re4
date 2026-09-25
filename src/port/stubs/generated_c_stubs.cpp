@@ -1957,13 +1957,9 @@ void SYNSetMasterVolume(SYNSYNTH* synth, s32 dB)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: SYNSetMasterVolume() called\n"); warned = true; }
 }
-// TEXGet: `TEXDescriptor* TEXGet(TEXPalette* pal, u32 id)`
-TEXDescriptor* TEXGet(TEXPalette* pal, u32 id)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: TEXGet() called\n"); warned = true; }
-    return (TEXDescriptor*) 0;
-}
+// TEXGet: superseded by a real implementation, src/port/stubs/manual_stubs.cpp (the vendor's own
+// one-line body, src/lib/texPalette.c, ported against this tree's tpl.h types -- that .c file
+// itself is never compiled for the port, see manual_stubs.cpp's comment).
 // Trans: `void Trans()`
 void Trans()
 {

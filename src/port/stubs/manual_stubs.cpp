@@ -8,8 +8,27 @@
 #include "stub_common.h"
 #include "dolphin/os/OSThread.h"
 #include "trans.h"
+#include "tpl.h"
 
 extern "C" {
+
+// TEXGet: the vendor's own real one-line body (src/lib/texPalette.c: `return
+// &pal->descriptorArray[id];`, behind an ASSERTMSGLINE bounds check). That .c file is a
+// CodeWarrior/charPipeline unit (its own texPalette.h declares TEXPalettePtr etc., a different set
+// of C types from this tree's own tpl.h) and is not built for the port (CMakeLists.txt only globs
+// src/game/*.cpp); rather than compile the mismatched CodeWarrior unit, its logic is reproduced
+// here directly against tpl.h's own (already Ptr32<T>/BE<T>-audited, docs/port-phase3.md) types --
+// same real body, this tree's types, no game logic invented. The previous auto-generated stub
+// (src/port/stubs/generated_c_stubs.cpp) always returned NULL, which crashed the very first real
+// caller (cTexSys::TexRegist, texture.cpp) dereferencing a null TEXDescriptor*.
+TEXDescriptor* TEXGet(TEXPalette* pal, u32 id)
+{
+    if ((u32) pal->numDescriptors <= id) {
+        std::fprintf(stderr, "TEXGet(): id[%u] >= numDescriptors[%u]\n", id, (u32) pal->numDescriptors);
+        return &pal->descriptorArray[0];
+    }
+    return &pal->descriptorArray[id];
+}
 
 // -- sound/CRI: function-pointer parameters (docs/port-boot.md, "Aurora mismatches" -- Aurora
 // declares dolphin/ax.h but implements none of it; ADX/mwPly are CRI middleware, not SDK) --
