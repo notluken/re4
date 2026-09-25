@@ -162,10 +162,20 @@ void ClothCalcTplAddr(void* tpl)
     for (i = 0; i < pal->numDescriptors; i++) {
         d = &pal->descriptorArray[i];
         d->textureHeader = (TEXHeader*) ((u32) pal + (u32) d->textureHeader);
+#ifdef TARGET_PC
+        // Same shape as texture.cpp's cTexSys::CalcTplAddr: Ptr32<u8>'s constructor only accepts a
+        // u8*, not the vendor's own (void*)(u32+u32) cast, which has no matching operator=.
+        d->textureHeader->data = (u8*) pal + (u32) d->textureHeader->data;
+#else
         d->textureHeader->data = (void*) ((u32) pal + (u32) d->textureHeader->data);
+#endif
         if (d->CLUTHeader != 0) {
             d->CLUTHeader = (CLUTHeader*) ((u32) pal + (u32) d->CLUTHeader);
+#ifdef TARGET_PC
+            d->CLUTHeader->data = (u8*) pal + (u32) d->CLUTHeader->data;
+#else
             d->CLUTHeader->data = (void*) ((u32) pal + (u32) d->CLUTHeader->data);
+#endif
         }
     }
 }
@@ -369,7 +379,15 @@ void clothTrans(Cloth* pCL)
     GXSetTevAlphaOp(0, 0, 0, 2, 1, 0);
     GXSetTevOrder(0, 0, 0, 4);
     cModel model;
+#ifndef TARGET_PC
     u8 modelPad[0x320 - sizeof(cModel)];  // see the cModel size note above
+#endif
+    // TARGET_PC: modelPad is a dead stack-frame-size reservation for the matching (GC) build only
+    // (never read/written -- see the class comment above); cModel's TARGET_PC layout does not need
+    // to match the vendor's original 0x320-byte frame size, and currently does not (include/model.h's
+    // "KNOWN DEBT" -- some motion/atari fields the vendor packs into cModel still live in cEm/cObj
+    // here), so `0x320 - sizeof(cModel)` can underflow on this host. TO VERIFY once model.h's debt is
+    // paid down: whether any TARGET_PC caller actually relies on sizeof(cModel) staying <= 0x320.
     PSMTXIdentity(model.mat);
     {
         static const Vec p0 = {0.0f, 0.0f, 0.0f};
