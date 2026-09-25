@@ -1887,7 +1887,13 @@ int cManager<T>::dispWorkNum(int x, int y, int col, int sub)
     u32 n;
     u32 i;
 
+    // Same "does this look like a SysMem address" test as cManager<T>::destroy (cManager.h) --
+    // GC32 under TARGET_PC instead of narrowing a real host pointer through u32.
+#ifdef TARGET_PC
+    if (re4_port::GC32(pArray) < 0x80000000 || re4_port::GC32(pArray) > 0x82FFFFFF) {
+#else
     if ((u32) pArray < 0x80000000 || (u32) pArray > 0x82FFFFFF) {
+#endif
         return 0;
     }
     n = 0;

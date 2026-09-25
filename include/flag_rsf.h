@@ -22,7 +22,14 @@ static inline u32* RsfFlags(u16 room)
 // the word is formed from RsfFlags()' pointer, not from the record pointer.
 static inline u32* RsfFlagWord(u16 room, int no)
 {
+    // Same reasoning as ARC_PTR (global.h): RsfFlags(room) is a live, already-loaded host pointer
+    // into the room save buffer, `no`'s word index a plain offset into it -- ordinary same-buffer
+    // pointer arithmetic, not a GameCube-address compression, under TARGET_PC.
+#ifdef TARGET_PC
+    return (u32*) ((u8*) RsfFlags(room) + (((u32) no >> 5) << 2));
+#else
     return (u32*) ((((u32) no >> 5) << 2) + (u32) RsfFlags(room));
+#endif
 }
 
 static inline void RsfSet(u16 room, int no)

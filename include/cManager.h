@@ -428,7 +428,16 @@ template <class T>
 T* cManager<T>::getPrevWork(T* p)
 {
     p = (T*)((u8*)p - size);
+    // Same reasoning as destroy()'s VALID_PTR-style check just above: `p`/`pArray` are both live
+    // host pointers into the same array buffer, never an on-disc/relocated field -- GC32 keeps the
+    // comparison in the GameCube-address domain under TARGET_PC instead of narrowing a real host
+    // pointer through u32.
+#ifdef TARGET_PC
+    if (re4_port::GC32(p) < re4_port::GC32(pArray) ||
+        re4_port::GC32(p) >= re4_port::GC32(pArray) + size * (nArray - 1)) {
+#else
     if ((u32)p < (u32)pArray || (u32)p >= (u32)pArray + size * (nArray - 1)) {
+#endif
         return 0;
     }
     return p;
