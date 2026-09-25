@@ -5,35 +5,66 @@
 #include "vec.h"
 #include "gx.h"
 #include "tpl.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
-// Texture animation data; only the texture count is used here.
+// Texture animation data; only the texture count is used here. On-disc, big-endian (Phase 3,
+// docs/port-phase3.md) -- BE<u16> under TARGET_PC.
 struct TexAnm {
     u8 pad_0[8];
+#ifdef TARGET_PC
+    re4_port::BE<u16> numTex;  // 0x08
+#else
     u16 numTex;  // 0x08
+#endif
 };
 
-// Texture data file fed to cTexSys::DataLoad (version 3): three offset tables.
+// Texture data file fed to cTexSys::DataLoad (version 3): three offset tables. On-disc, big-endian
+// -- BE<u32> under TARGET_PC.
 struct TexData {
+#ifdef TARGET_PC
+    re4_port::BE<u32> version;  // 0x00  == 3
+    re4_port::BE<u32> ofsId;    // 0x04  -> TexIdTbl
+    re4_port::BE<u32> ofsTpl;   // 0x08  -> TexOfsTbl of TPLs
+    re4_port::BE<u32> ofsAnm;   // 0x0C  -> TexOfsTbl of TexAnms
+#else
     u32 version;  // 0x00  == 3
     u32 ofsId;    // 0x04  -> TexIdTbl
     u32 ofsTpl;   // 0x08  -> TexOfsTbl of TPLs
     u32 ofsAnm;   // 0x0C  -> TexOfsTbl of TexAnms
+#endif
 };
 
 struct TexIdEnt {
+#ifdef TARGET_PC
+    re4_port::BE<u16> id;   // 0x00
+    re4_port::BE<u16> x2;
+    re4_port::BE<u32> x4;
+#else
     u16 id;   // 0x00
     u16 x2;
     u32 x4;
+#endif
 };
 
 struct TexIdTbl {
+#ifdef TARGET_PC
+    re4_port::BE<u32> num;    // 0x00
+#else
     u32 num;          // 0x00
+#endif
     TexIdEnt ent[1];  // 0x04
 };
 
 struct TexOfsTbl {
+#ifdef TARGET_PC
+    re4_port::BE<u32> num;     // 0x00
+    re4_port::BE<u32> ofs[1];  // 0x04  relative to the table
+#else
     u32 num;     // 0x00
     u32 ofs[1];  // 0x04  relative to the table
+#endif
 };
 
 // One registered texture set (0x54 bytes).
