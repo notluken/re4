@@ -68,6 +68,26 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit);
 void BeginGxFrame();
 void EndGxFrame();
 
+// Drains and runs, ON THE CALLING THREAD, whatever VI retrace callbacks RunPresentLoop() has
+// queued so far (docs/port-boot.md section 34) -- WITHOUT blocking (unlike VIWaitForRetrace(),
+// which waits for the next tick first and then does exactly this same drain). Only the game
+// thread may call this (same rule as VIWaitForRetrace() and every other os_thread.cpp-touching
+// call: nothing here is safe from a second real host thread).
+//
+// Why this exists in addition to VIWaitForRetrace(): src/game/main.cpp's real, byte-matching main
+// loop does not call VIWaitForRetrace() every frame -- it paces itself with a direct busy-wait on
+// the `vsync_cnt` global (`while (vsync_cnt < GetSystemVcnt() - 1) {}`), which only the queued
+// postVSyncCallback (via VISetPostRetraceCallback) ever increments. On real hardware this spin
+// terminates because the retrace INTERRUPT can fire (and increment vsync_cnt) at any instant,
+// including mid-spin; on this host, deferring that same callback until VIWaitForRetrace() is
+// called (this file's whole fix for the cross-thread scheduler race, above) meant this exact spin
+// no longer had anything to make it terminate -- found live: it changed a real deadlock into a
+// different infinite busy-wait (100% CPU, never crashing, never reaching title.dat). main.cpp's own
+// spin bodies now call this (TARGET_PC-only lines, bytes unchanged for the real target) once per
+// iteration -- the direct host equivalent of "take the pending interrupt now", for exactly the one
+// polling loop that needs it.
+void PumpPendingVICallbacks();
+
 } // namespace re4_port
 
 #endif // RE4_PORT_VI_H

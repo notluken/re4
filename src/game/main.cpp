@@ -77,6 +77,7 @@ f32 ORTHO_R;
 #include "espgen.h"
 #ifdef TARGET_PC
 #include "port/mem1.h"
+#include "port/vi.h"
 #endif
 
 extern "C" {
@@ -205,10 +206,29 @@ RESTART:
             DC.check();
             Block.checkCondition();
             ProcessTickGet(3, "DRAW REMAIN");
-            while (vsync_cnt < GetSystemVcnt() - 1) {}
+            while (vsync_cnt < GetSystemVcnt() - 1) {
+#ifdef TARGET_PC
+                // Real hardware: `vsync_cnt` is incremented by the VI retrace INTERRUPT, which can
+                // fire at any instant, including while this exact spin is busy-waiting on it --
+                // this loop always terminates on real hardware because the interrupt genuinely
+                // preempts it. On this host, postVSyncCallback() (the registered VI callback that
+                // increments `vsync_cnt`) is deliberately only ever invoked ON THIS THREAD, at a
+                // safe point (docs/port-boot.md section 34's fiber rewrite: never on the present
+                // loop's own real thread, to avoid a second real thread touching the fiber
+                // scheduler) -- so this spin must itself BE that safe point, or it starves forever
+                // waiting for a wakeup that only itself can deliver. Pumping here is the direct
+                // host-side equivalent of "take the pending interrupt now" for exactly this
+                // polling loop.
+                re4_port::PumpPendingVICallbacks();
+#endif
+            }
             Render_swap();
             PPCSync();
-            while (vsync_cnt < GetSystemVcnt()) {}
+            while (vsync_cnt < GetSystemVcnt()) {
+#ifdef TARGET_PC
+                re4_port::PumpPendingVICallbacks(); // see the identical loop above
+#endif
+            }
             vsync_cnt = 0;
             systemVSyncPost();
             SysFlagOff(pG, SYS_RENDER_END);

@@ -55,6 +55,24 @@ std::atomic<bool> g_black{false};
 std::mutex g_cbMutex;
 std::deque<std::pair<VIRetraceCallback, u32>> g_pendingCallbacks;
 
+// Drains and runs whatever is currently queued -- shared by VIWaitForRetrace() (which additionally
+// blocks until the next tick first) and re4_port::PumpPendingVICallbacks() (which does not block at
+// all -- see its own header comment in include/port/vi.h for why a non-blocking drain point is
+// needed too: main.cpp's own `while (vsync_cnt < ...) {}` spins never call VIWaitForRetrace()).
+void DrainPendingCallbacks()
+{
+    std::deque<std::pair<VIRetraceCallback, u32>> due;
+    {
+        std::lock_guard<std::mutex> lock(g_cbMutex);
+        due.swap(g_pendingCallbacks);
+    }
+    for (auto& [cb, count] : due) {
+        if (cb) {
+            cb(count);
+        }
+    }
+}
+
 } // namespace
 
 extern "C" {
@@ -68,16 +86,7 @@ void VIWaitForRetrace(void)
     }
     // Drain and run whatever RunPresentLoop() queued for the tick(s) up to and including the one
     // that just woke this wait -- on THIS (the game) thread, safe to call into the fiber scheduler.
-    std::deque<std::pair<VIRetraceCallback, u32>> due;
-    {
-        std::lock_guard<std::mutex> lock(g_cbMutex);
-        due.swap(g_pendingCallbacks);
-    }
-    for (auto& [cb, count] : due) {
-        if (cb) {
-            cb(count);
-        }
-    }
+    DrainPendingCallbacks();
 }
 
 u32 VIGetRetraceCount(void)
@@ -142,6 +151,11 @@ void EndGxFrame()
         aurora_end_frame();
         t_gxFrameActive = false;
     }
+}
+
+void PumpPendingVICallbacks()
+{
+    DrainPendingCallbacks();
 }
 
 void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
