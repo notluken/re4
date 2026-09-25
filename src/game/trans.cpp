@@ -59,7 +59,15 @@ struct GxWork {
     GxStageWork stage;      // 0x000
     Mtx mtx[0xF8];          // 0x00C
     GXTexObj texObj[0xF8];  // 0x2E8C
+#ifdef TARGET_PC
+    // `prim` aliases pG->prim_base (global.h), a plain s32 (4 bytes, a GC address) -- a real host
+    // `u8*` here is 8 bytes and overwrites the f32 prim_rate right after it every store. Ptr32<u8>
+    // keeps it 4 bytes and round-trips through the same GC32/GCPTR compression the cast-rewriter
+    // already inserts at every other `(u8*) pG->prim_base` read (gen/src/game/trans.cpp).
+    re4_port::Ptr32<u8> prim;  // 0x4D8C
+#else
     u8* prim;               // 0x4D8C
+#endif
 };
 #define GXWORK() ((GxWork*) &pG->gxStage)
 
