@@ -16,6 +16,9 @@
 #include "main_mem.h"
 #include "os_vi.h"
 #include "db_log.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
 // Matching. EspDataLoad takes the data address as a `u32` (not a pointer): with a pointer-flagged
 // base the table offsets are index registers (GENERAL_REGS, r0 first); with an integer base
@@ -27,39 +30,49 @@
 #define EFF_TEXOBJ_MAX 0x1F4
 
 // Effect data file (EspDataLoad, version 0xB): byte offsets from the file start.
+// On-disc, big-endian (Phase 3, docs/port-phase3.md) -- every field below is BE<T> under TARGET_PC.
+#ifdef TARGET_PC
+#define EFF_BE_U32 re4_port::BE<u32>
+#define EFF_BE_U16 re4_port::BE<u16>
+#else
+#define EFF_BE_U32 u32
+#define EFF_BE_U16 u16
+#endif
 struct EffIdTbl {
-    u32 num;           // 0x00
+    EFF_BE_U32 num;    // 0x00
     struct {
-        u16 id;        // 0x00
-        u16 x2;
-        u32 x4;
+        EFF_BE_U16 id; // 0x00
+        EFF_BE_U16 x2;
+        EFF_BE_U32 x4;
     } ent[1];          // 0x04
 };
 struct EffOfsTbl {
-    u32 num;           // 0x00
-    u32 ofs[1];        // 0x04 relative to the table
+    EFF_BE_U32 num;    // 0x00
+    EFF_BE_U32 ofs[1]; // 0x04 relative to the table
 };
 struct EffEfmEnt {
-    u32 x0;            // 0x00
-    u32 ofsModel;      // 0x04 relative to the entry
-    u32 ofsTpl;        // 0x08
-    u32 ofsMot;        // 0x0C 0 = none
-    u32 ofsX;          // 0x10 0 = none
+    EFF_BE_U32 x0;       // 0x00
+    EFF_BE_U32 ofsModel; // 0x04 relative to the entry
+    EFF_BE_U32 ofsTpl;   // 0x08
+    EFF_BE_U32 ofsMot;   // 0x0C 0 = none
+    EFF_BE_U32 ofsX;     // 0x10 0 = none
 };
 struct EffData {
-    u32 version;       // 0x00 == 0xB
-    u32 ofsTexId;      // 0x04 EffIdTbl of texture ids
-    u32 ofsEstList;    // 0x08
-    u32 ofsSstList;    // 0x0C
-    u32 ofsPathList;   // 0x10
-    u32 ofsEfmId;      // 0x14 EffIdTbl of effect model ids
-    u32 ofsTpl;        // 0x18 EffOfsTbl of TPLs
-    u32 ofsAnm;        // 0x1C EffOfsTbl of texture animations
-    u32 ofsEstData;    // 0x20
-    u32 ofsSstData;    // 0x24
-    u32 ofsPathData;   // 0x28
-    u32 ofsEfm;        // 0x2C EffOfsTbl of EffEfmEnt
+    EFF_BE_U32 version;     // 0x00 == 0xB
+    EFF_BE_U32 ofsTexId;    // 0x04 EffIdTbl of texture ids
+    EFF_BE_U32 ofsEstList;  // 0x08
+    EFF_BE_U32 ofsSstList;  // 0x0C
+    EFF_BE_U32 ofsPathList; // 0x10
+    EFF_BE_U32 ofsEfmId;    // 0x14 EffIdTbl of effect model ids
+    EFF_BE_U32 ofsTpl;      // 0x18 EffOfsTbl of TPLs
+    EFF_BE_U32 ofsAnm;      // 0x1C EffOfsTbl of texture animations
+    EFF_BE_U32 ofsEstData;  // 0x20
+    EFF_BE_U32 ofsSstData;  // 0x24
+    EFF_BE_U32 ofsPathData; // 0x28
+    EFF_BE_U32 ofsEfm;      // 0x2C EffOfsTbl of EffEfmEnt
 };
+#undef EFF_BE_U32
+#undef EFF_BE_U16
 
 extern "C" {
 
