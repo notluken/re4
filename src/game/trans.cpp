@@ -812,6 +812,29 @@ void calcWeightMat(cModel* m)
     Mtx inv;
     Mtx tmp;
     u32 i = 0;
+#ifdef TARGET_PC
+    // cPartsWk (below) is a hand-rolled fixed-GC-offset view of the SAME object cManager<cParts>
+    // actually allocates as a real `cParts` (docs/port-layout-parity.md): `pad_0[0xF4]`/`next`/
+    // `bindMat` assume cCoord's GC-only 0xF4-byte size, which grows on this host (cUnit's vtable is
+    // 8 bytes here vs the GameCube's 4, docs/port-layout-parity.md's "cUnit/cCoord" section) --
+    // found live, this read `p->next`/`p->bindMat` 4 (then cumulatively more) bytes short of the
+    // real fields, corrupting `p` and crashing PSMTXConcat downstream. `cParts` is the real,
+    // already-correctly-declared type for the exact same two fields (`pList`/`lt_inv_mat`,
+    // model.h) -- naturally laid out by the compiler, so it is correct regardless of vtable size,
+    // unlike the raw-offset struct. Use it instead of cPartsWk under TARGET_PC.
+    cParts* p;
+
+    PSMTXInverse(m->pParts->mat, inv);
+    for (p = (cParts*) m->pParts; p != 0; p = p->pList) {
+        PSMTXConcat(inv, ((cModel*) p)->mat, tmp);
+        if (i > 0xF7) {
+            pLog->err(0, 0, "commonScreenMatSub() SMAT OVERFLOW %d", i);
+            break;
+        }
+        PSMTXConcat(tmp, p->lt_inv_mat, pG->mtxPalette[i]);
+        i++;
+    }
+#else
     cPartsWk* p;
 
     PSMTXInverse(m->pParts->mat, inv);
@@ -824,6 +847,7 @@ void calcWeightMat(cModel* m)
         PSMTXConcat(tmp, p->bindMat, pG->mtxPalette[i]);
         i++;
     }
+#endif
 }
 
 #ifdef TARGET_PC

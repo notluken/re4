@@ -93,6 +93,61 @@ to (at most) +4 once the `pNext`/`pParent` `Ptr32<T>` conversion lands, with the
 staying a permanent, correct, documented difference -- `gen_layout_report.py`'s heuristic does not
 (and should not) try to special-case it away.
 
+## Struct-view casts: reinterpreting a cUnit/cCoord-chain object as an unrelated, hand-offset type
+
+The same mismatch above (cUnit's vptr is 4 bytes on GC, 8 on this host; cCoord's own `pParent` is
+another un-ported +4) has a second consequence, found live this session (2026-09-25) chasing the
+`getFloor`/collision and `Trans()`/rendering crashes: any hand-rolled struct that mimics a
+cUnit/cCoord-chain member's layout via a **literal absolute GC byte offset** (`u8 pad_0[0xNN]` from
+the object's own start, or a raw `(u8*)p + 0xNN` cast) reads the wrong bytes on this host, because
+the real object is bigger there than the literal assumes. A struct/macro that instead reaches its
+target field through `&realObject->realNamedMember` (an actual, compiler-computed member access,
+even if only to reinterpret what comes *after* it) is safe regardless of vptr/pointer width, because
+the compiler recomputes the real offset every time. This is the pattern already used successfully by
+`MOTION_PARTS`/`IK_PARTS`/`PARTS_BIND_MAT` (`include/motion.h`, prior session) and by
+`PEN_WORK` (`src/game/pendulum.cpp`, `(PenParts*) &(p)->pFloor_norm` -- already safe, `pFloor_norm`
+is a real `cModel` member, not audited further this pass but confirmed by inspection).
+
+**Grepped this session** (`grep -rn "u8 pad_0\[0x" src include`, filtered to structs whose implicit
+`this`/cast target is a `cModel`/`cParts`/`cUnit`/`cCoord`-chain object -- most hits in that grep are
+unrelated raw data/GX-work-area structs with no vtable at all, and are NOT in this list):
+
+| Struct / macro | File | Status |
+|---|---|---|
+| `cPartsWk` (`next`/`bindMat` via `pad_0[0xF4]`) | `src/game/trans.cpp` (`calcWeightMat`) | **Fixed this session**: replaced with the real `cParts*` (`pList`/`lt_inv_mat`, model.h) under `TARGET_PC`. Root-caused a real crash (`PSMTXConcat` on a garbage `rhs`, `getFloor`'s sibling blocker in `Trans()`). |
+| `cModelExt` (`pFsdTbl`/`litArea`/`pTexChg` via `pad_0[0x308]`) | `src/game/trans.cpp` (`MODEL_EXT(m)`) | **Not fixed, TO VERIFY, on the room-render path** (`trans.cpp:1287`/`1340`/`2133`, all inside `commonModelTrans`, called by every `ModelRender`). Already flagged "KNOWN DEBT" in its own comment before this session; no real named field exists at that offset to redirect to (`cModel`'s own declared layout stops short of it), so fixing it needs either measuring the exact host `sizeof` delta up to that point and hand-adjusting `pad_0`'s size under `TARGET_PC`, or (safer) an `offsetof`-based static assert against a fully-declared `cModel` if/when one exists. Did not crash in this session's run (the render loop reached `GXCallDisplayList`/the GX FIFO before hitting this), so its real-world impact here is unconfirmed -- likely only wrong once a model with a `pTexChg`/shape-key/light-area feature is drawn. |
+| `MotionWork::blend`/parts-chain casts already covered above (`MOTION_PARTS` etc.) | `include/motion.h` | Already fixed (prior session), confirmed safe by inspection this session. |
+| `(AtPolyData*) pAt` / `(AtPolyData*) satTbl0` / `(AtPolyData*) &satB` | `src/game/atari.cpp`, `src/tools_mod/t_atari.cpp`, `src/Sscrn/ss_map.cpp` | **Fixed this session** (previous pass): `MakeAtPolyData()` builds the view explicitly instead of aliasing a `cSat`. |
+
+Not audited this session (budget): the `st1..st4`/`Sscrn`/`Tools` room-file `pad_0[0x100]`-class
+hits from the grep above (`r300.cpp`/`r310.cpp`/`r316.cpp`/etc.) -- these looked, from their names
+and sizes, like room-local save-state or debug structs rather than cUnit/cCoord views, but that is
+an assumption, not a confirmed read of each one; flagged here as **TO VERIFY** before trusting any
+of them on a room this port has not yet reached.
+
+## `cSmd`/SMD table readers: the same "raw table, unswapped" bug as `cSatHeader::getSat`
+
+Found and fixed this session, same root cause and fix shape as the SAT/EAT pass (`atari.cpp`
+already had this right for `cSatHeader::getSat`, but the equivalent SMD -- scroll/room-model --
+reader was missed): `cSmd::getBinPtr`/`getTplPtr`/`getMotPtr` (`src/game/scroll.cpp`) read their
+offset tables through a raw `(u32*) tbl` cast, not `BE<u32>` -- corrupted `SmdSetParam`'s `bin`
+pointer, crashing `calcModelAddr` (`(int) d->pClr < 0` dereferencing a garbage `cModelData*`).
+`cSmd::slide()` (the same file) has the identical raw-cast shape in its own offset-table walk, but
+is gated by a `(u32) w < 0x80000000 || (u32) w > 0x82FFFFFF` GameCube-address-range guard that a
+host pointer can never satisfy -- it safely no-ops (logs and returns) before reaching the raw casts,
+so it was **not fixed this session** (dead under `TARGET_PC` by construction, not exercised by any
+run); flagged here as **TO VERIFY** if a future session changes that guard or the addressing scheme.
+
+## `ModelPart`: another fully-raw on-disc struct, found via the GX FIFO crash it caused
+
+`include/model.h`'s `ModelPart` (the per-part header inside a model BIN's display-list stream,
+read by `trans.cpp`/`shadow.cpp`/`mirror.cpp`/`dbmodule.cpp`/`model.cpp`) had **no `TARGET_PC`
+branch at all** before this session -- every field, including `size` (the byte length of the
+primitive stream `GXCallDisplayList` reads), was raw. Fixed: `size`/`nPoly` (the only multi-byte
+fields; the rest are single bytes, no swap needed) are now `BE<u32>` under `TARGET_PC`. Root-caused
+live: `GXCallDisplayList(p, part->size)` (`trans.cpp`) handed Aurora's GX FIFO a garbage byte count
+(`length=2685075456`), corrupting `aurora::gx::fifo::write_data_grow`'s `memmove`.
+
 ## Matches (for completeness)
 
 | Type | Header |
