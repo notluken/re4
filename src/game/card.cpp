@@ -35,6 +35,9 @@
 #include <dolphin/os/OSReset.h>
 #include <dolphin/os.h>
 #include <dolphin/db.h>
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
 extern "C" {
 void debugInfoDisp(int slot, int type);
@@ -47,9 +50,18 @@ void setMsgBG(int a, int flag);
 // Sub screen data archive (SndMem.sub_adr): offsets to its sub-files.
 // Archive header shared by the sub screen sound data (SndMem.sub_adr: [0] icon/banner TPL,
 // [1] message table) and ss/cmn/save_?.dat (CardID textures, save/load frames, file list, ...).
+// On-disc, big-endian, read straight out of a DVD archive buffer with no pointer-cast in between
+// (same reasoning as mes.cpp's MesFontFile/MesTblBlock, docs/port-phase3.md) -- BE<u32> under
+// TARGET_PC; every use below is `data->ofs[i] + (u32) data`, which already goes through the normal
+// implicit conversion, no call-site change needed.
 struct CardArc {
+#ifdef TARGET_PC
+    re4_port::BE<u32> pad_0[4];
+    re4_port::BE<u32> ofs[6];      // 0x10  offsets from the archive start
+#else
     u32 pad_0[4];
     u32 ofs[6];      // 0x10  offsets from the archive start
+#endif
 };
 
 // Pointers of the game save block (pSaveData).

@@ -5,6 +5,9 @@
 #include "vec.h"
 #include "gx.h"
 #include "tpl.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
 // game/mes.cpp: in-game message system (fonts, message queues, control codes).
 
@@ -13,7 +16,15 @@ struct MessageData {
     u32 lang;      // 0x00
     u8* ptr[5];    // 0x04  message tables (type 0..4), each: u32 x0, u32 ofs[lang]
 
+    // Message text is on-disc, big-endian u16 (character codes / control codes), read straight out
+    // of a DVD archive buffer -- same reasoning as MesTblBlock/CardArc (docs/port-phase3.md);
+    // BE<u16> under TARGET_PC so every control-code/character comparison in mes.cpp sees the real,
+    // host-order value through the normal implicit conversion, no call-site change needed.
+#ifdef TARGET_PC
+    re4_port::BE<u16>* getAddr(int no, int data_type);
+#else
     u16* getAddr(int no, int data_type);
+#endif
     int getMesNum(int data_type);
     int getSpaceWidth();
     void setPtr(int type, u8* p) { ptr[type] = p; }
@@ -110,8 +121,13 @@ public:
     u16 m_jump_mes[3];     // 0x90
     s8 m_jump_idx;         // 0x96
     s8 m_jump_max;         // 0x97
+#ifdef TARGET_PC
+    re4_port::BE<u16>* m_pMes;     // 0x98
+    re4_port::BE<u16>* m_pRetAddr; // 0x9C
+#else
     u16* m_pMes;          // 0x98
     u16* m_pRetAddr;       // 0x9C
+#endif
     MessageFont* m_pRetFont;  // 0xA0
     u32 m_number;         // 0xA4
     u16 digit;          // 0xA8

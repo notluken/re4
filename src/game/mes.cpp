@@ -274,47 +274,69 @@ void MessageFont::destroy()
     be_flag = 0;
 }
 
-// Message table: u32 header, then per language an offset to a block of message offsets.
+// Message table: u32 header, then per language an offset to a block of message offsets. On-disc,
+// big-endian, read straight out of a DVD archive buffer with no pointer-cast in between (unlike
+// MesFontFile just above, same reasoning, docs/port-phase3.md) -- BE<u32> under TARGET_PC.
 struct MesTblBlock {
+#ifdef TARGET_PC
+    re4_port::BE<u32> x0;
+    re4_port::BE<u32> count;    // 0x04
+    re4_port::BE<u32> ofs[1];   // 0x08
+#else
     u32 x0;
     u32 count;    // 0x04
     u32 ofs[1];   // 0x08
+#endif
 };
 
 // Text of message `no` in message file `type` (0 core, 1 room/event mdt, 2 core, 3 item names,
 // 4 ...) for the current language; NULL when out of range.
+#ifdef TARGET_PC
+re4_port::BE<u16>* MessageData::getAddr(int no, int data_type)
+#else
 u16* MessageData::getAddr(int no, int data_type)
+#endif
 {
 #ifdef TARGET_PC
-    // docs/port-boot.md section 37: `ptr[data_type]` genuinely reads back null here at least once
-    // during boot (the memory-card first-check, `cardMesSet()`, reached within the first couple of
-    // frames -- well before `game.cpp`'s `gameInit()`/`roomInit()`, the only vendor code that ever
-    // binds `ptr[0]`, which this repo's own source tracing confirms only run once the player picks
-    // something from the title menu, never during pure boot-to-title). Exhaustively grepped every
-    // `MesData`/`setPtr`/`ptr[` reference in src/game -- no other vendor call site binds it earlier.
-    // Whether real hardware's low physical memory (address 0 has real, if unrelated, contents
-    // there rather than being unmapped the way this host's address 0 is) makes this same
-    // `tbl[lang+1]` read merely garbage instead of a hard fault is **TO VERIFY** (would need real
-    // hardware or a cycle-accurate emulator trace, not available here) -- not asserted as fact.
-    // Bytes for the real target are unchanged (this branch does not exist there); this is a
-    // host-only crash guard, not a claim about the vendor's own logic.
+    // docs/port-boot.md section 39: `ptr[0]` (the card screen's own message table) is bound for
+    // real now, by `cCard::initSub()` (src/game/card.cpp) reading `SndMem.sub_adr`, which
+    // `SndInit()` (src/game/snd.cpp) now populates for real, synchronously, before any task's first
+    // turn -- so `ptr[0]` should no longer read back null at the card prompt. `ptr[1..4]` (room/
+    // item/etc message tables) are still genuinely unbound this early: the only vendor code that
+    // binds them is `game.cpp`'s `gameInit()`/`roomInit()`, which only ever runs once `GameTask`
+    // starts (after the title menu), still excluded from this port. This guard stays as a
+    // host-only safety net for that gap and any other still-unbound table, not a claim about the
+    // vendor's own logic; bytes for the real target are unchanged (this branch does not exist
+    // there).
     if (ptr[data_type] == NULL) {
         return NULL;
     }
-#endif
+    // Same on-disc big-endian reasoning as MesTblBlock just above: this table of per-language
+    // offsets is raw archive content, not a GC-address pointer, so BE<u32> under TARGET_PC.
+    re4_port::BE<u32>* tbl = (re4_port::BE<u32>*) ptr[data_type];
+#else
     u32* tbl = (u32*) ptr[data_type];
+#endif
     MesTblBlock* blk = (MesTblBlock*) ((u8*) tbl + tbl[lang + 1]);
 
     if (no > (int) blk->count - 1) {
         return NULL;
     }
+#ifdef TARGET_PC
+    return (re4_port::BE<u16>*) ((u8*) blk + blk->ofs[no]);
+#else
     return (u16*) ((u8*) blk + blk->ofs[no]);
+#endif
 }
 
 // Number of messages in file `type` for the current language.
 int MessageData::getMesNum(int data_type)
 {
+#ifdef TARGET_PC
+    re4_port::BE<u32>* tbl = (re4_port::BE<u32>*) ptr[data_type];
+#else
     u32* tbl = (u32*) ptr[data_type];
+#endif
     MesTblBlock* blk = (MesTblBlock*) ((u8*) tbl + tbl[lang + 1]);
 
     return blk->count;
@@ -854,7 +876,11 @@ void Message::WidthCk()
     int n = 0;
     int i;
     s8 l, r;
+#ifdef TARGET_PC
+    re4_port::BE<u16>* save;
+#else
     u16* save;
+#endif
     u16 code;
 
     qp = qbase;
