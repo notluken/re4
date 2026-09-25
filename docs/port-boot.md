@@ -2799,3 +2799,58 @@ of which of those it starts with.
 Commits `c8a58935` (Aurora patch consolidation, tools-only, no verification needed),
 `a513d51c` (the systemic allocator fix) -- both fast-forwarded from `port/wip-phase1` onto
 `port/macos-arm64` and pushed after the remote check passed.
+
+## 41. `ThreadExitException` root-caused and fixed: `__re4game`'s missing section attribute broke
+    unwinding through all of `src/game` (2026-09-25)
+
+Section 40's blocker (`OSExitThread()`'s C++-exception unwind mechanism escaping uncaught,
+`libc++abi: terminating due to uncaught exception of type re4_port::(anonymous
+namespace)::ThreadExitException`) traced to completion. `lldb`, breakpointed on `__cxa_throw` at
+the real crash (`TaskExit()`/`TaskChain()` in `src/game/scheduler.cpp`, called from a real,
+correctly-running task fiber -- `pCTask->pFunc == CardMainTask`, `state == RUNNING`, confirmed via
+`image lookup -v` that the frames lldb's default symbolication mislabeled (a separate, cosmetic
+DWARF-attribution glitch, not chased) are real code inside `TaskChain`/`CardFirstCheck`/
+`tvModeExit`/`tvModeCheckTask` -- a completely ordinary, correctly-nested call stack under
+`TaskFiberEntry`'s own `try`/`catch`). `image show-unwind -a` on an address inside `__TEXT,__re4game`
+(the custom Mach-O section `include/port/game_section.h`'s `#pragma clang section text=...`
+introduced in section 40) showed only the generic arm64 fallback unwind plan -- no "sourced from the
+compiler: yes" compact-unwind plan at all -- while an address in the ordinary `__TEXT,__text`
+section had one. Root cause: `#pragma clang section text="__TEXT,__re4game"` names the section but
+does not set its Mach-O attributes; ld64 only infers `S_ATTR_PURE_INSTRUCTIONS` (the flag that
+makes it emit `__unwind_info`/compact-unwind for a section) from the conventional name `__text`, and
+silently omits unwind info for a same-segment section with a different name and no attributes.
+The ld64 warning already noted in section 40 ("missing 'regular,pure_instructions' section flag")
+was not cosmetic -- it was ld64 accurately describing this exact defect. Reproduced standalone (a
+throw/catch across a `#pragma clang section text="__TEXT,__re4game"`-tagged TU): without
+`,regular,pure_instructions` on the pragma string, the exception escapes uncaught (this project's
+exact failure) and, in one variant, ld64 itself crashed while emitting a spurious unwind-info entry
+for a non-code section; with it, `otool -l` shows the section's `flags` field gains
+`S_ATTR_SOME_INSTRUCTIONS|S_ATTR_PURE_INSTRUCTIONS` (`0x80000400`) and the throw/catch works.
+
+**Fix**: `include/port/game_section.h`'s pragma is now
+`#pragma clang section text="__TEXT,__re4game,regular,pure_instructions"` (one line, comment
+explaining why the suffix is load-bearing). This is a systemic fix, not specific to
+`OSExitThread()`: it restores unwinding through *any* exception that needs to pass through `src/game`
+code, not just this one call site.
+
+**Verified**: clean incremental rebuild of `re4_boot` -- the ld64 "missing ... pure_instructions"
+warning is gone. A real run (`re4_boot orig/G4BE08/files orig/G4BE08/re4_debug_disc1.iso`) no longer
+aborts at the old blocker; it runs past `CardMainTask`'s DVD/card-mount sequence (`SS/cmn/title.snd`,
+`Font/common_p.fnt`, `ss/cmn/save_e.dat`, `Slot A Mount`, the expected `Failed to open file:
+bh4_data*` lines for an empty/non-matching real memory-card directory) and keeps running steadily
+(no crash, observed for 15-20 s). Host default build unaffected: `re4_game_all -k 0` still 33
+failing files (same set), `ctest --test-dir build-pc` 5/5. Change is entirely inside
+`include/port/game_section.h` (header-only, `#ifdef TARGET_PC`-guarded) -- no remote verification
+round trip needed per the port rules. Commit `863e2ffd`, pushed to `fork/port/macos-arm64`.
+
+**Screenshot, honestly described** (`RE4_PORT_SCREENSHOT`, 8 s in): still the same kind of debug
+overlay as every prior screenshot in this file, not the title screen -- a dashed line and a
+`08010000` hex label top-left, a green mark and a dark-navy vertical bar at the left edge, a
+lavender/grey vertical bar at the right edge, two `C6E420`/`C7E420` hex labels bottom-right, and a
+plain `7` / `0` bottom-left. No title-screen art, no legible menu text. Fixing the exception-unwind
+bug changed what code runs (much further into `CardMainTask`) but not yet what is on screen.
+
+**Not reached this pass (budget)**: `math_sub.cpp`/`trans.cpp` un-exclusion (`frsqrte`/`fcmpu`),
+`cUnit`/`cCoord` layout (`Ptr32`-ifying `pNext`/`pParent`, deciding the vptr-width question), and
+the title screen itself -- all still open from section 40, now genuinely reachable next since this
+session's blocker is gone.
