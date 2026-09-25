@@ -437,6 +437,10 @@ if (RE4_BUILD_BOOT)
   target_include_directories(re4_boot_game PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
   target_compile_definitions(re4_boot_game PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_boot_game PRIVATE ${RE4_GAME_OPTIONS}
+    # game_section.h MUST be first (docs/port-boot.md section 40): its #pragma clang section
+    # applies to everything textually after it in each TU, so ptr32.h/layout_asserts.h's own inline
+    # code has to land in the __re4game section too, same as the rest of this real vendor code.
+    "SHELL:-include ${RE4_ROOT}/include/port/game_section.h"
     "SHELL:-include ${RE4_ROOT}/include/port/ptr32.h"
     "SHELL:-include ${RE4_ROOT}/include/port/layout_asserts.h")
   # main.cpp's own `main()` becomes `main_game()` at compile time for this target only (src/port/

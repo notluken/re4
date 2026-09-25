@@ -74,13 +74,17 @@ static u32 _epy;
 
 // Zeroed allocation from the current heap.
 #ifdef TARGET_PC
-// Split allocator (include/port/alloc.h, docs/port-boot.md section 8): only a game thread, once
-// the game's own heaps exist, may reach mem_calloc -- anything else (host libraries' static
-// initializers, Aurora, libc++ internals sharing this process) gets the host's malloc instead, so
-// it can never trip mem_calloc's logging/heap-bookkeeping path before those game globals exist.
+// Split allocator (include/port/alloc.h, docs/port-boot.md sections 8/39/40): the game heap is used
+// only when the immediate caller of `new` is itself compiled game code (IsGameCodeAddress(),
+// include/port/game_section.h's linker-section tag) on a ready game thread -- not merely "runs on
+// the game thread", which Aurora's own aurora_begin_frame() also does (section 39's bug: caller-
+// thread-only routed its internal renderer bookkeeping into the tiny GameCube-budgeted heaps).
+// __builtin_return_address(0) here is operator new's own immediate caller, i.e. exactly the call
+// site that wrote `new ...` -- must be read directly in this function, not passed down through
+// another call (a caller further down the chain would see its own return address instead).
 void* operator new(std::size_t size)
 {
-    if (re4_port::ShouldUseGameHeap()) {
+    if (re4_port::ShouldUseGameHeapFor(__builtin_return_address(0))) {
         return mem_calloc(size, "operator new", 0, 1, MEM_HEAP_CURRENT);
     }
     return std::malloc(size);
@@ -96,7 +100,7 @@ void* operator new(unsigned int size)
 #ifdef TARGET_PC
 void* operator new[](std::size_t size)
 {
-    if (re4_port::ShouldUseGameHeap()) {
+    if (re4_port::ShouldUseGameHeapFor(__builtin_return_address(0))) {
         return mem_calloc(size, "operator new", 0, 1, MEM_HEAP_CURRENT);
     }
     return std::malloc(size);

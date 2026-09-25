@@ -53,12 +53,30 @@ void MarkHeapsReady();
 bool HeapsReady();
 
 // True when a `new` on the current thread right now should come from the game heap (IsGameThread()
-// && HeapsReady()) rather than the host's malloc.
+// && HeapsReady()) rather than the host's malloc. Thread-only -- does not know who the immediate
+// caller is; docs/port-boot.md section 39 found a real case (Aurora's aurora_begin_frame(), called
+// synchronously from the game thread) where that is not enough. Prefer ShouldUseGameHeapFor() at
+// every `new`/`new[]` call site that can supply a caller address (__builtin_return_address(0)); this
+// bare thread-only form is kept only for whatever, if anything, can't.
 bool ShouldUseGameHeap();
+
+// The real check (docs/port-boot.md section 40): ShouldUseGameHeap() (thread + heaps ready + not
+// inside a HostAllocScope) AND `callerAddr` is inside actual compiled game code
+// (IsGameCodeAddress()) -- not merely running on the game thread. HostAllocScope (above) stays
+// available as an explicit override for any case this address check gets wrong or can't reach.
+bool ShouldUseGameHeapFor(const void* callerAddr);
 
 // True when `p` falls inside the embedded arena (include/port/arena.h) -- i.e. the game heap, not
 // the host's malloc, owns it. nullptr is never an arena pointer.
 bool IsArenaPointer(const void* p);
+
+// True when `addr` falls inside the `__TEXT,__re4game` Mach-O section (include/port/game_section.h,
+// forced-included into every real vendor game translation unit re4_boot compiles, nothing else) --
+// i.e. `addr` is genuinely inside compiled game code, not Aurora/libc++/stub code that merely
+// happens to run on the game thread (docs/port-boot.md section 39/40: this is the caller-based
+// replacement for a thread-only check, which can't tell "the game thread, running Aurora's own
+// begin_frame()" apart from "the game thread, running actual game code").
+bool IsGameCodeAddress(const void* addr);
 
 // Scoped override for ShouldUseGameHeap(), for host code the game thread calls *synchronously*
 // in-line (Aurora's aurora_begin_frame()/aurora_end_frame(), src/port/vi.cpp) -- not a separate

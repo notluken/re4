@@ -42,6 +42,11 @@ bool ShouldUseGameHeap()
     return IsGameThread() && HeapsReady() && t_hostAllocDepth == 0;
 }
 
+bool ShouldUseGameHeapFor(const void* callerAddr)
+{
+    return ShouldUseGameHeap() && IsGameCodeAddress(callerAddr);
+}
+
 HostAllocScope::HostAllocScope()
 {
     ++t_hostAllocDepth;
@@ -65,6 +70,30 @@ bool IsArenaPointer(const void* p)
     auto addr = reinterpret_cast<std::uintptr_t>(p);
     auto base = reinterpret_cast<std::uintptr_t>(GetArenaBase());
     return addr >= base && addr - base < GetArenaSize();
+}
+
+// ld64 (macOS's linker) synthesizes these two pseudo-symbols for any named section that actually
+// exists in the final image -- "section$start$<seg>$<sect>" / "section$end$<seg>$<sect>" -- giving
+// the section's bounds without a custom linker script. Declared here (not a public dolphin/Aurora
+// header) because nothing else needs them; __asm__ binds the C++ name to the literal linker symbol.
+// `weak`: this file (src/port/alloc.cpp) is part of the `re4_port` static library, linked into
+// several targets (test_arena, test_ptr32, ...) that never compile anything with
+// include/port/game_section.h's pragma -- i.e. no `__TEXT,__re4game` section ever exists in those
+// binaries. Verified live: when the section is absent, ld64 still resolves a *weak* start/end pair
+// (to the same address as each other, not to a link error), which makes `start == end` -- an empty
+// range that correctly never matches any address, exactly the right answer for "no game code was
+// ever built into this binary" without a separate ifdef per target.
+extern "C" char __attribute__((weak)) re4game_section_start[] __asm__(
+    "section$start$__TEXT$__re4game");
+extern "C" char __attribute__((weak)) re4game_section_end[] __asm__(
+    "section$end$__TEXT$__re4game");
+
+bool IsGameCodeAddress(const void* addr)
+{
+    auto a = reinterpret_cast<std::uintptr_t>(addr);
+    auto start = reinterpret_cast<std::uintptr_t>(re4game_section_start);
+    auto end = reinterpret_cast<std::uintptr_t>(re4game_section_end);
+    return a >= start && a < end;
 }
 
 } // namespace re4_port
