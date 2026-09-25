@@ -8,6 +8,9 @@
 #include "main_mem.h"
 #include "db_log.h"
 #include "gx.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
 cTexSys* g_pIdTexSys;
 
@@ -36,12 +39,21 @@ void IdTexRelease(int owner)
 }
 
 // Effect texture pack: version 0xB, id table at 0x04, TPL table at 0x18, animation table at 0x1C.
+// On-disc, big-endian (Phase 3, docs/port-phase3.md) -- BE<u32> under TARGET_PC.
 struct IdTexData {
+#ifdef TARGET_PC
+    re4_port::BE<u32> version;  // 0x00  == 0xB
+    re4_port::BE<u32> ofsId;    // 0x04  -> TexIdTbl
+    u8 pad_8[0x18 - 0x8];
+    re4_port::BE<u32> ofsTpl;   // 0x18  -> TexOfsTbl of TPLs
+    re4_port::BE<u32> ofsAnm;   // 0x1C  -> TexOfsTbl of TexAnms
+#else
     u32 version;  // 0x00  == 0xB
     u32 ofsId;    // 0x04  -> TexIdTbl
     u8 pad_8[0x18 - 0x8];
     u32 ofsTpl;   // 0x18  -> TexOfsTbl of TPLs
     u32 ofsAnm;   // 0x1C  -> TexOfsTbl of TexAnms
+#endif
 };
 
 // Registers every texture of an id texture data block (version 0xB: id table, TPL table, TexAnm
