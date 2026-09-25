@@ -28,9 +28,20 @@ struct IkParts {
 };
 
 #define MOTION(m) (&((cMotModel*)(m))->Motion)
+#ifdef TARGET_PC
+// The vendor's byte offsets (0x174, 0xF8) are the GameCube layout of cParts (GNU v2.95 ABI, 4-byte
+// pointers); on this host cParts has a different vtable/pointer width so those literal offsets no
+// longer land on motParts/lt_inv_mat. `p` here is always really a cParts* (every source addresses
+// a parts as cModel*, see model.h's comment above class cParts) -- go through the real member
+// instead of raw pointer arithmetic so the compiler computes the host-correct offset.
+#define MOTION_PARTS(p) (&((cParts*)(void*)(p))->motParts)
+#define IK_PARTS(p) ((IkParts*)(void*)&((cParts*)(void*)(p))->lt_inv_mat)
+#define PARTS_BIND_MAT(p) (((cParts*)(void*)(p))->lt_inv_mat)
+#else
 #define MOTION_PARTS(p) ((MotionParts*)((u8*)(p) + 0x174))
 #define IK_PARTS(p) ((IkParts*)((u8*)(p) + 0xF8))
 #define PARTS_BIND_MAT(p) (*(Mtx*)((u8*)(p) + 0xF8))
+#endif
 
 // HermiteInterpolation parameter block.
 struct HermitePrm {
