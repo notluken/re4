@@ -503,10 +503,48 @@ if (RE4_BUILD_BOOT)
   target_compile_definitions(re4_boot_lowmem PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_boot_lowmem PRIVATE ${RE4_GAME_OPTIONS})
 
+  # --- REL modules, statically linked (docs/port-boot.md's REL plan, steps 2-4; OSLink itself is
+  # NOT wired yet -- next slice) -- one bounded module at a time, st1_0 first. Each module's whole
+  # pipeline (generate section.h/desc.cpp, compile every one of its own units -- cast-rewriting only
+  # the ones that need it -- combine with `ld -r`, restrict visibility to just its own
+  # `<Mod>_GetModuleDesc` accessor) is tools/port/build_rel_module.py, run once per module by a
+  # single add_custom_command (see that script's own header comment for why: expressing the same
+  # two-phase `ld -r` through CMake OBJECT libraries/generator expressions alone was tried first and
+  # is far more fragile than one driver script this build just shells out to).
+  set(RE4_REL_MODULES st1_0)
+  execute_process(COMMAND xcrun --show-sdk-path OUTPUT_VARIABLE RE4_REL_SYSROOT
+                   OUTPUT_STRIP_TRAILING_WHITESPACE)
+  execute_process(COMMAND /opt/homebrew/opt/llvm/bin/clang -print-resource-dir
+                   OUTPUT_VARIABLE RE4_REL_CLANG_RESOURCE_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
+  set(RE4_REL_MODULE_OBJECTS "")
+  foreach(_mod IN LISTS RE4_REL_MODULES)
+    set(_gendir ${CMAKE_BINARY_DIR}/gen/rel/${_mod})
+    set(_final_obj ${_gendir}/${_mod}_final.o)
+    add_custom_command(
+      OUTPUT ${_final_obj}
+      COMMAND ${Python3_EXECUTABLE} ${RE4_ROOT}/tools/port/build_rel_module.py ${_mod}
+              --out-dir ${_gendir}
+              --cast-rewriter ${RE4_CAST_REWRITER_BIN}
+              --resource-dir ${RE4_REL_CLANG_RESOURCE_DIR}
+              --sysroot ${RE4_REL_SYSROOT}
+              --compile-db-dir ${CMAKE_BINARY_DIR}
+              --includes ${RE4_ROOT}/include ${RE4_ROOT}/src ${RE4_ROOT}/build/G4BE08/include
+      DEPENDS ${RE4_ROOT}/tools/port/build_rel_module.py ${RE4_ROOT}/tools/port/gen_rel_module.py
+              ${RE4_ROOT}/cmake/gen_rel_sources.py ${RE4_ROOT}/config/G4BE08/modules.py
+              ${RE4_ROOT}/config/G4BE08/modules/${_mod}/rel.json
+              ${RE4_CAST_REWRITER_BIN} ${CMAKE_BINARY_DIR}/compile_commands.json
+      COMMENT "build-rel-module ${_mod}"
+      VERBATIM
+    )
+    set_source_files_properties(${_final_obj} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+    list(APPEND RE4_REL_MODULE_OBJECTS ${_final_obj})
+  endforeach()
+
   add_executable(re4_boot $<TARGET_OBJECTS:re4_boot_lowmem> $<TARGET_OBJECTS:re4_boot_game>
     src/port/game_stack.cpp src/port/boot_main.cpp
     src/port/mem1.cpp src/port/dvd.cpp src/port/vi.cpp src/port/gx_wgfifo.cpp src/port/card.cpp
-    src/port/pad_input.cpp src/port/screenshot.cpp)
+    src/port/pad_input.cpp src/port/screenshot.cpp
+    ${RE4_REL_MODULE_OBJECTS})
   target_include_directories(re4_boot PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
   target_compile_definitions(re4_boot PRIVATE ${RE4_GAME_DEFINES})
   target_compile_options(re4_boot PRIVATE ${RE4_GAME_OPTIONS})

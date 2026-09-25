@@ -7,6 +7,7 @@
 
 #include "stub_common.h"
 #include "dolphin/os/OSThread.h"
+#include "sce_at.h"
 #include "trans.h"
 #include "tpl.h"
 
@@ -147,5 +148,29 @@ BOOL OSUnlink(OSModuleInfo* oldModule)
 // SpecularInit / GlobalIlmTexInit: now defined for real by src/game/trans.cpp (un-excluded,
 // cmake/boot_exclude.txt -- docs/port-boot.md section 46/47), removed from here to avoid a
 // duplicate-symbol link error.
+
+// SceAtHitCheck/SceAtCreateExecAt: real bodies live in src/game/sce_at.cpp, still on
+// cmake/boot_exclude.txt (unrelated asm-register errors, `docs/port-boot.md`'s `re4_game_all -k 0`
+// baseline -- "unknown register name 'fr0' in asm", not a REL-plan concern). Every st1_0/st2_x/
+// st3_x/st4_x room source calls at least one of these (`include/sce_at.h`), so linking ANY REL
+// module -- st1_0 first, docs/port-boot.md's REL plan -- needs a real (if inert) definition for
+// re4_boot to link at all until sce_at.cpp's own asm ports. No `extern "C"` here: sce_at.h declares
+// both as plain (mangled) C++ functions, matching what the linker actually asks for.
+int SceAtHitCheck(u32 at_no)
+{
+    (void) at_no;
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtHitCheck() called\n"); warned = true; }
+    return 0;
+}
+int SceAtCreateExecAt(cModel* m, Vec* pos, int a, int b, int c, f32 h, int d, f32 ang, f32 range,
+                       int e, int prio, TaskFunc func, int arg, u8 flag)
+{
+    (void) m; (void) pos; (void) a; (void) b; (void) c; (void) h; (void) d; (void) ang;
+    (void) range; (void) e; (void) prio; (void) func; (void) arg; (void) flag;
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtCreateExecAt() called\n"); warned = true; }
+    return 0;
+}
 
 #endif // TARGET_PC
