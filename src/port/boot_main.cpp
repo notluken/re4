@@ -12,6 +12,7 @@
 #include "port/game_stack.h"
 #include "port/os_thread.h"
 #include "port/ptr32.h"
+#include "port/rel.h"
 #include "port/vi.h"
 
 #include <cstdio>
@@ -65,6 +66,8 @@ int main(int argc, char** argv)
     // its own MEM1 block on top of what this would have set up.
     std::fprintf(stderr, "re4_boot: arena base=%p size=%zu\n", re4_port::GetArenaBase(),
                  re4_port::GetArenaSize());
+    re4_port::RegisterBuiltRelModules(); // include/port/rel.h -- before the game thread starts, so
+                                          // every id it might OSLink() is already registered
 
     // The game thread's real (machine) stack is include/port/game_stack.h's dedicated ~2 MiB
     // pre-arena region, not carved from the 1 GiB arena (docs/port-boot.md section 28) -- so the

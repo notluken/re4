@@ -544,10 +544,20 @@ if (RE4_BUILD_BOOT)
     list(APPEND RE4_REL_MODULE_OBJECTS ${_final_obj})
   endforeach()
 
+  # RegisterBuiltRelModules() (include/port/rel.h): one generated .cpp declaring and registering
+  # every `<Mod>_GetModuleDesc()` above, so boot_main.cpp's single call site never needs a hand-edited
+  # per-module list. Regenerated whenever RE4_REL_MODULES itself changes (this gen_rel_registry.py
+  # invocation runs at configure time, like RE4_REL_MODULES itself -- not a build-time custom
+  # command, since the argument list IS the dependency here, not a file).
+  set(RE4_REL_REGISTRY_CPP ${CMAKE_BINARY_DIR}/gen/rel/rel_registry.cpp)
+  execute_process(COMMAND ${Python3_EXECUTABLE} ${RE4_ROOT}/tools/port/gen_rel_registry.py
+                   ${RE4_REL_MODULES} --out ${RE4_REL_REGISTRY_CPP})
+
   add_executable(re4_boot $<TARGET_OBJECTS:re4_boot_lowmem> $<TARGET_OBJECTS:re4_boot_game>
     src/port/game_stack.cpp src/port/boot_main.cpp
     src/port/mem1.cpp src/port/dvd.cpp src/port/vi.cpp src/port/gx_wgfifo.cpp src/port/card.cpp
     src/port/pad_input.cpp src/port/screenshot.cpp
+    ${RE4_REL_REGISTRY_CPP}
     ${RE4_REL_MODULE_OBJECTS})
   target_include_directories(re4_boot PRIVATE ${RE4_GAME_INCLUDES} ${RE4_AURORA_DIR}/include)
   target_compile_definitions(re4_boot PRIVATE ${RE4_GAME_DEFINES})

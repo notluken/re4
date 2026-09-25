@@ -38,6 +38,12 @@ namespace re4_port {
 // caller bug (asserts).
 void RegisterRelModule(const RelModuleDesc* desc);
 
+// GENERATED (tools/port/gen_rel_registry.py, wired by CMakeLists.txt's RE4_REL_MODULES block): calls
+// RegisterRelModule() once for every module CMakeLists.txt actually built this run. Call once, early
+// in main() (src/port/boot_main.cpp), before the game thread starts -- i.e. before anything could
+// call OSLink()/OSUnlink() for a module id this needs to already know about.
+void RegisterBuiltRelModules();
+
 // `kind`: 0 = prolog, 1 = epilog. Looks `header->info.id` up in the registry and calls the matching
 // descriptor's prolog/epilog; logs and does nothing for an id with no registered descriptor.
 void RelEntry(OSModuleHeader* header, int kind);
