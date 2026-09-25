@@ -36,6 +36,13 @@
 // `getsectiondata()` rather than assuming it.
 #pragma clang section data="__DATA,__re4gdata"
 #pragma clang section bss="__DATA,__re4gbss"
+// rodata too, for the same reason data/bss are moved here -- a `static const` local (e.g. a light
+// offset/size Vec passed to cLightInfo::init2()) otherwise lands in the default `__TEXT,__const`,
+// part of the __TEXT segment, which loads BEFORE __DATA/__re4low: its GC32() address comes out below
+// 0x80000000, always failing VALID_PTR (the `cLightInfo::init2() PTR ERROR` this was found from).
+// tools/port/gen_rel_module.py already does this for every REL module's own rodata; the DOL's own
+// game code needed the same fix.
+#pragma clang section rodata="__DATA,__re4grodata"
 
 // The trailing `,regular,pure_instructions` is load-bearing, not decorative: without it ld64 does
 // not recognize `__re4game` as a code section (it only infers that from the conventional

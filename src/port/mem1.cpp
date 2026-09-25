@@ -68,12 +68,13 @@ void InitMem1()
     // explicitly to the real usable arena, not `MEM1Start + ARENA_START_OFFSET` (Aurora's own
     // default, 0x4000 past MEM1Start): under this GC-faithful layout MEM1Start is __re4low, and
     // 0x4000 past it is still inside the exe's own low-memory/`__data` region, not the real arena.
-    // The top kTaskStackPoolSize bytes of the arena are reserved for real per-task machine stacks
-    // (include/port/arena.h's GetTaskStackPoolBase(), src/port/os_thread.cpp) -- excluded from the
-    // heap's own range so OSAllocFromHeap() never hands out memory a running thread's own machine
-    // stack is using.
+    // Real per-task machine stacks live at a fixed GC address past the vendor's own heap end
+    // (include/port/arena.h's GetTaskStackPoolBase()), not carved out of this OS-level arena at all
+    // -- see that function's own comment for why. OSSetArenaLo/Hi here only feed
+    // src/game/main_mem.cpp's SystemMemInit() sanity check and its OSInitAlloc() fallback bound; the
+    // game's own hardcoded SysMem map (weapon..heap_end) is what actually bounds heap 0.
     OSSetArenaLo(arenaBase);
-    OSSetArenaHi(static_cast<char*>(arenaEnd) - re4_port::kTaskStackPoolSize);
+    OSSetArenaHi(arenaEnd);
 
     // OSBootInfo::memorySize (include/dolphin/os.h, offset 0x28 -- DVDDiskID is 0x20 bytes, +
     // magic (4) + version (4) = 0x28, confirmed against the struct directly, not assumed) and

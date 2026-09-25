@@ -197,6 +197,7 @@ void InitArena()
     // not just this file's own s_bssProbe.
     CheckGameSection("__re4gdata");
     CheckGameSection("__re4gbss");
+    CheckGameSection("__re4grodata");
     // ... and, found while wiring the first REL module (docs/port-boot.md's REL plan): the
     // `#pragma clang section data/bss=` force-include does NOT catch every compiler-EMITTED global
     // in a TU it covers -- a function-local static's dynamic-initialization guard variable
@@ -253,9 +254,39 @@ void* GetArenaBase()
     return s_arena;
 }
 
+// See include/port/arena.h's comment on kTaskStackPoolSize: pinned past the vendor's own heap end,
+// not carved out of the arena's own (arbitrary, GC32()-huge) top.
+constexpr std::uint32_t kTaskStackPoolGC = 0x81800000u;
+
+// Must stay past SysMem.heap_end (src/game/main_mem.cpp) or it collides with the game heap.
+static_assert(kTaskStackPoolGC >= 0x817F4000u, "kTaskStackPoolGC overlaps SysMem.heap_end");
+
 void* GetTaskStackPoolBase()
 {
-    return s_arena + kArenaSize - kTaskStackPoolSize;
+    // One-time guardrail: mem1.cpp's OSSetArenaHi(arenaEnd) no longer enforces that this pool sits
+    // inside both the host arena and VALID_PTR's window, so check it here instead.
+    static bool checked = false;
+    if (!checked) {
+        checked = true;
+        std::uint32_t arenaStartGC = GC32(s_arena);
+        std::uint32_t arenaEndGC = arenaStartGC + static_cast<std::uint32_t>(kArenaSize);
+        std::uint32_t poolEndGC = kTaskStackPoolGC + static_cast<std::uint32_t>(kTaskStackPoolSize);
+        if (kTaskStackPoolGC < arenaStartGC || poolEndGC > arenaEndGC) {
+            std::fprintf(stderr,
+                         "GetTaskStackPoolBase: task stack pool [0x%08x, 0x%08x) is outside the host "
+                         "arena's GC range [0x%08x, 0x%08x)\n",
+                         kTaskStackPoolGC, poolEndGC, arenaStartGC, arenaEndGC);
+            std::abort();
+        }
+        if (poolEndGC > 0x83000000u) {
+            std::fprintf(stderr,
+                         "GetTaskStackPoolBase: task stack pool end (0x%08x) is outside VALID_PTR's "
+                         "window (include/main_mem.h)\n",
+                         poolEndGC);
+            std::abort();
+        }
+    }
+    return GCPTR<char>(kTaskStackPoolGC);
 }
 
 std::size_t GetArenaSize()

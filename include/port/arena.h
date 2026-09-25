@@ -48,15 +48,12 @@ std::size_t GetArenaSize();
 bool CreateArenaThread(std::size_t stack_offset, std::size_t stack_size, void* (*start)(void*),
                        void* arg);
 
-// A reserved slice at the very TOP of the arena, for real (machine) pthread stacks that need to be
-// page-aligned and page-sized (docs/port-boot.md section 29 -- `pthread_attr_setstack` on macOS
-// requires both, which the game's own heap-allocated per-task stack buffers, sized/aligned to the
-// vendor's tiny original PPC stack budget (0x1800-0x3000 bytes, include/scheduler.h's
-// `GetStackSize()`), essentially never satisfy). 1 MiB per slot -- generous compared to the vendor's
-// own bookkeeping, since a real host C++ call stack (this port's own scheduler/allocator code, plus
-// whatever the game's own task function calls into) needs far more headroom than the original
-// target's did. `re4_port::mem1.cpp`'s `InitMem1()` excludes this slice from
-// `OSSetArenaHi()` -- the game's own heap allocator never sees it.
+// Real (machine) pthread stacks for the per-task fibers, pinned at fixed GC address 0x81800000 --
+// past src/game/main_mem.cpp's `SysMem.heap_end` (0x817F4000), inside VALID_PTR's (include/main_mem.h)
+// 0x80000000-0x82FFFFFF window. The old arena-end slot computed a GC32() handle near 0xBF000000,
+// outside that window, so any fiber local's address (e.g. cLightInfo::init2()'s `&size`) failed
+// VALID_PTR. macOS `pthread_attr_setstack` needs page-aligned, page-sized memory (docs/port-boot.md
+// section 29). 1 MiB per slot.
 inline constexpr std::size_t kTaskStackSlotSize = 1024 * 1024; // 1 MiB
 inline constexpr std::size_t kTaskStackSlots = 18;             // include/scheduler.h's TASK_NUM
 inline constexpr std::size_t kTaskStackPoolSize = kTaskStackSlotSize * kTaskStackSlots;
