@@ -384,25 +384,9 @@ void AXSetVoiceType(AXVPB* p, u16 type)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: AXSetVoiceType() called\n"); warned = true; }
 }
-// ClothInit: `void ClothInit()`
-void ClothInit()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ClothInit() called\n"); warned = true; }
-}
-// ClothTexSetUp: `int ClothTexSetUp(void* tpl, GXTexObj* tex, int no, GXTlutObj* tlut)`
-int ClothTexSetUp(void* tpl, GXTexObj* tex, int no, GXTlutObj* tlut)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ClothTexSetUp() called\n"); warned = true; }
-    return 0;
-}
-// ClrShape: `void ClrShape(cModel* pMod)`
-void ClrShape(cModel* pMod)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ClrShape() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): ClothInit
+// REMOVED (real definition now compiled elsewhere): ClothTexSetUp
+// REMOVED (real definition now compiled elsewhere): ClrShape
 // CoreDataRead: real definition now in src/game/read.cpp (docs/port-boot.md section 35 -- read.cpp
 // un-excluded from cmake/boot_exclude.txt, its Ptr32/pointer-cast issues turned out already handled
 // by the RE4_REWRITE_CASTS cast rewriter).
@@ -413,12 +397,7 @@ BOOL DBIsDebuggerPresent(void)
     if (!warned) { std::fprintf(stderr, "STUB: DBIsDebuggerPresent() called\n"); warned = true; }
     return 0;
 }
-// DiedemoExec: `void DiedemoExec(int time, int type)`
-void DiedemoExec(int time, int type)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: DiedemoExec() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): DiedemoExec
 // Draw_box: `void Draw_box(Vec* pBoxVec, u32 col, int flg)`
 void Draw_box(Vec* pBoxVec, u32 col, int flg)
 {
@@ -506,18 +485,8 @@ BOOL EmHitCheck(Vec* ret_cross, Vec* ret_norm, Vec* pos0, Vec* pos1, u32 flag)
 }
 // EmReadInit / EmReadSearch: real definitions now in src/game/read.cpp (docs/port-boot.md
 // section 35 continuation -- read.cpp un-excluded).
-// EndPlDamage: `void EndPlDamage()`
-void EndPlDamage()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: EndPlDamage() called\n"); warned = true; }
-}
-// EndSubDamage: `void EndSubDamage()`
-void EndSubDamage()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: EndSubDamage() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): EndPlDamage
+// REMOVED (real definition now compiled elsewhere): EndSubDamage
 // Esp04_Trans: `void Esp04_Trans(cEsp* esp)`
 void Esp04_Trans(cEsp* esp)
 {
@@ -691,50 +660,13 @@ void Estgen45SetTargetPos(f32 x, f32 z)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: Estgen45SetTargetPos() called\n"); warned = true; }
 }
-// GameAddPoint: `void GameAddPoint(int type)`
-void GameAddPoint(int type)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: GameAddPoint() called\n"); warned = true; }
-}
-// GameContinue: `void GameContinue(int option_flag)`
-void GameContinue(int option_flag)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: GameContinue() called\n"); warned = true; }
-}
-// GameLoad: `void GameLoad()`
-void GameLoad()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: GameLoad() called\n"); warned = true; }
-}
-// GameTask: `void GameTask()`
-void GameTask()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: GameTask() called\n"); warned = true; }
-}
-// getChapterSection: `void getChapterSection(int no, int* chap, int* sect)`
-void getChapterSection(int no, int* chap, int* sect)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: getChapterSection() called\n"); warned = true; }
-}
-// GetFree: `u32 GetFree(int no)`
-u32 GetFree(int no)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: GetFree() called\n"); warned = true; }
-    return 0;
-}
-// GetPrimBuff: `void* GetPrimBuff(int size)`
-void* GetPrimBuff(int size)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: GetPrimBuff() called\n"); warned = true; }
-    return (void*) 0;
-}
+// REMOVED (real definition now compiled elsewhere): GameAddPoint
+// REMOVED (real definition now compiled elsewhere): GameContinue
+// REMOVED (real definition now compiled elsewhere): GameLoad
+// REMOVED (real definition now compiled elsewhere): GameTask
+// REMOVED (real definition now compiled elsewhere): getChapterSection
+// REMOVED (real definition now compiled elsewhere): GetFree
+// REMOVED (real definition now compiled elsewhere): GetPrimBuff
 // GetSandHeight: `int GetSandHeight(Vec* pos, f32* Ret)`
 int GetSandHeight(Vec* pos, f32* Ret)
 {
@@ -742,13 +674,7 @@ int GetSandHeight(Vec* pos, f32* Ret)
     if (!warned) { std::fprintf(stderr, "STUB: GetSandHeight() called\n"); warned = true; }
     return 0;
 }
-// GetWepSizeGroup: `int GetWepSizeGroup(int wepId)`
-int GetWepSizeGroup(int wepId)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: GetWepSizeGroup() called\n"); warned = true; }
-    return 0;
-}
+// REMOVED (real definition now compiled elsewhere): GetWepSizeGroup
 // GXSetCurrentGXThread: `OSThread* GXSetCurrentGXThread(void)`
 OSThread* GXSetCurrentGXThread(void)
 {
@@ -757,12 +683,7 @@ OSThread* GXSetCurrentGXThread(void)
     return (OSThread*) 0;
 }
 // UNRESOLVED: GXWGFifo -- candidates: ['extern volatile WGPipe GXWGFifo[];', 'GXWGFifo->f32 = x;']
-// IdSetNum: `void IdSetNum(IDSystem* pIdSys, int idmNo, u8 idcNo, int num, int max, int keta, int mode)`
-void IdSetNum(IDSystem* pIdSys, int idmNo, u8 idcNo, int num, int max, int keta, int mode)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: IdSetNum() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): IdSetNum
 // init_dbmodule: `void init_dbmodule()`
 void init_dbmodule()
 {
@@ -791,26 +712,9 @@ void memset_asm(void* dst, int c, u32 n)
         std::memset(dst, c, n);
     }
 }
-// MercSysGetSaveWork: `void MercSysGetSaveWork(MercSaveWork* pSaveWk)`
-void MercSysGetSaveWork(MercSaveWork* pSaveWk)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: MercSysGetSaveWork() called\n"); warned = true; }
-}
-// MercSysSetAddTime: `int MercSysSetAddTime(int time)`
-int MercSysSetAddTime(int time)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: MercSysSetAddTime() called\n"); warned = true; }
-    return 0;
-}
-// MercSysSetBonusTime: `int MercSysSetBonusTime(int time)`
-int MercSysSetBonusTime(int time)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: MercSysSetBonusTime() called\n"); warned = true; }
-    return 0;
-}
+// REMOVED (real definition now compiled elsewhere): MercSysGetSaveWork
+// REMOVED (real definition now compiled elsewhere): MercSysSetAddTime
+// REMOVED (real definition now compiled elsewhere): MercSysSetBonusTime
 // MIXInit: `void MIXInit(void)`
 void MIXInit(void)
 {
@@ -877,12 +781,7 @@ void MIXUpdateSettings(void)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: MIXUpdateSettings() called\n"); warned = true; }
 }
-// ModelTrans: `void ModelTrans(cModel* model)`
-void ModelTrans(cModel* model)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ModelTrans() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): ModelTrans
 // mwPlyCalcWorkCprmSfd: `int mwPlyCalcWorkCprmSfd(MWS_PLY_CPRM_SFD* prm)`
 int mwPlyCalcWorkCprmSfd(MWS_PLY_CPRM_SFD* prm)
 {
@@ -1221,66 +1120,17 @@ void PenWindSet(f32 dir, f32 power, f32 x)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: PenWindSet() called\n"); warned = true; }
 }
-// PlGachaInit: `void PlGachaInit()`
-void PlGachaInit()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlGachaInit() called\n"); warned = true; }
-}
-// PlGetStatus: `u32 PlGetStatus()`
-u32 PlGetStatus()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlGetStatus() called\n"); warned = true; }
-    return 0;
-}
-// PlGetWeaponNo: `int PlGetWeaponNo()`
-int PlGetWeaponNo()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlGetWeaponNo() called\n"); warned = true; }
-    return 0;
-}
-// PlIsArmor: `int PlIsArmor()`
-int PlIsArmor()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlIsArmor() called\n"); warned = true; }
-    return 0;
-}
-// PlReloadBullet: `void PlReloadBullet()`
-void PlReloadBullet()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlReloadBullet() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): PlGachaInit
+// REMOVED (real definition now compiled elsewhere): PlGetStatus
+// REMOVED (real definition now compiled elsewhere): PlGetWeaponNo
+// REMOVED (real definition now compiled elsewhere): PlIsArmor
+// REMOVED (real definition now compiled elsewhere): PlReloadBullet
 // UNRESOLVED: PlReloadSpeedTbl -- candidates: ['extern const f32 PlReloadSpeedTbl[45][3];', 'return PlReloadSpeedTbl[WeaponId2WeaponNo(id)][level - 1] / 30.0f;']
-// PlSetDamageSe: `void PlSetDamageSe(int se_no)`
-void PlSetDamageSe(int se_no)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlSetDamageSe() called\n"); warned = true; }
-}
-// PlSetEyeMode: `void PlSetEyeMode(u8 mode)`
-void PlSetEyeMode(u8 mode)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlSetEyeMode() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): PlSetDamageSe
+// REMOVED (real definition now compiled elsewhere): PlSetEyeMode
 // UNRESOLVED: PlShotFrameTbl -- candidates: ['u8 weapon_lv_speed;', 'extern const f32 PlShotFrameTbl[45][5];']
-// PlWaterProc: `void PlWaterProc(cPlayer* pEm)`
-void PlWaterProc(cPlayer* pEm)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlWaterProc() called\n"); warned = true; }
-}
-// PlWepHitCheck3: `u32 PlWepHitCheck3(Vec* pos, int type, u32 prio, f32 len)`
-u32 PlWepHitCheck3(Vec* pos, int type, u32 prio, f32 len)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlWepHitCheck3() called\n"); warned = true; }
-    return 0;
-}
+// REMOVED (real definition now compiled elsewhere): PlWaterProc
+// REMOVED (real definition now compiled elsewhere): PlWepHitCheck3
 // PPCMfpmc1: `u32 PPCMfpmc1()`
 u32 PPCMfpmc1()
 {
@@ -1336,18 +1186,8 @@ void PPCSync()
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: PPCSync() called\n"); warned = true; }
 }
-// primFree: `void primFree()`
-void primFree()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: primFree() called\n"); warned = true; }
-}
-// primInit: `void primInit()`
-void primInit()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: primInit() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): primFree
+// REMOVED (real definition now compiled elsewhere): primInit
 // The whole PSMTX*/PSVEC* family below is NOT logging-only anymore (docs/port-boot.md's stub
 // audit, coordinator lead): these are pure paired-single matrix/vector math with no hardware
 // dependency (Aurora only implements the scalar C_MTX* family, docs/port-boot.md section 7 --
@@ -1640,21 +1480,10 @@ void PSVECSubtract(const Vec* a, const Vec* b, Vec* a_b)
     a_b->y = a->y - b->y;
     a_b->z = a->z - b->z;
 }
-// PullCloth: `int PullCloth(Cloth** ppCl)`
-int PullCloth(Cloth** ppCl)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PullCloth() called\n"); warned = true; }
-    return 0;
-}
+// REMOVED (real definition now compiled elsewhere): PullCloth
 // ReleasePlData / ReleaseWepData: real definitions now in src/game/read.cpp (docs/port-boot.md
 // section 35 continuation -- read.cpp un-excluded).
-// Render: `void Render()`
-void Render()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Render() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): Render
 // SceAtCancelItemAt: `void SceAtCancelItemAt(cEm* pEm)`
 void SceAtCancelItemAt(cEm* pEm)
 {
@@ -1722,37 +1551,11 @@ void SceAtReserveItemAt(cEm* pEm, Vec* pos, ITEM_ID item_id, int item_num, int i
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: SceAtReserveItemAt() called\n"); warned = true; }
 }
-// SceCheckEventStart: `int SceCheckEventStart()`
-int SceCheckEventStart()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SceCheckEventStart() called\n"); warned = true; }
-    return 0;
-}
-// SceEventEnd: `void SceEventEnd(int mode)`
-void SceEventEnd(int mode)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SceEventEnd() called\n"); warned = true; }
-}
-// SceEventStart: `void SceEventStart(int mode)`
-void SceEventStart(int mode)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SceEventStart() called\n"); warned = true; }
-}
-// SceMesSet: `void SceMesSet(int no, u32 flags, int sel, int x, int y)`
-void SceMesSet(int no, u32 flags, int sel, int x, int y)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SceMesSet() called\n"); warned = true; }
-}
-// SceSleep: `void SceSleep(int frames)`
-void SceSleep(int frames)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SceSleep() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): SceCheckEventStart
+// REMOVED (real definition now compiled elsewhere): SceEventEnd
+// REMOVED (real definition now compiled elsewhere): SceEventStart
+// REMOVED (real definition now compiled elsewhere): SceMesSet
+// REMOVED (real definition now compiled elsewhere): SceSleep
 // SEQInit: `void SEQInit(void)`
 void SEQInit(void)
 {
@@ -1771,52 +1574,15 @@ void SEQRunAudioFrame(void)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: SEQRunAudioFrame() called\n"); warned = true; }
 }
-// SetFree: `void SetFree(int no, u32 val)`
-void SetFree(int no, u32 val)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SetFree() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): SetFree
 // UNRESOLVED: SetPlDamage -- candidates: ['void SetPlDamage(cEm* em, void (*func)(cPlayer*));', 'cEm* pEmCatch;']
-// SetPrimBuffPtr: `void SetPrimBuffPtr()`
-void SetPrimBuffPtr()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SetPrimBuffPtr() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): SetPrimBuffPtr
 // UNRESOLVED: SetSubBulldozer -- candidates: ['void SetSubBulldozer(void (*ft)(cEm*), void (*ftdm)(cEm*));', 'void (*pAux)(cEm*);']
-// ShadowInit: `void ShadowInit()`
-void ShadowInit()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ShadowInit() called\n"); warned = true; }
-}
-// ShadowMemClear: `void ShadowMemClear()`
-void ShadowMemClear()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ShadowMemClear() called\n"); warned = true; }
-}
-// ShapeMove: `int ShapeMove(cModelInfo* i_pModelInfo)`
-int ShapeMove(cModelInfo* i_pModelInfo)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ShapeMove() called\n"); warned = true; }
-    return 0;
-}
-// SubCharCheckHealing: `int SubCharCheckHealing()`
-int SubCharCheckHealing()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SubCharCheckHealing() called\n"); warned = true; }
-    return 0;
-}
-// SubCharCtrl: `void SubCharCtrl(int mode, int sccf)`
-void SubCharCtrl(int mode, int sccf)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SubCharCtrl() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): ShadowInit
+// REMOVED (real definition now compiled elsewhere): ShadowMemClear
+// REMOVED (real definition now compiled elsewhere): ShapeMove
+// REMOVED (real definition now compiled elsewhere): SubCharCheckHealing
+// REMOVED (real definition now compiled elsewhere): SubCharCtrl
 // SYNGetActiveNotes: `u32 SYNGetActiveNotes(SYNSYNTH* synth)`
 u32 SYNGetActiveNotes(SYNSYNTH* synth)
 {
@@ -1869,12 +1635,7 @@ void SYNSetMasterVolume(SYNSYNTH* synth, s32 dB)
 // TEXGet: superseded by a real implementation, src/port/stubs/manual_stubs.cpp (the vendor's own
 // one-line body, src/lib/texPalette.c, ported against this tree's tpl.h types -- that .c file
 // itself is never compiled for the port, see manual_stubs.cpp's comment).
-// Trans: `void Trans()`
-void Trans()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Trans() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): Trans
 // VIGetDTVStatus: `u32 VIGetDTVStatus()`
 u32 VIGetDTVStatus()
 {
@@ -1917,50 +1678,149 @@ void yz2Decode_Decode(void* ctx, void* dst, u32 size, void* ev)
 } // extern "C"
 
 // Data symbols (plain C++ linkage -- see the comment above `c_data_out` in this script).
-// ActBtn: `extern cActionButton ActBtn;`
-cActionButton ActBtn{};
-// aniso: `extern u32 aniso;`
-u32 aniso{};
-// CamDbg: `extern debugCamera CamDbg;`
-debugCamera CamDbg{};
-// DC: `extern cDataCtrl DC;`
-cDataCtrl DC{};
+// REMOVED (real definition now compiled elsewhere): ActBtn
+// REMOVED (real definition now compiled elsewhere): aniso
+// REMOVED (real definition now compiled elsewhere): CamDbg
+// REMOVED (real definition now compiled elsewhere): DC
 // EmReadModule: now defined for real by src/game/read.cpp (docs/port-boot.md section 35
 // continuation -- no longer excluded), removed from here to avoid a duplicate-symbol link error.
-// g_at2_cnt: `extern u32 g_at2_cnt[];`
-u32 g_at2_cnt[] = {};
-// g_at2_cyc: `extern u32 g_at2_cyc[];`
-u32 g_at2_cyc[] = {};
-// g_at2_total: `extern u32 g_at2_total;`
-u32 g_at2_total{};
-// g_at2_total_cyc: `extern u32 g_at2_total_cyc;`
-u32 g_at2_total_cyc{};
-// g_Get_tex_obj: `extern GXTexObj g_Get_tex_obj;`
-GXTexObj g_Get_tex_obj{};
-// GameSave: `extern cGameSave GameSave;`
-cGameSave GameSave{};
-// gxCsScale: `extern u8 gxCsScale[];`
-u8 gxCsScale[] = {};
-// lockCtr: `extern u8 lockCtr;`
-u8 lockCtr{};
-// lod_bias: `extern f32 lod_bias;`
-f32 lod_bias{};
+// REMOVED (real definition now compiled elsewhere): g_at2_cnt
+// REMOVED (real definition now compiled elsewhere): g_at2_cyc
+// REMOVED (real definition now compiled elsewhere): g_at2_total
+// REMOVED (real definition now compiled elsewhere): g_at2_total_cyc
+// REMOVED (real definition now compiled elsewhere): g_Get_tex_obj
+// REMOVED (real definition now compiled elsewhere): GameSave
+// REMOVED (real definition now compiled elsewhere): gxCsScale
+// REMOVED (real definition now compiled elsewhere): lockCtr
+// REMOVED (real definition now compiled elsewhere): lod_bias
 // m3r: `extern f32 m3r[3];`
 f32 m3r[3] = {};
-// max_lod: `extern u8 max_lod;`
-u8 max_lod{};
-// mercId: `extern MercID mercId;`
-MercID mercId{};
-// min_lod: `extern u8 min_lod;`
-u8 min_lod{};
+// REMOVED (real definition now compiled elsewhere): max_lod
+// REMOVED (real definition now compiled elsewhere): mercId
+// REMOVED (real definition now compiled elsewhere): min_lod
 // PlReadModule: now defined for real by src/game/read.cpp (docs/port-boot.md section 35
 // continuation -- no longer excluded), removed from here to avoid a duplicate-symbol link error.
-// pSaveData: `extern SAVE_DATA_HEAD* pSaveData;`
-SAVE_DATA_HEAD* pSaveData{};
+// REMOVED (real definition now compiled elsewhere): pSaveData
 // Rmode, ScreenShotTriggerType: now defined for real by src/game/main_sub.cpp (docs/port-boot.md
 // section 26 -- no longer excluded), removed from here to avoid a duplicate-symbol link error.
-// ThermoTlut: `extern GXTlutObj ThermoTlut;`
-GXTlutObj ThermoTlut{};
+// REMOVED (real definition now compiled elsewhere): ThermoTlut
 // WepReadModule: now defined for real by src/game/read.cpp (docs/port-boot.md section 35
 // continuation -- no longer excluded), removed from here to avoid a duplicate-symbol link error.
+
+// -- Appended (docs/port-boot.md, re4_boot un-exclude of act_btn.cpp/datactrl.cpp/game.cpp/
+// mercenaries.cpp/objRocket.cpp/pl_ashley.cpp/pl_leon.cpp/pl_sub.cpp/sce_com.cpp/sce_sys.cpp/
+// scroll.cpp): sce_sys.cpp/sce_com.cpp now compile and call into sce_at.cpp (still excluded,
+// Phase 5 real PPC asm) and Espgen42.cpp/dbmodule.cpp (also excluded) -- stubbed the same way as
+// every other not-yet-ported unit's callees, via tools/port/gen_boot_stubs.py.
+extern "C" {
+// DrawRoomWireframe: `void DrawRoomWireframe()`
+void DrawRoomWireframe()
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: DrawRoomWireframe() called\n"); warned = true; }
+}
+// GetWaterCrossPos: `int GetWaterCrossPos(Vec* pos, Vec* dir, Vec* Ret)`
+int GetWaterCrossPos(Vec* pos, Vec* dir, Vec* Ret)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: GetWaterCrossPos() called\n"); warned = true; }
+    return 0;
+}
+// SceAtCheck: `void SceAtCheck()`
+void SceAtCheck()
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtCheck() called\n"); warned = true; }
+}
+// SceAtCheckMoveScrAt: `void SceAtCheckMoveScrAt()`
+void SceAtCheckMoveScrAt()
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtCheckMoveScrAt() called\n"); warned = true; }
+}
+// SceAtDataSet_exec: `void SceAtDataSet_exec(int no, int prio, int a, TaskFunc func, void* obj, int b)`
+void SceAtDataSet_exec(int no, int prio, int a, TaskFunc func, void* obj, int b)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtDataSet_exec() called\n"); warned = true; }
+}
+// SceAtExecRoomJump: `void SceAtExecRoomJump(u16 room, Vec* pos, Vec* rot, int a)`
+void SceAtExecRoomJump(u16 room, Vec* pos, Vec* rot, int a)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtExecRoomJump() called\n"); warned = true; }
+}
+// SceAtExecute: `void SceAtExecute(int at_no)`
+void SceAtExecute(int at_no)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtExecute() called\n"); warned = true; }
+}
+// SceAtInit: `void SceAtInit(void* pHeader, void* pHeader_i)`
+void SceAtInit(void* pHeader, void* pHeader_i)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtInit() called\n"); warned = true; }
+}
+// SceAtInitSaveItem: `void SceAtInitSaveItem()`
+void SceAtInitSaveItem()
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtInitSaveItem() called\n"); warned = true; }
+}
+// SceAtItemModelPtr: `cModel* SceAtItemModelPtr(int at_no)`
+cModel* SceAtItemModelPtr(int at_no)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtItemModelPtr() called\n"); warned = true; }
+    return (cModel*) 0;
+}
+// SceAtPtr: `SceAtWork* SceAtPtr(int at_no)`
+SceAtWork* SceAtPtr(int at_no)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtPtr() called\n"); warned = true; }
+    return (SceAtWork*) 0;
+}
+// SceAtRoomSet: `void SceAtRoomSet()`
+void SceAtRoomSet()
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtRoomSet() called\n"); warned = true; }
+}
+// SceAtSetEnable: `void SceAtSetEnable(int at_no, int sw)`
+void SceAtSetEnable(int at_no, int sw)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtSetEnable() called\n"); warned = true; }
+}
+// SceAtSetExecFlg: `void SceAtSetExecFlg(u32 at_no)`
+void SceAtSetExecFlg(u32 at_no)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtSetExecFlg() called\n"); warned = true; }
+}
+// SceAtSetMes: `void SceAtSetMes(SceAtMesData* pMes)`
+void SceAtSetMes(SceAtMesData* pMes)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtSetMes() called\n"); warned = true; }
+}
+// SceAtSetSaveItem: `void SceAtSetSaveItem()`
+void SceAtSetSaveItem()
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtSetSaveItem() called\n"); warned = true; }
+}
+} // extern "C"
+
+// SceAtItemFlgCk(int): free C++ function (NOT extern "C" -- overloaded with the (u16,u16) form
+// above, see include/sce_at.h:347), return type from the header.
+int SceAtItemFlgCk(int at_no)
+{
+    static bool warned = false;
+    if (!warned) { std::fprintf(stderr, "STUB: SceAtItemFlgCk(int) called\n"); warned = true; }
+    return 0;
+}
+
 #endif // TARGET_PC

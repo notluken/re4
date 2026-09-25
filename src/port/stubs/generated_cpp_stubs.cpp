@@ -2,226 +2,41 @@
 #ifdef TARGET_PC
 #include "stub_common.h"
 
-// BlockCreate(int, cSmd*) -- free function, return type guessed: `void`
-void BlockCreate(int a0, cSmd* a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: BlockCreate() called\n"); warned = true; }
-}
-// BlockDestroy(int) -- free function, return type guessed: `void`
-void BlockDestroy(int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: BlockDestroy() called\n"); warned = true; }
-}
-// cActionButton::set(int, int, void*, void*, int, int, int, int) -- return type guessed from header: `void`
-void cActionButton::set(int a0, int a1, void* a2, void* a3, int a4, int a5, int a6, int a7)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cActionButton::set() called\n"); warned = true; }
-}
-// CameraDebugInformation() -- free function, return type guessed: `void`
-void CameraDebugInformation()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CameraDebugInformation() called\n"); warned = true; }
-}
-// CameraQuasiFPS::bindAreaCamera(CameraAreaRec*) -- return type guessed from header: `void`
-void CameraQuasiFPS::bindAreaCamera(CameraAreaRec* a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CameraQuasiFPS::bindAreaCamera() called\n"); warned = true; }
-}
-// CameraQuasiFPS::bindDefaultCamera() -- return type guessed from header: `void`
-void CameraQuasiFPS::bindDefaultCamera()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CameraQuasiFPS::bindDefaultCamera() called\n"); warned = true; }
-}
-// CameraQuasiFPS::init() -- return type guessed from header: `void`
-void CameraQuasiFPS::init()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CameraQuasiFPS::init() called\n"); warned = true; }
-}
-// CameraQuasiFPS::move() -- return type guessed from header: `void`
-void CameraQuasiFPS::move()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CameraQuasiFPS::move() called\n"); warned = true; }
-}
-// CameraQuasiFPS::offsetCorrection() -- return type guessed from header: `void`
-void CameraQuasiFPS::offsetCorrection()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CameraQuasiFPS::offsetCorrection() called\n"); warned = true; }
-}
-// CameraQuasiFPS::setAreaData(CameraCut*) -- return type guessed from header: `void`
-void CameraQuasiFPS::setAreaData(CameraCut* a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CameraQuasiFPS::setAreaData() called\n"); warned = true; }
-}
-// CameraQuasiFPS::setBlendCount(int) -- return type guessed from header: `void`
-void CameraQuasiFPS::setBlendCount(int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CameraQuasiFPS::setBlendCount() called\n"); warned = true; }
-}
-// CameraQuasiFPS::setBlendData(void*, void*) -- return type guessed from header: `void`
-void CameraQuasiFPS::setBlendData(void* a0, void* a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CameraQuasiFPS::setBlendData() called\n"); warned = true; }
-}
-// CameraQuasiFPS::setFloorRatio(float) -- return type guessed from header: `void`
-void CameraQuasiFPS::setFloorRatio(float a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CameraQuasiFPS::setFloorRatio() called\n"); warned = true; }
-}
-// CameraQuasiFPS::setPlayerLocation(float (*) [4], Vec*) -- return type guessed from header: `void`
-void CameraQuasiFPS::setPlayerLocation(float (*a0) [4], Vec* a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: CameraQuasiFPS::setPlayerLocation() called\n"); warned = true; }
-}
-// cDataCtrl::check() -- return type guessed from header: `void`
-void cDataCtrl::check()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cDataCtrl::check() called\n"); warned = true; }
-}
-// cDataCtrl::dispDebug() -- return type guessed from header: `void`
-void cDataCtrl::dispDebug()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cDataCtrl::dispDebug() called\n"); warned = true; }
-}
-// cDataCtrl::getAramFree(unsigned int) -- return type guessed from header: `u32`
-u32 cDataCtrl::getAramFree(unsigned int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cDataCtrl::getAramFree() called\n"); warned = true; }
-    return 0;
-}
-// cDataCtrl::init() -- return type guessed from header: `void`
-void cDataCtrl::init()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cDataCtrl::init() called\n"); warned = true; }
-}
-// cDataCtrl::setData(char*) -- return type guessed from header: `cDataUnit*`
-cDataUnit* cDataCtrl::setData(char* a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cDataCtrl::setData() called\n"); warned = true; }
-    return (cDataUnit*) 0;
-}
-// cDataUnit::getCommand() -- return type guessed from header: `int`
-int cDataUnit::getCommand()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cDataUnit::getCommand() called\n"); warned = true; }
-    return 0;
-}
-// cDataUnit::getCondition() -- return type guessed from header: `int`
-int cDataUnit::getCondition()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cDataUnit::getCondition() called\n"); warned = true; }
-    return 0;
-}
-// cDataUnit::setClear() -- return type guessed from header: `int`
-int cDataUnit::setClear()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cDataUnit::setClear() called\n"); warned = true; }
-    return 0;
-}
-// cDataUnit::setCommand(int, unsigned int, unsigned char) -- return type guessed from header: `void`
-void cDataUnit::setCommand(int a0, unsigned int a1, unsigned char a2)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cDataUnit::setCommand() called\n"); warned = true; }
-}
-// cDataUnit::waitLoadOk() -- return type guessed from header: `int`
-int cDataUnit::waitLoadOk()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cDataUnit::waitLoadOk() called\n"); warned = true; }
-    return 0;
-}
-// cDataUnit::waitUseOk() -- return type guessed from header: `int`
-int cDataUnit::waitUseOk()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cDataUnit::waitUseOk() called\n"); warned = true; }
-    return 0;
-}
-// cGameSave::alloc() -- return type guessed from header: `SAVE_DATA_HEAD*`
-SAVE_DATA_HEAD* cGameSave::alloc()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cGameSave::alloc() called\n"); warned = true; }
-    return (SAVE_DATA_HEAD*) 0;
-}
-// cGameSave::load(SAVE_DATA_HEAD*) -- return type guessed from header: `bool`
-bool cGameSave::load(SAVE_DATA_HEAD* a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cGameSave::load() called\n"); warned = true; }
-    return false;
-}
-// cGameSave::save(SAVE_DATA_HEAD*, int) -- return type guessed from header: `bool`
-bool cGameSave::save(SAVE_DATA_HEAD* a0, int a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cGameSave::save() called\n"); warned = true; }
-    return false;
-}
-// Cloth::calcNormal() -- return type guessed from header: `void`
-void Cloth::calcNormal()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Cloth::calcNormal() called\n"); warned = true; }
-}
-// Cloth::calcSpeed(float) -- return type guessed from header: `void`
-void Cloth::calcSpeed(float a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Cloth::calcSpeed() called\n"); warned = true; }
-}
-// Cloth::Destroy() -- return type guessed from header: `void`
-void Cloth::Destroy()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Cloth::Destroy() called\n"); warned = true; }
-}
-// Cloth::disturbance(unsigned int, unsigned int, float) -- return type guessed from header: `void`
-void Cloth::disturbance(unsigned int a0, unsigned int a1, float a2)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Cloth::disturbance() called\n"); warned = true; }
-}
-// Cloth::move() -- return type guessed from header: `void`
-void Cloth::move()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Cloth::move() called\n"); warned = true; }
-}
-// Cloth::Set(Vec, Vec, unsigned char, unsigned char, float, GXTexObj*, float, void*, float, GXTlutObj*, int) -- return type guessed from header: `void`
-void Cloth::Set(Vec a0, Vec a1, unsigned char a2, unsigned char a3, float a4, GXTexObj* a5, float a6, void* a7, float a8, GXTlutObj* a9, int a10)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Cloth::Set() called\n"); warned = true; }
-}
-// Cloth::SetPosAng(Vec, Vec) -- return type guessed from header: `void`
-void Cloth::SetPosAng(Vec a0, Vec a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Cloth::SetPosAng() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): BlockCreate(int, cSmd*)
+// REMOVED (real definition now compiled elsewhere): BlockDestroy(int)
+// REMOVED (real definition now compiled elsewhere): cActionButton::set(int, int, void*, void*, int, int, int, int)
+// REMOVED (real definition now compiled elsewhere): CameraDebugInformation()
+// REMOVED (real definition now compiled elsewhere): CameraQuasiFPS::bindAreaCamera(CameraAreaRec*)
+// REMOVED (real definition now compiled elsewhere): CameraQuasiFPS::bindDefaultCamera()
+// REMOVED (real definition now compiled elsewhere): CameraQuasiFPS::init()
+// REMOVED (real definition now compiled elsewhere): CameraQuasiFPS::move()
+// REMOVED (real definition now compiled elsewhere): CameraQuasiFPS::offsetCorrection()
+// REMOVED (real definition now compiled elsewhere): CameraQuasiFPS::setAreaData(CameraCut*)
+// REMOVED (real definition now compiled elsewhere): CameraQuasiFPS::setBlendCount(int)
+// REMOVED (real definition now compiled elsewhere): CameraQuasiFPS::setBlendData(void*, void*)
+// REMOVED (real definition now compiled elsewhere): CameraQuasiFPS::setFloorRatio(float)
+// REMOVED (real definition now compiled elsewhere): CameraQuasiFPS::setPlayerLocation(float (*) [4], Vec*)
+// REMOVED (real definition now compiled elsewhere): cDataCtrl::check()
+// REMOVED (real definition now compiled elsewhere): cDataCtrl::dispDebug()
+// REMOVED (real definition now compiled elsewhere): cDataCtrl::getAramFree(unsigned int)
+// REMOVED (real definition now compiled elsewhere): cDataCtrl::init()
+// REMOVED (real definition now compiled elsewhere): cDataCtrl::setData(char*)
+// REMOVED (real definition now compiled elsewhere): cDataUnit::getCommand()
+// REMOVED (real definition now compiled elsewhere): cDataUnit::getCondition()
+// REMOVED (real definition now compiled elsewhere): cDataUnit::setClear()
+// REMOVED (real definition now compiled elsewhere): cDataUnit::setCommand(int, unsigned int, unsigned char)
+// REMOVED (real definition now compiled elsewhere): cDataUnit::waitLoadOk()
+// REMOVED (real definition now compiled elsewhere): cDataUnit::waitUseOk()
+// REMOVED (real definition now compiled elsewhere): cGameSave::alloc()
+// REMOVED (real definition now compiled elsewhere): cGameSave::load(SAVE_DATA_HEAD*)
+// REMOVED (real definition now compiled elsewhere): cGameSave::save(SAVE_DATA_HEAD*, int)
+// REMOVED (real definition now compiled elsewhere): Cloth::calcNormal()
+// REMOVED (real definition now compiled elsewhere): Cloth::calcSpeed(float)
+// REMOVED (real definition now compiled elsewhere): Cloth::Destroy()
+// REMOVED (real definition now compiled elsewhere): Cloth::disturbance(unsigned int, unsigned int, float)
+// REMOVED (real definition now compiled elsewhere): Cloth::move()
+// REMOVED (real definition now compiled elsewhere): Cloth::Set(Vec, Vec, unsigned char, unsigned char, float, GXTexObj*, float, void*, float, GXTlutObj*, int)
+// REMOVED (real definition now compiled elsewhere): Cloth::SetPosAng(Vec, Vec)
 // cModel::isTrans() -- return type guessed from header: `int`
 int cModel::isTrans()
 {
@@ -229,271 +44,58 @@ int cModel::isTrans()
     if (!warned) { std::fprintf(stderr, "STUB: cModel::isTrans() called\n"); warned = true; }
     return 0;
 }
-// cMot3::cMot3()
-cMot3::cMot3() { }
-// cMot3::move(float) -- return type guessed from header: `void`
-void cMot3::move(float a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cMot3::move() called\n"); warned = true; }
-}
-// cMot3::set(cModel*, void*, void*, void*, void*, unsigned char, int, unsigned short, unsigned short) -- return type guessed from header: `f32`
-void cMot3::set(cModel* a0, void* a1, void* a2, void* a3, void* a4, unsigned char a5, int a6, unsigned short a7, unsigned short a8)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cMot3::set() called\n"); warned = true; }
-}
-// cObjLauncher::cObjLauncher()
-cObjLauncher::cObjLauncher() { }
-// cObjLauncher::grip(int) -- return type guessed from header: `void`
-void cObjLauncher::grip(int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cObjLauncher::grip() called\n"); warned = true; }
-}
-// cObjLauncher::gripBack() -- return type guessed from header: `void`
-void cObjLauncher::gripBack()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cObjLauncher::gripBack() called\n"); warned = true; }
-}
-// commonScreenMat(cModel*) -- free function, return type guessed: `int`
-int commonScreenMat(cModel* a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: commonScreenMat() called\n"); warned = true; }
-    return 0;
-}
-// cPlAshley::cPlAshley()
-cPlAshley::cPlAshley() { }
-// cPlayer::actionSelect() -- return type guessed from header: `int`
-int cPlayer::actionSelect()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::actionSelect() called\n"); warned = true; }
-    return 0;
-}
-// cPlayer::beginDamage() -- return type guessed from header: `void`
-void cPlayer::beginDamage()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::beginDamage() called\n"); warned = true; }
-}
-// cPlayer::checkCtrl() -- return type guessed from header: `void`
-void cPlayer::checkCtrl()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::checkCtrl() called\n"); warned = true; }
-}
-// cPlayer::checkEvent() -- return type guessed from header: `int`
-int cPlayer::checkEvent()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::checkEvent() called\n"); warned = true; }
-    return 0;
-}
-// cPlayer::dmgCheck() -- return type guessed from header: `void`
-void cPlayer::dmgCheck()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::dmgCheck() called\n"); warned = true; }
-}
-// cPlayer::endAction(int) -- return type guessed from header: `void`
-void cPlayer::endAction(int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::endAction() called\n"); warned = true; }
-}
-// cPlayer::endCamera() -- return type guessed from header: `int`
-int cPlayer::endCamera()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::endCamera() called\n"); warned = true; }
-    return 0;
-}
-// cPlayer::endEvent0(unsigned int) -- return type guessed from header: `void`
-void cPlayer::endEvent0(unsigned int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::endEvent0() called\n"); warned = true; }
-}
-// cPlayer::getLifeLevel() -- return type guessed from header: `int`
-int cPlayer::getLifeLevel()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::getLifeLevel() called\n"); warned = true; }
-    return 0;
-}
-// cPlayer::keyConfig() -- return type guessed from header: `void`
-void cPlayer::keyConfig()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::keyConfig() called\n"); warned = true; }
-}
-// cPlayer::motionSet(void*, void*, void*, void*, int, int) -- return type guessed from header: `void`
-void cPlayer::motionSet(void* a0, void* a1, void* a2, void* a3, int a4, int a5)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::motionSet() called\n"); warned = true; }
-}
-// cPlayer::moveBinocular() -- return type guessed from header: `void`
-void cPlayer::moveBinocular()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::moveBinocular() called\n"); warned = true; }
-}
-// cPlayer::moveEye() -- return type guessed from header: `void`
-void cPlayer::moveEye()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::moveEye() called\n"); warned = true; }
-}
-// cPlayer::seqSeCtrl() -- return type guessed from header: `void`
-void cPlayer::seqSeCtrl()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::seqSeCtrl() called\n"); warned = true; }
-}
-// cPlayer::setDamage(unsigned char, int, float, int, int) -- return type guessed from header: `void`
-void cPlayer::setDamage(unsigned char a0, int a1, float a2, int a3, int a4)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::setDamage() called\n"); warned = true; }
-}
-// cPlayer::setFootwork() -- return type guessed from header: `void`
-void cPlayer::setFootwork()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::setFootwork() called\n"); warned = true; }
-}
-// cPlayer::shadowCtrl() -- return type guessed from header: `void`
-void cPlayer::shadowCtrl()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::shadowCtrl() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): cMot3::cMot3()
+// REMOVED (real definition now compiled elsewhere): cMot3::move(float)
+// REMOVED (real definition now compiled elsewhere): cMot3::set(cModel*, void*, void*, void*, void*, unsigned char, int, unsigned short, unsigned short)
+// REMOVED (real definition now compiled elsewhere): cObjLauncher::cObjLauncher()
+// REMOVED (real definition now compiled elsewhere): cObjLauncher::grip(int)
+// REMOVED (real definition now compiled elsewhere): cObjLauncher::gripBack()
+// REMOVED (real definition now compiled elsewhere): commonScreenMat(cModel*)
+// REMOVED (real definition now compiled elsewhere): cPlAshley::cPlAshley()
+// REMOVED (real definition now compiled elsewhere): cPlayer::actionSelect()
+// REMOVED (real definition now compiled elsewhere): cPlayer::beginDamage()
+// REMOVED (real definition now compiled elsewhere): cPlayer::checkCtrl()
+// REMOVED (real definition now compiled elsewhere): cPlayer::checkEvent()
+// REMOVED (real definition now compiled elsewhere): cPlayer::dmgCheck()
+// REMOVED (real definition now compiled elsewhere): cPlayer::endAction(int)
+// REMOVED (real definition now compiled elsewhere): cPlayer::endCamera()
+// REMOVED (real definition now compiled elsewhere): cPlayer::endEvent0(unsigned int)
+// REMOVED (real definition now compiled elsewhere): cPlayer::getLifeLevel()
+// REMOVED (real definition now compiled elsewhere): cPlayer::keyConfig()
+// REMOVED (real definition now compiled elsewhere): cPlayer::motionSet(void*, void*, void*, void*, int, int)
+// REMOVED (real definition now compiled elsewhere): cPlayer::moveBinocular()
+// REMOVED (real definition now compiled elsewhere): cPlayer::moveEye()
+// REMOVED (real definition now compiled elsewhere): cPlayer::seqSeCtrl()
+// REMOVED (real definition now compiled elsewhere): cPlayer::setDamage(unsigned char, int, float, int, int)
+// REMOVED (real definition now compiled elsewhere): cPlayer::setFootwork()
+// REMOVED (real definition now compiled elsewhere): cPlayer::shadowCtrl()
 // cPlayer::subCharLiveCheck() -- return type guessed from header: `void`
 void cPlayer::subCharLiveCheck()
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: cPlayer::subCharLiveCheck() called\n"); warned = true; }
 }
-// cPlayer::subScrCheck() -- return type guessed from header: `int`
-int cPlayer::subScrCheck()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::subScrCheck() called\n"); warned = true; }
-    return 0;
-}
-// cPlayer::visibleCtrl() -- return type guessed from header: `void`
-void cPlayer::visibleCtrl()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::visibleCtrl() called\n"); warned = true; }
-}
-// cPlayer::weaponInit() -- return type guessed from header: `void`
-void cPlayer::weaponInit()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::weaponInit() called\n"); warned = true; }
-}
-// cPlayer::weaponLoad(int, int) -- return type guessed from header: `void`
-void cPlayer::weaponLoad(int a0, int a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::weaponLoad() called\n"); warned = true; }
-}
-// cPlayer::weaponRelease() -- return type guessed from header: `void`
-void cPlayer::weaponRelease()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::weaponRelease() called\n"); warned = true; }
-}
-// cPlLeon::cPlLeon()
-cPlLeon::cPlLeon() { }
-// cPlNeck::cPlNeck(cPlayer*)
-cPlNeck::cPlNeck(cPlayer* a0) { }
-// cPlNeck::init(void*, void*, int) -- return type guessed from header: `void`
-void cPlNeck::init(void* a0, void* a1, int a2)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlNeck::init() called\n"); warned = true; }
-}
-// cPlNeck::move() -- return type guessed from header: `void`
-void cPlNeck::move()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlNeck::move() called\n"); warned = true; }
-}
-// cPlWaist::cPlWaist()
-cPlWaist::cPlWaist() { }
-// cPlWaist::set(float, float) -- return type guessed from header: `f32`
-f32 cPlWaist::set(float a0, float a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlWaist::set() called\n"); warned = true; }
-    return 0.0f;
-}
-// cPlWep::cPlWep()
-cPlWep::cPlWep() { }
-// cPlWep::getAngle() -- return type guessed from header: `f32`
-f32 cPlWep::getAngle()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlWep::getAngle() called\n"); warned = true; }
-    return 0.0f;
-}
-// cPlWep::getMarkerPos(Vec*) -- return type guessed from header: `void`
-int cPlWep::getMarkerPos(Vec* a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlWep::getMarkerPos() called\n"); warned = true; }
-    return 0;
-}
-// cPlWep::lockMove() -- return type guessed from header: `void`
-void cPlWep::lockMove()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlWep::lockMove() called\n"); warned = true; }
-}
-// cPlWep::move() -- return type guessed from header: `void`
-void cPlWep::move()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlWep::move() called\n"); warned = true; }
-}
-// cPlWep::setTrans(int, int) -- return type guessed from header: `void`
-void cPlWep::setTrans(int a0, int a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlWep::setTrans() called\n"); warned = true; }
-}
-// cSmd::slide(int) -- return type guessed from header: `void`
-void cSmd::slide(int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cSmd::slide() called\n"); warned = true; }
-}
-// debugCamera::move(Camera*, JOY*, int) -- return type guessed from header: `void`
-void debugCamera::move(Camera* a0, JOY* a1, int a2)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: debugCamera::move() called\n"); warned = true; }
-}
-// DebugTrg(int) -- free function, return type guessed: `int`
-int DebugTrg(int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: DebugTrg() called\n"); warned = true; }
-    return 0;
-}
-// dmMotCk() -- free function, return type guessed: `int`
-int dmMotCk()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: dmMotCk() called\n"); warned = true; }
-    return 0;
-}
+// REMOVED (real definition now compiled elsewhere): cPlayer::subScrCheck()
+// REMOVED (real definition now compiled elsewhere): cPlayer::visibleCtrl()
+// REMOVED (real definition now compiled elsewhere): cPlayer::weaponInit()
+// REMOVED (real definition now compiled elsewhere): cPlayer::weaponLoad(int, int)
+// REMOVED (real definition now compiled elsewhere): cPlayer::weaponRelease()
+// REMOVED (real definition now compiled elsewhere): cPlLeon::cPlLeon()
+// REMOVED (real definition now compiled elsewhere): cPlNeck::cPlNeck(cPlayer*)
+// REMOVED (real definition now compiled elsewhere): cPlNeck::init(void*, void*, int)
+// REMOVED (real definition now compiled elsewhere): cPlNeck::move()
+// REMOVED (real definition now compiled elsewhere): cPlWaist::cPlWaist()
+// REMOVED (real definition now compiled elsewhere): cPlWaist::set(float, float)
+// REMOVED (real definition now compiled elsewhere): cPlWep::cPlWep()
+// REMOVED (real definition now compiled elsewhere): cPlWep::getAngle()
+// REMOVED (real definition now compiled elsewhere): cPlWep::getMarkerPos(Vec*)
+// REMOVED (real definition now compiled elsewhere): cPlWep::lockMove()
+// REMOVED (real definition now compiled elsewhere): cPlWep::move()
+// REMOVED (real definition now compiled elsewhere): cPlWep::setTrans(int, int)
+// REMOVED (real definition now compiled elsewhere): cSmd::slide(int)
+// REMOVED (real definition now compiled elsewhere): debugCamera::move(Camera*, JOY*, int)
+// REMOVED (real definition now compiled elsewhere): DebugTrg(int)
+// REMOVED (real definition now compiled elsewhere): dmMotCk()
 // Esp04_Create() -- free function, return type guessed: `cEsp*`
 cEsp* Esp04_Create()
 {
@@ -522,12 +124,7 @@ cEsp* Esp16_Create()
     if (!warned) { std::fprintf(stderr, "STUB: Esp16_Create() called\n"); warned = true; }
     return (cEsp*) 0;
 }
-// GameStopModeEnd() -- free function, return type guessed: `void`
-void GameStopModeEnd()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: GameStopModeEnd() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): GameStopModeEnd()
 // GetBugCheckController() -- free function, return type guessed: `JOY*`
 JOY* GetBugCheckController()
 {
@@ -544,133 +141,27 @@ int GetWaterHeight(Vec* a0, float* a1)
     if (!warned) { std::fprintf(stderr, "STUB: GetWaterHeight() called\n"); warned = true; }
     return 0;
 }
-// joyFireOn() -- free function, return type guessed: `int`
-int joyFireOn()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: joyFireOn() called\n"); warned = true; }
-    return 0;
-}
-// joyFireTrg() -- free function, return type guessed: `int`
-int joyFireTrg()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: joyFireTrg() called\n"); warned = true; }
-    return 0;
-}
-// joyKamae() -- free function, return type guessed: `int`
-int joyKamae()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: joyKamae() called\n"); warned = true; }
-    return 0;
-}
-// joyLKamae() -- free function, return type guessed: `int`
-int joyLKamae()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: joyLKamae() called\n"); warned = true; }
-    return 0;
-}
-// lightSetEm(cModel*) -- free function, return type guessed: `void`
-void lightSetEm(cModel* a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: lightSetEm() called\n"); warned = true; }
-}
-// MercID::set() -- return type guessed from header: `void`
-void MercID::set()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: MercID::set() called\n"); warned = true; }
-}
-// ModelRender(cModel*) -- free function, return type guessed: `void`
-void ModelRender(cModel* a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ModelRender() called\n"); warned = true; }
-}
-// moveOnPlaneXZ(Vec*, Vec*) -- free function, return type guessed: `void`
-void moveOnPlaneXZ(Vec* a0, Vec* a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: moveOnPlaneXZ() called\n"); warned = true; }
-}
-// PlChangeData() -- free function, return type guessed: `void`
-void PlChangeData()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlChangeData() called\n"); warned = true; }
-}
-// PlSetCostume() -- free function, return type guessed: `int`
-int PlSetCostume()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlSetCostume() called\n"); warned = true; }
-    return 0;
-}
-// PlWepHitCheck2(cModel*, Vec*, Vec*, int, unsigned int, float) -- free function, return type guessed: `u32`
-u32 PlWepHitCheck2(cModel* a0, Vec* a1, Vec* a2, int a3, unsigned int a4, float a5)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlWepHitCheck2() called\n"); warned = true; }
-    return 0;
-}
-// PlWepLockCtrl(cModel*) -- free function, return type guessed: `void`
-void PlWepLockCtrl(cModel* a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: PlWepLockCtrl() called\n"); warned = true; }
-}
+// REMOVED (real definition now compiled elsewhere): joyFireOn()
+// REMOVED (real definition now compiled elsewhere): joyFireTrg()
+// REMOVED (real definition now compiled elsewhere): joyKamae()
+// REMOVED (real definition now compiled elsewhere): joyLKamae()
+// REMOVED (real definition now compiled elsewhere): lightSetEm(cModel*)
+// REMOVED (real definition now compiled elsewhere): MercID::set()
+// REMOVED (real definition now compiled elsewhere): ModelRender(cModel*)
+// REMOVED (real definition now compiled elsewhere): moveOnPlaneXZ(Vec*, Vec*)
+// REMOVED (real definition now compiled elsewhere): PlChangeData()
+// REMOVED (real definition now compiled elsewhere): PlSetCostume()
+// REMOVED (real definition now compiled elsewhere): PlWepHitCheck2(cModel*, Vec*, Vec*, int, unsigned int, float)
+// REMOVED (real definition now compiled elsewhere): PlWepLockCtrl(cModel*)
 // Render_checkBlurPermission() now defined for real by src/game/main_sub.cpp (docs/port-boot.md
 // section 26 -- no longer excluded), removed from here to avoid a duplicate-symbol link error.
 // SearchEmModule: real definition now in src/game/read.cpp (docs/port-boot.md section 35
 // continuation -- read.cpp un-excluded).
-// SetSubDamage(cEm*, void (*)()) -- free function, return type guessed: `void`
-void SetSubDamage(cEm* a0, void (*a1)())
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SetSubDamage() called\n"); warned = true; }
-}
-// ShapeEnd(void*) -- free function, return type guessed: `void`
-void ShapeEnd(void* a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ShapeEnd() called\n"); warned = true; }
-}
-// ShapeSet(void*, int, void*, int) -- free function, return type guessed: `int`
-int ShapeSet(void* a0, int a1, void* a2, int a3)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ShapeSet() called\n"); warned = true; }
-    return 0;
-}
-// SmdGetGroupObjPtr(unsigned int) -- free function, return type guessed: `cObj*`
-cObj* SmdGetGroupObjPtr(unsigned int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SmdGetGroupObjPtr() called\n"); warned = true; }
-    return (cObj*) 0;
-}
-// SmdGetGroupObjPtr2(unsigned int) -- free function, return type guessed: `cObj*`
-cObj* SmdGetGroupObjPtr2(unsigned int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SmdGetGroupObjPtr2() called\n"); warned = true; }
-    return (cObj*) 0;
-}
-// SmdGetObjPtr(unsigned int) -- free function, return type guessed: `cObj*`
-cObj* SmdGetObjPtr(unsigned int a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SmdGetObjPtr() called\n"); warned = true; }
-    return (cObj*) 0;
-}
-// SmdGetWorkId(cObj*) -- free function, return type guessed: `int`
-int SmdGetWorkId(cObj* a0)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SmdGetWorkId() called\n"); warned = true; }
-    return 0;
-}
+// REMOVED (real definition now compiled elsewhere): SetSubDamage(cEm*, void (*)())
+// REMOVED (real definition now compiled elsewhere): ShapeEnd(void*)
+// REMOVED (real definition now compiled elsewhere): ShapeSet(void*, int, void*, int)
+// REMOVED (real definition now compiled elsewhere): SmdGetGroupObjPtr(unsigned int)
+// REMOVED (real definition now compiled elsewhere): SmdGetGroupObjPtr2(unsigned int)
+// REMOVED (real definition now compiled elsewhere): SmdGetObjPtr(unsigned int)
+// REMOVED (real definition now compiled elsewhere): SmdGetWorkId(cObj*)
 #endif // TARGET_PC

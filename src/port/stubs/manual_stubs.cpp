@@ -50,9 +50,8 @@ int Espgen45_SetFreeWork(EspgenWork*, EspGenWork*, EspSeqData*, cModel*, u16, Mt
 // continuation -- this stub returning 0 without ever starting `func` was the root cause of no
 // task's code ever running, which in turn tripped scheduler.cpp's stack-overflow guard).
 
-// -- pl_sub: function-pointer parameters --
-void SetPlDamage(cEm*, void (*)(cPlayer*)) {}
-void SetSubBulldozer(void (*)(cEm*), void (*)(cEm*)) {}
+// SetPlDamage / SetSubBulldozer: now defined for real by src/game/pl_sub.cpp (un-excluded,
+// cmake/boot_exclude.txt), removed from here to avoid a duplicate-symbol link error.
 
 // -- SndCall: declared as plain C++ (include/snd.h, no asm label), but the undefined symbol the
 // linker reports is `SndCall__FUsUsP3VeciiP5cUnit` -- a GNU v2 (old-style) mangled name, not the
@@ -69,11 +68,10 @@ u32 SndCall__FUsUsP3VeciiP5cUnit(u16, u16, Vec*, int, int, cUnit*) { return 0; }
 // section 30) -- every `GXWGFifo->field = v` write now genuinely reaches Aurora's GX FIFO via a
 // GXParam1xx()/GXCmd1xx() call, not a discarded plain global.
 
-// -- PlReloadSpeedTbl / PlShotFrameTbl: 2-D const f32 tables (include/player.h), normally defined
-// in pl_class.cpp (excluded, cmake/boot_exclude.txt). Zero-filled placeholders -- gameplay-wrong,
-// link-correct; real values need pl_class.cpp un-excluded or the tables copied out by hand.
-const f32 PlReloadSpeedTbl[45][3] = {};
-const f32 PlShotFrameTbl[45][5] = {};
+// PlReloadSpeedTbl / PlShotFrameTbl: now defined for real by src/game/pl_class.cpp (was never
+// excluded), removed from here to avoid a duplicate-symbol link error (surfaced once some other
+// still-excluded-unit callee in this same TU forced the archive member that carried them into the
+// link for the first time).
 
 // -- pSUB: asm-aliased global (include/player.h) -- the linker name is the alias string, not the
 // C++ identifier, so it needs the same `asm("...")` binding the header already declares, not a
@@ -82,91 +80,19 @@ const f32 PlShotFrameTbl[45][5] = {};
 // one was added here.)
 cEm* pSubEm asm("pSUB") = nullptr;
 
-// cPlayer::SPEED_WALK_TURN / SPEED_RUN_TURN: static const f32 class members (include/player.h),
-// normally defined in pl_class.cpp (excluded). Zero placeholders, same caveat as the reload/shot
-// tables above.
-const f32 cPlayer::SPEED_WALK_TURN = 0.0f;
-const f32 cPlayer::SPEED_RUN_TURN = 0.0f;
+// cPlayer::SPEED_WALK_TURN / SPEED_RUN_TURN: now defined for real by src/game/pl_class.cpp,
+// removed from here to avoid a duplicate-symbol link error.
 
-// -- vtable "key function" stubs -- the Itanium ABI emits a class's vtable in whichever TU defines
-// its *key function* (the first virtual member function the class itself declares that isn't
-// defined inline in the class body, include/player.h's "Vtable order" comment) -- not just in
-// whichever TU happens to call one of the class's virtuals. All six of these classes' own key
-// functions are defined in cmake/boot_exclude.txt files (pl_class.cpp/pl_leon.cpp/pl_ashley.cpp/
-// objRobo.cpp/pl_wep.cpp), and (except cPlayer::beginEvent, which is real gameplay logic never
-// otherwise stubbed) are never themselves called on this boot path, so tools/port/
-// gen_boot_stubs.py's linker-driven survey never saw them as undefined on their own -- only the
-// resulting "vtable for X" did. Spot-checked against each class's declaration order in
-// include/player.h / include/objRobo.h / include/pl_wep.h.
-void cPlayer::beginEvent(u32 flag)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlayer::beginEvent() called\n"); warned = true; }
-}
-void cPlLeon::move()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlLeon::move() called\n"); warned = true; }
-}
-void cPlAshley::move()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlAshley::move() called\n"); warned = true; }
-}
+// vtable "key function" stubs: cPlayer/cPlLeon/cPlAshley/cObjRocket/cObjLauncher's real key
+// functions and virtual overrides are all now compiled for real (pl_class.cpp was never excluded;
+// pl_leon.cpp/pl_ashley.cpp/objRocket.cpp un-excluded this pass, cmake/boot_exclude.txt) --
+// removed from here to avoid a duplicate-symbol link error. cObjRobo::move() stays: objRobo.cpp is
+// still excluded (Phase 5, real PPC asm elsewhere in that file).
 void cObjRobo::move()
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: cObjRobo::move() called\n"); warned = true; }
 }
-void cObjRocket::beginEvent(u32 flag)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cObjRocket::beginEvent() called\n"); warned = true; }
-}
-cObjLauncher::~cObjLauncher()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cObjLauncher::~cObjLauncher() called\n"); warned = true; }
-}
-
-// Once a class's vtable is emitted at all (the key-function stubs just above), every virtual slot
-// in it needs a definition, not just the key one -- the rest of each of these six classes' own
-// overrides, same excluded-file provenance as above.
-#define RE4_STUB_VOID(sig) void sig { static bool w = false; if (!w) { std::fprintf(stderr, "STUB: " #sig " called\n"); w = true; } }
-RE4_STUB_VOID(cObjRocket::move())
-RE4_STUB_VOID(cObjLauncher::init(cModel*))
-RE4_STUB_VOID(cObjLauncher::moveDrop())
-RE4_STUB_VOID(cObjLauncher::moveFire())
-RE4_STUB_VOID(cObjLauncher::interrupt())
-RE4_STUB_VOID(cObjLauncher::setMotion(cPlayer*))
-int cObjLauncher::keyKamae()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cObjLauncher::keyKamae() called\n"); warned = true; }
-    return 0;
-}
-RE4_STUB_VOID(cPlLeon::setLeftHand(unsigned int))
-RE4_STUB_VOID(cPlLeon::setRightHand(int))
-RE4_STUB_VOID(cPlLeon::setFace(int))
-RE4_STUB_VOID(cPlLeon::setHead(void*, void*))
-RE4_STUB_VOID(cPlLeon::setHead(int))
-RE4_STUB_VOID(cPlLeon::setModel())
-RE4_STUB_VOID(cPlLeon::setWound())
-RE4_STUB_VOID(cPlLeon::setMotion())
-int cPlLeon::checkXbutton()
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: cPlLeon::checkXbutton() called\n"); warned = true; }
-    return 0;
-}
-RE4_STUB_VOID(cPlayer::setNoSuspend(int))
-RE4_STUB_VOID(cPlayer::endEvent(unsigned int))
-RE4_STUB_VOID(cPlAshley::setLeftHand(unsigned int))
-RE4_STUB_VOID(cPlAshley::setRightHand(int))
-RE4_STUB_VOID(cPlAshley::moveMatCalcBefore())
-RE4_STUB_VOID(cPlAshley::setFace(int))
-RE4_STUB_VOID(cPlAshley::setModel())
-#undef RE4_STUB_VOID
 
 // -- main_sub.cpp: newly un-excluded this pass (docs/port-boot.md section 26 -- Render_before()
 // is now real code, no longer a stub), which surfaced these previously-unreached undefined
@@ -210,60 +136,16 @@ BOOL OSUnlink(OSModuleInfo* oldModule)
 // (docs/port-boot.md's frame-presentation milestone).
 } // extern "C"
 
-// SceSys: global cSceSys instance, normally defined in sce_sys.cpp (still excluded,
-// cmake/boot_exclude.txt -- pointer<->integer cast category, not yet reached). cSceSys's own
-// declaration (include/sce_sys.h) is a plain aggregate (no virtuals, no user constructor), so a
-// zero-initialized instance here is exactly what sce_sys.cpp's own `cSceSys SceSys;` would have
-// produced before SceSysInit() ever touches it -- main_sub.cpp only reads its debug-display
-// fields, never calls a method on it.
-cSceSys SceSys;
+// SceSys / cSceSys::checkCTaskRange(): now defined for real by src/game/sce_sys.cpp (un-excluded
+// this pass, cmake/boot_exclude.txt), removed from here to avoid a duplicate-symbol link error.
 
-// cSceSys::checkCTaskRange(): also normally defined in sce_sys.cpp (excluded, see above);
-// main_sub.cpp's Render_done() only checks the returned range for a debug on-screen prim count --
-// 0 ("no scenario task currently running") is a safe, always-valid answer.
-int cSceSys::checkCTaskRange()
-{
-    return 0;
-}
+// Game: now defined for real by src/game/game.cpp (un-excluded this pass, cmake/boot_exclude.txt),
+// removed from here to avoid a duplicate-symbol link error. read.cpp's own `GameWork` view struct
+// (docs/port-boot.md section 35) stays -- it is a separate, deliberately narrower type ReadWepData
+// still uses, not a redeclaration of this one.
 
-// Game: global GAME_WORK instance, normally defined in game.cpp (still excluded,
-// cmake/boot_exclude.txt -- pointer<->integer cast category). read.cpp (now real, docs/port-boot.md
-// section 35) declares its own view struct (`GameWork`, 0x1C bytes: Rno_bak/Map_addr/Map_size/
-// Option_addr/Option_size/Swap_addr/omake_wep_addr) matching game.cpp's real GAME_WORK
-// byte-for-byte; only `ReadWepData` reads it (Game.omake_wep_addr), and only for the extra-mode
-// weapon-data buffer set up by gameInit(), not on the boot path. A plain global-scope C++ variable
-// is not Itanium-mangled (docs/port-boot.md section 7), so this definition binds to the same link
-// name (`_Game`) game.cpp's own `GAME_WORK Game;` would have produced.
-struct GameWork {
-    u32 Rno_bak;
-    u32 Map_addr;
-    u32 Map_size;
-    u32 Option_addr;
-    u32 Option_size;
-    u32 Swap_addr;
-    void* omake_wep_addr;
-};
-GameWork Game;
-
-// SpecularInit / GlobalIlmTexInit: normally defined in trans.cpp (still excluded,
-// cmake/boot_exclude.txt -- Phase 5, real paired-single asm elsewhere in that same file blocks the
-// whole translation unit even though these two functions themselves are plain C++). Called from
-// read.cpp's now-real CoreDataRead() right after it loads the core archive off disc, to bind the
-// specular/indirect/thermal and global-illumination TPL textures via GXInitTexObj/GXInitTlutObj.
-// Stubbed here as logging no-ops: the GX texture objects they would fill in stay zero-initialized,
-// which is wrong for later specular/GI rendering but does not crash CoreDataRead itself (the real
-// blocker this pass fixes is the null message-table read, not texture binding) -- bringing in the
-// real logic needs trans.cpp's Phase 5 paired-single material ported to C first (coordinator's
-// item 2 in a later pass), not a one-line fix here.
-void SpecularInit(TEXPalette*, TEXPalette*, TEXPalette*, TEXPalette*)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SpecularInit() called\n"); warned = true; }
-}
-void GlobalIlmTexInit(TEXPalette*)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: GlobalIlmTexInit() called\n"); warned = true; }
-}
+// SpecularInit / GlobalIlmTexInit: now defined for real by src/game/trans.cpp (un-excluded,
+// cmake/boot_exclude.txt -- docs/port-boot.md section 46/47), removed from here to avoid a
+// duplicate-symbol link error.
 
 #endif // TARGET_PC
