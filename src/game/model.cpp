@@ -1240,7 +1240,9 @@ void cModel::setJointInfo(void* pHead)
             // blendTbl/flipTbl stay plain u32 fields (docs/port-phase2.md inventory: not promoted
             // to a Ptr32<T> like the other cModelData fields), holding a GC32-style value once
             // calcModelAddr has relocated them -- GCPTR recovers the real pointer the same way.
-            Motion.blendTbl = re4_port::GCPTR<u16>(d->blendTbl);
+            // The table CONTENTS are still raw big-endian model-BIN data (docs/port-phase3.md), so
+            // the pointee type is BE<u16>, not u16 (MotionWork::blendTbl in model.h).
+            Motion.blendTbl = re4_port::GCPTR<re4_port::BE<u16>>(d->blendTbl);
 #else
             Motion.blendTbl = (u16*) d->blendTbl;
 #endif
@@ -1249,7 +1251,7 @@ void cModel::setJointInfo(void* pHead)
         }
         if (d->flipTbl != 0) {
 #ifdef TARGET_PC
-            Motion.flip = re4_port::GCPTR<u16>(d->flipTbl + 4);
+            Motion.flip = re4_port::GCPTR<re4_port::BE<u16>>(d->flipTbl + 4);
 #else
             Motion.flip = (u16*) (d->flipTbl + 4);
 #endif

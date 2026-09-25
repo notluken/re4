@@ -602,8 +602,16 @@ u32 MotionMove(cModel* pEm, Camera* pCamera)
         pEm->partsWorldCalc();
     }
     if (MOTION(pEm)->blendTbl != 0) {
+#ifdef TARGET_PC
+        // blendTbl's contents are raw big-endian model-BIN data (docs/port-phase3.md, model.h's
+        // MotionWork::blendTbl comment): the leading 32-bit count needs the same swap as every
+        // u16 entry after it, not the vendor's raw `*(s32*)` alias.
+        int n = (u32)(*(re4_port::BE<u32>*) MOTION(pEm)->blendTbl);
+        re4_port::BE<u16>* tbl = MOTION(pEm)->blendTbl + 2;
+#else
         int n = *(s32*) MOTION(pEm)->blendTbl;
         u16* tbl = MOTION(pEm)->blendTbl + 2;
+#endif
         int i;
 
         {
@@ -699,7 +707,11 @@ void MotionMoveCore(cModel* pEm, MotionWorkSub* w, Camera* pCamera)
     HermitePrm* pp = &prm;
     AttachCamera* cam;
     cModel* p;
+#ifdef TARGET_PC
+    re4_port::BE<u16>* flipTbl = MOTION(pEm)->flip;
+#else
     u16* flipTbl = MOTION(pEm)->flip;
+#endif
     int n = w->Joint_num;
     int i = 0;
     int flip;

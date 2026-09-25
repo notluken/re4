@@ -75,8 +75,17 @@ struct ModelPart {
     u8 specPow;      // 0x15  specular scale (percent)
     u8 pad_16;
     u8 specTexOrg;   // 0x17  specular texture id when flags bit4 is set
+    // On-disc, big-endian (docs/port-phase3.md): ModelPart is read straight off the model BIN
+    // (cModelData::pParts chain) with no separate byte-swap pass, same as every other raw on-disc
+    // field. Found live: `GXCallDisplayList(p, part->size)` (trans.cpp) passed a raw-endian `size`
+    // straight through as a byte count, corrupting the GX FIFO write.
+#ifdef TARGET_PC
+    re4_port::BE<u32> size;    // 0x18  byte length of the primitive stream following the header
+    re4_port::BE<u32> nPoly;   // 0x1C  polygon count (debug statistics)
+#else
     u32 size;        // 0x18  byte length of the primitive stream following the header
     u32 nPoly;       // 0x1C  polygon count (debug statistics)
+#endif
 };
 
 // Header block cModelData::pHead points at (examine: the item's centre offset).
@@ -347,8 +356,20 @@ struct MotionWorkSub {
 // (the PS2 keeps them as cModel members pMotionB / pXFlip / pDblJnt).
 struct MotionWork : public MotionWorkSub {
     MotionWorkSub* blend;    // 0xD0  second motion blended in by MotionMove (PS2 cModel pMotionB)
+    // On-disc, big-endian (docs/port-phase3.md): cModelData::blendTbl/flipTbl (model.h above) are
+    // themselves relocated file-offset-then-pointer fields (Phase 2), but the bytes they point AT
+    // -- the {count, (dst,a,b,percent)...} table and the parts-index remap -- are raw model-BIN
+    // data, never swapped. Found live: MotionMove's blend-table walk read a bogus `dst` part index
+    // off an unswapped `*(s32*)`/`*tbl++`, landing on the root part (whose pParent is legitimately
+    // null) and crashing PSMTXInverse. BE<u16>* here makes every read/write through flip/blendTbl
+    // swap, the same way cSatBlock::idx already does for the SAT index table.
+#ifdef TARGET_PC
+    re4_port::BE<u16>* flip;            // 0xD4  parts index remap for flipped motions
+    re4_port::BE<u16>* blendTbl;        // 0xD8  {count, (dst, a, b, percent)...} quaternion blended parts
+#else
     u16* flip;            // 0xD4  parts index remap for flipped motions
     u16* blendTbl;        // 0xD8  {count, (dst, a, b, percent)...} quaternion blended parts
+#endif
 };
 
 // Parts-side motion state (cParts::motParts at 0x174): a parts has no light set, the cLightInfo

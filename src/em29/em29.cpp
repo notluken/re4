@@ -317,7 +317,11 @@ static Em29Func Em29_R3_move_tbl[3] = {
 };
 
 // Parts index remap of the flipped motions (cModel::motFlip).
+#ifdef TARGET_PC
+static re4_port::BE<u16> em29_flip_tbl[22] = {
+#else
 static u16 em29_flip_tbl[22] = {
+#endif
     0, 1, 2, 6, 7, 8, 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 0,
 };
 

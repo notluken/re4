@@ -190,7 +190,11 @@ static Em2dFunc Em2d_R1_die_tbl[6] = {
 };
 
 // Parts index remap of the flipped motions (cModel::motFlip).
+#ifdef TARGET_PC
+static re4_port::BE<u16> em2d_xflip_tbl[120] = {
+#else
 static u16 em2d_xflip_tbl[120] = {
+#endif
     0,   1,   2,   3,   4,   5,   10,  11,  12,  13,  6,   7,   8,   9,   14,  19,  20,  21,  22,  15,
     16,  17,  18,  24,  23,  26,  25,  28,  27,  29,  30,  32,  31,  35,  36,  33,  34,  43,  44,  45,
     46,  47,  48,  37,  38,  39,  40,  41,  42,  52,  53,  54,  49,  50,  51,  56,  55,  57,  58,  59,
