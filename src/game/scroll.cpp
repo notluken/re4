@@ -499,21 +499,36 @@ SmdWork* cSmd::getWorkPtr(int id)
 void* cSmd::getBinPtr(int id)
 {
     u8* tbl = (u8*) this + BinTblOfs;
+#ifdef TARGET_PC
+    // The offset table itself is raw big-endian on-disc data (docs/port-phase3.md), same bug class
+    // as cSatHeader::getSat -- found live: SmdSetParam's `bin` came out as a garbage pointer,
+    // crashing calcModelAddr.
+    return tbl + ((re4_port::BE<u32>*) tbl)[id];
+#else
     return tbl + ((u32*) tbl)[id];
+#endif
 }
 
 // Texture tpl `no`.
 void* cSmd::getTplPtr(int id)
 {
     u8* tbl = (u8*) this + TplTblOfs;
+#ifdef TARGET_PC
+    return tbl + ((re4_port::BE<u32>*) tbl)[id];
+#else
     return tbl + ((u32*) tbl)[id];
+#endif
 }
 
 // Motion `no`.
 void* cSmd::getMotPtr(int id)
 {
     u8* tbl = (u8*) this + MotTblOfs;
+#ifdef TARGET_PC
+    return tbl + ((re4_port::BE<u32>*) tbl)[id];
+#else
     return tbl + ((u32*) tbl)[id];
+#endif
 }
 
 // Works in the file including the group members.
