@@ -16,13 +16,26 @@ src/game/esp16.cpp
 src/game/espgen02.cpp
 src/game/Espgen42.cpp
 src/game/espgen45.cpp
-src/game/math_sub.cpp
 src/game/objRobo.cpp
 src/game/pendulum.cpp
 src/game/pl_wep.cpp
 src/game/sce_at.cpp
 src/game/shadow.cpp
 src/game/shape.cpp
+# src/game/math_sub.cpp: un-excluded (docs/port-boot.md section 41/42) -- its four asm blocks
+# (SQRTF's frsqrte, SINF/COSF's paired-single Taylor series, LIMIT_ANGLE's fcmpu loop) now have
+# documented, tested (tests/port/test_math_sub.cpp) TARGET_PC C equivalents; every other function
+# in the file was already plain, portable C++.
+# src/game/trans.cpp: still excluded -- NOT the same shape as math_sub.cpp. Besides the two
+# Ptr32-cast-site bugs (fixable), it contains whole-function real PPC asm that reads/writes the
+# GameCube's *locked cache* (a fixed hardware scratch RAM window used as a matrix palette,
+# `0xE0000000`+offset -- CalcSk1_x/CalcSk1_x2, the vertex-skinning inner loop, plus
+# MakeWeightPalette/MakeWeightPaletteExt's paired-single `PSQ_L_U8_TO` reads and `PSMTXReorder`
+# writes into that same window) with no host memory-mapped equivalent. Porting this needs a design
+# decision (model the locked cache as an ordinary host buffer GXWORK() owns, then rewrite the
+# skinning kernels in portable C against it) that is cross-cutting (src/game/pendulum.cpp,
+# also still excluded above, hits the identical `0xE0000000` pattern) and belongs in its own
+# session, not bundled into this one's math_sub.cpp fix.
 src/game/trans.cpp
 
 # Ptr32<T>/array-pointee/Sema interaction bugs (Phase 2 step 5 follow-up, not Phase 5):

@@ -624,18 +624,6 @@ void PlWepLockCtrl(cModel* a0)
 }
 // Render_checkBlurPermission() now defined for real by src/game/main_sub.cpp (docs/port-boot.md
 // section 26 -- no longer excluded), removed from here to avoid a duplicate-symbol link error.
-// RotMatrix(float (*) [4], Vec*) -- free function, return type guessed: `void`
-void RotMatrix(float (*a0) [4], Vec* a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: RotMatrix() called\n"); warned = true; }
-}
-// ScaleMatrix(float (*) [4], Vec*) -- free function, return type guessed: `void`
-void ScaleMatrix(float (*a0) [4], Vec* a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: ScaleMatrix() called\n"); warned = true; }
-}
 // SearchEmModule: real definition now in src/game/read.cpp (docs/port-boot.md section 35
 // continuation -- read.cpp un-excluded).
 // SetSubDamage(cEm*, void (*)()) -- free function, return type guessed: `void`
@@ -684,11 +672,5 @@ int SmdGetWorkId(cObj* a0)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: SmdGetWorkId() called\n"); warned = true; }
     return 0;
-}
-// TransMatrix(float (*) [4], Vec*) -- free function, return type guessed: `void`
-void TransMatrix(float (*a0) [4], Vec* a1)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: TransMatrix() called\n"); warned = true; }
 }
 #endif // TARGET_PC

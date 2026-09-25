@@ -406,25 +406,11 @@ void ClrShape(cModel* pMod)
 // CoreDataRead: real definition now in src/game/read.cpp (docs/port-boot.md section 35 -- read.cpp
 // un-excluded from cmake/boot_exclude.txt, its Ptr32/pointer-cast issues turned out already handled
 // by the RE4_REWRITE_CASTS cast rewriter).
-// COSF: `f32 COSF(f32 x)`
-f32 COSF(f32 x)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: COSF() called\n"); warned = true; }
-    return 0.0f;
-}
 // DBIsDebuggerPresent: `BOOL DBIsDebuggerPresent(void)`
 BOOL DBIsDebuggerPresent(void)
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: DBIsDebuggerPresent() called\n"); warned = true; }
-    return 0;
-}
-// de_Boor_Cox: `int de_Boor_Cox(int n, f32* p, f32 t, int order, f32* B)`
-int de_Boor_Cox(int n, f32* p, f32 t, int order, f32* B)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: de_Boor_Cox() called\n"); warned = true; }
     return 0;
 }
 // DiedemoExec: `void DiedemoExec(int time, int type)`
@@ -771,13 +757,6 @@ OSThread* GXSetCurrentGXThread(void)
     return (OSThread*) 0;
 }
 // UNRESOLVED: GXWGFifo -- candidates: ['extern volatile WGPipe GXWGFifo[];', 'GXWGFifo->f32 = x;']
-// hermite: `f32 hermite(f32* x, f32* v, f32 t)`
-f32 hermite(f32* x, f32* v, f32 t)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: hermite() called\n"); warned = true; }
-    return 0.0f;
-}
 // IdSetNum: `void IdSetNum(IDSystem* pIdSys, int idmNo, u8 idcNo, int num, int max, int keta, int mode)`
 void IdSetNum(IDSystem* pIdSys, int idmNo, u8 idcNo, int num, int max, int keta, int mode)
 {
@@ -789,25 +768,6 @@ void init_dbmodule()
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: init_dbmodule() called\n"); warned = true; }
-}
-// LIMIT_ANGLE: `f32 LIMIT_ANGLE(f32 x)`
-f32 LIMIT_ANGLE(f32 x)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: LIMIT_ANGLE() called\n"); warned = true; }
-    return 0.0f;
-}
-// low_RotMatrix: `void low_RotMatrix(Mtx m, Vec* vec)`
-void low_RotMatrix(Mtx m, Vec* vec)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: low_RotMatrix() called\n"); warned = true; }
-}
-// Matrix2AxisAngle: `void Matrix2AxisAngle(Mtx m, Vec* ang)`
-void Matrix2AxisAngle(Mtx m, Vec* ang)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: Matrix2AxisAngle() called\n"); warned = true; }
 }
 // memclr_asm: `void memclr_asm(void* dst, u32 n)`
 // NOT a logging-only stub (docs/port-boot.md's stub audit, coordinator lead): a pure real-memory-
@@ -922,25 +882,6 @@ void ModelTrans(cModel* model)
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: ModelTrans() called\n"); warned = true; }
-}
-// MtxNNInverse: `f32 MtxNNInverse(int n, f32* m, f32* m_inv)`
-f32 MtxNNInverse(int n, f32* m, f32* m_inv)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: MtxNNInverse() called\n"); warned = true; }
-    return 0.0f;
-}
-// MtxNNMultVecSR: `void MtxNNMultVecSR(int n, int m, f32* mat, f32* v, f32* v_dst)`
-void MtxNNMultVecSR(int n, int m, f32* mat, f32* v, f32* v_dst)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: MtxNNMultVecSR() called\n"); warned = true; }
-}
-// MtxRotAxisPosRad: `void MtxRotAxisPosRad(Mtx m, Vec* axis, Vec* pos, f32 rad)`
-void MtxRotAxisPosRad(Mtx m, Vec* axis, Vec* pos, f32 rad)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: MtxRotAxisPosRad() called\n"); warned = true; }
 }
 // mwPlyCalcWorkCprmSfd: `int mwPlyCalcWorkCprmSfd(MWS_PLY_CPRM_SFD* prm)`
 int mwPlyCalcWorkCprmSfd(MWS_PLY_CPRM_SFD* prm)
@@ -1714,12 +1655,6 @@ void Render()
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: Render() called\n"); warned = true; }
 }
-// RotMatrixZXY: `void RotMatrixZXY(Mtx m, Vec* vec)`
-void RotMatrixZXY(Mtx m, Vec* vec)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: RotMatrixZXY() called\n"); warned = true; }
-}
 // SceAtCancelItemAt: `void SceAtCancelItemAt(cEm* pEm)`
 void SceAtCancelItemAt(cEm* pEm)
 {
@@ -1842,18 +1777,6 @@ void SetFree(int no, u32 val)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: SetFree() called\n"); warned = true; }
 }
-// SetOrientationZX: `void SetOrientationZX(Vec* z, Vec* x, Mtx m)`
-void SetOrientationZX(Vec* z, Vec* x, Mtx m)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SetOrientationZX() called\n"); warned = true; }
-}
-// SetOrientationZY: `void SetOrientationZY(Vec* z, Vec* y, Mtx m)`
-void SetOrientationZY(Vec* z, Vec* y, Mtx m)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SetOrientationZY() called\n"); warned = true; }
-}
 // UNRESOLVED: SetPlDamage -- candidates: ['void SetPlDamage(cEm* em, void (*func)(cPlayer*));', 'cEm* pEmCatch;']
 // SetPrimBuffPtr: `void SetPrimBuffPtr()`
 void SetPrimBuffPtr()
@@ -1880,20 +1803,6 @@ int ShapeMove(cModelInfo* i_pModelInfo)
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: ShapeMove() called\n"); warned = true; }
     return 0;
-}
-// SINF: `f32 SINF(f32 x)`
-f32 SINF(f32 x)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SINF() called\n"); warned = true; }
-    return 0.0f;
-}
-// SQRTF: `f32 SQRTF(f32 x)`
-f32 SQRTF(f32 x)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: SQRTF() called\n"); warned = true; }
-    return 0.0f;
 }
 // SubCharCheckHealing: `int SubCharCheckHealing()`
 int SubCharCheckHealing()
@@ -1965,32 +1874,6 @@ void Trans()
 {
     static bool warned = false;
     if (!warned) { std::fprintf(stderr, "STUB: Trans() called\n"); warned = true; }
-}
-// VecAngle: `f32 VecAngle(Vec* vec_a, Vec* vec_b)`
-f32 VecAngle(Vec* vec_a, Vec* vec_b)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: VecAngle() called\n"); warned = true; }
-    return 0.0f;
-}
-// VecElevation: `f32 VecElevation(Vec* v)`
-f32 VecElevation(Vec* v)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: VecElevation() called\n"); warned = true; }
-    return 0.0f;
-}
-// VecLinearCombination: `void VecLinearCombination(Vec* a, f32 c0, Vec* b, f32 c1, Vec* vec)`
-void VecLinearCombination(Vec* a, f32 c0, Vec* b, f32 c1, Vec* vec)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: VecLinearCombination() called\n"); warned = true; }
-}
-// VecRadLimit: `void VecRadLimit(Vec* v)`
-void VecRadLimit(Vec* v)
-{
-    static bool warned = false;
-    if (!warned) { std::fprintf(stderr, "STUB: VecRadLimit() called\n"); warned = true; }
 }
 // VIGetDTVStatus: `u32 VIGetDTVStatus()`
 u32 VIGetDTVStatus()

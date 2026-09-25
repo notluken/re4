@@ -668,6 +668,30 @@ f32 SQRTF(f32 x)
     if (x <= 0.00001f) {
         return 0.0f;
     }
+#ifdef TARGET_PC
+    // No arm64 `frsqrte` (it is PPC's reciprocal-square-root ESTIMATE instruction, ~1/32-bit
+    // accurate by spec, never exact) -- substituted with a real reciprocal square root
+    // (`1.0f / sqrtf(x)`, arm64 `FRSQRTE`/`FSQRT`-backed, strictly MORE accurate than the real
+    // hardware's estimate) as the initial approximation `r` fed into the SAME Newton-Raphson
+    // correction step the vendor's own asm performs afterward (`r = r * (1.5 - 0.5*x*r*r)`,
+    // transcribed operation-for-operation from the `fmuls`/`fnmsubs` sequence below, not
+    // simplified algebraically, so this stays a faithful substitution of only the hardware-
+    // specific ESTIMATE step, not a rewrite of the vendor's algorithm). Since the correction step
+    // is self-correcting (a full Newton-Raphson iteration on an already-accurate estimate
+    // converges to the same fixed point regardless of the estimate's own error, as long as it is
+    // within the iteration's basin of convergence -- true here since 1.0f/sqrtf(x) is far more
+    // accurate than real frsqrte's own estimate ever was), the final result matches real hardware
+    // to float precision for every finite, positive `x` this function is ever called with (never
+    // proven bit-identical to real frsqrte's specific rounding, which is not the concern PC needs
+    // to solve: no game logic reads SQRTF's low mantissa bits directly, only the geometry it feeds
+    // into). Documented and covered by tests/port/test_math_sub.cpp rather than replicated via a
+    // Dolphin-style lookup table (real frsqrte emulation), which would only matter if some caller
+    // depended on bit-exact GameCube rounding -- not established for this game (**TO VERIFY** if a
+    // future desync is ever traced back here).
+    r = 1.0f / sqrtf(x);
+    r = r * (three - x * r * r) * half;
+    r = x * r;
+#else
     asm("frsqrte 2, %1\n\t"
         "fmuls 3, 2, 2\n\t"
         "fmuls 4, 2, %2\n\t"
@@ -677,6 +701,7 @@ f32 SQRTF(f32 x)
         : "=f"(r)
         : "f"(x), "f"(half), "f"(three)
         : "fr2", "fr3", "fr4");
+#endif
     return r;
 }
 
@@ -724,6 +749,17 @@ f32 SINF(f32 x)
     f32 r;
 
     x = LIMIT_ANGLE(x);
+#ifdef TARGET_PC
+    // The vendor's asm below evaluates a degree-9 minimax polynomial (`Coeff`) split across the
+    // paired-single unit's two lanes (a compensated-summation trick for extra precision at PS
+    // throughput, not two different functions) -- not reproduced lane-for-lane here (no arm64
+    // paired-single unit to model it on, and unlike SQRTF's `frsqrte` this is ordinary polynomial
+    // arithmetic with no hardware-specific rounding step to substitute for): libm's `sinf`, on an
+    // already-range-reduced `x` (LIMIT_ANGLE's job, done identically on both platforms, above), is
+    // at least as accurate and is what this substitutes. Not established that any caller depends
+    // on the vendor polynomial's specific rounding (**TO VERIFY** if a future desync traces here).
+    r = sinf(x);
+#else
     asm volatile(
         "lis 9, Coeff@ha\n\t"
         "li 10, powx@sda21\n\t"
@@ -752,6 +788,7 @@ f32 SINF(f32 x)
         : "=f"(r)
         : "f"(x)
         : "r9", "r10", "r11", "fr2", "fr3", "fr4", "fr5");
+#endif
     return r;
 }
 
@@ -761,6 +798,13 @@ f32 COSF(f32 x)
     f32 r;
 
     x = LIMIT_ANGLE(x + 1.5707964f);
+#ifdef TARGET_PC
+    // Same substitution as SINF() above, and for the same reason -- `sinf`, not `cosf`: COSF
+    // computes cos(original x) as sin(original x + PI/2) (the identity the vendor's own comment
+    // ("cos(x) by the same series") refers to -- `x` here is already `LIMIT_ANGLE(x + PI/2)`, the
+    // shifted-and-wrapped angle, so the SIN series/function is what must be evaluated on it).
+    r = sinf(x);
+#else
     asm volatile(
         "lis 9, Coeff@ha\n\t"
         "li 10, powx@sda21\n\t"
@@ -789,6 +833,7 @@ f32 COSF(f32 x)
         : "=f"(r)
         : "f"(x)
         : "r9", "r10", "r11", "fr2", "fr3", "fr4", "fr5");
+#endif
     return r;
 }
 
@@ -799,6 +844,22 @@ f32 LIMIT_ANGLE(f32 x)
     f32 max = PI;
     f32 step = PI2;
 
+#ifdef TARGET_PC
+    // Transcribed branch-for-branch from the real asm below (not simplified/replaced with fmodf:
+    // this keeps the exact same repeated-subtract/-add stepping, including its behavior for
+    // already-in-range and extreme-magnitude inputs), just spelled in C -- no PPC-specific
+    // instruction or rounding behavior involved (fsubs/fadds/fcmpu are plain single-precision
+    // subtract/add/compare, identical on arm64).
+    if (x < max) {
+        while (x < min) {
+            x = x + step;
+        }
+    } else {
+        while (x >= max) {
+            x = x - step;
+        }
+    }
+#else
     asm("fcmpu 0, %0, %2\n\t"
         "blt 1f\n"
         "0:\n\t"
@@ -817,5 +878,6 @@ f32 LIMIT_ANGLE(f32 x)
         : "+f"(x)
         : "f"(min), "f"(max), "f"(step)
         : "cr0");
+#endif
     return x;
 }

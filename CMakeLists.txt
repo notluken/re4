@@ -323,6 +323,15 @@ if (RE4_PC_BUILD_TESTS)
   target_include_directories(test_os_thread PRIVATE ${RE4_GAME_INCLUDES})
   target_link_libraries(test_os_thread PRIVATE re4_port)
   add_test(NAME test_os_thread COMMAND test_os_thread)
+
+  # test_math_sub: a src/game unit's TARGET_PC substitutions (SQRTF/SINF/COSF/LIMIT_ANGLE,
+  # docs/port-boot.md section 41), not re4_port -- links src/game/math_sub.cpp directly rather
+  # than through re4_game_core/re4_boot_game, so it always builds regardless of RE4_U32_32.
+  add_executable(test_math_sub src/game/math_sub.cpp tests/port/test_math_sub.cpp)
+  target_include_directories(test_math_sub PRIVATE ${RE4_GAME_INCLUDES})
+  target_compile_definitions(test_math_sub PRIVATE ${RE4_GAME_DEFINES} TARGET_PC)
+  target_compile_options(test_math_sub PRIVATE ${RE4_GAME_OPTIONS})
+  add_test(NAME test_math_sub COMMAND test_math_sub)
 endif()
 
 # --- re4_port_static_asserts: offsetof() checks for Phase 2 step 5's Ptr32<T>-converted on-disc
