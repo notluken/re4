@@ -355,6 +355,17 @@ if (RE4_PC_BUILD_TESTS)
   target_include_directories(test_trans_skin PRIVATE ${RE4_GAME_INCLUDES} ${CMAKE_CURRENT_SOURCE_DIR}/tests/port)
   target_compile_definitions(test_trans_skin PRIVATE ${RE4_GAME_DEFINES})
   add_test(NAME test_trans_skin COMMAND test_trans_skin)
+
+  # test_yz2: src/game/yz2code.cpp's TARGET_PC decode loop (docs/port-phase3.md, "room data
+  # formats") against tools/motion/yz2.py, on real stN/rNNN.das room archives extracted from a
+  # disc image at test time (tools/port/yz2_extract_room.py) -- SKIPs gracefully when no
+  # orig/G4BE08 disc image is present (never committed, port rules).
+  add_executable(test_yz2 src/game/yz2code.cpp tests/port/test_yz2.cpp)
+  target_include_directories(test_yz2 PRIVATE ${RE4_GAME_INCLUDES})
+  target_compile_definitions(test_yz2 PRIVATE ${RE4_GAME_DEFINES} TARGET_PC
+    RE4_SOURCE_DIR="${CMAKE_SOURCE_DIR}" RE4_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+  target_compile_options(test_yz2 PRIVATE ${RE4_GAME_OPTIONS})
+  add_test(NAME test_yz2 COMMAND test_yz2)
 endif()
 
 # --- re4_port_static_asserts: offsetof() checks for Phase 2 step 5's Ptr32<T>-converted on-disc
