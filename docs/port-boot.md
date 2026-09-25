@@ -2229,3 +2229,93 @@ the title's actual textures) has not been reached yet.
 - `src/port/vi.cpp`: deferred VI retrace callback execution onto the game thread (port-only)
 - `CMakeLists.txt`, `tests/port/test_fiber.cpp`, `tests/port/test_os_thread.cpp`: build wiring + new
   tests (port-only)
+
+## 35. Coordinator follow-up: the 100% CPU loop was a real regression from section 34's own fix,
+    diagnosed and fixed; one real Aurora bug found and patched; new, honestly-diagnosed blocker
+    past both (2026-09-25)
+
+Coordinator asked, before accepting section 34's write-up: is the steady 100% CPU state a normal
+paced frame loop or a busy-wait, and if a busy-wait, why doesn't it see the deferred VI callback.
+
+### 1. Root cause: `main.cpp`'s real vsync busy-wait never calls `VIWaitForRetrace()`
+
+`main()`'s frame loop (real, byte-matching) does not pace itself with `VIWaitForRetrace()` every
+frame -- it spins directly on the `vsync_cnt` global instead (`while (vsync_cnt < GetSystemVcnt() -
+1) {}`, twice per frame). `vsync_cnt` is only ever incremented by `postVSyncCallback()`, the
+registered VI retrace callback -- and section 34's own fix made that callback's delivery wait
+until the game thread calls `VIWaitForRetrace()` (the correct fix for the cross-thread scheduler
+race, but this exact spin never calls it). Confirmed live: on real hardware this spin terminates
+because the retrace **interrupt** can genuinely fire mid-spin; on this host, deferring the callback
+to a call site this loop never reaches meant it deferred forever -- turning the section-33 deadlock
+into a different infinite busy-wait (same coordinator hypothesis: "pacing isn't blocking"). Not
+merely theorized -- read live via `ps`, confirmed with a fresh `ps` sample of a running boot: `STAT
+RN`, ~100% CPU, no log growth for 90+ real seconds, no crash (past the vendor's own 60-second hang
+watchdog too, since `vsync_cnt` was genuinely stuck at 0 forever, `haltExecCheck()`'s own counter
+never advancing either).
+
+**Fixed**: a new, non-blocking `re4_port::PumpPendingVICallbacks()` (`src/port/vi.cpp`/`include/
+port/vi.h`) -- the same drain `VIWaitForRetrace()` already did, factored out, callable without
+waiting for a tick first. Both `vsync_cnt` busy-wait bodies in `main.cpp` now call it, under
+`#ifdef TARGET_PC` (bytes unchanged for the real target) -- the direct host equivalent of "take the
+pending interrupt now," for exactly the one polling loop that needed it. DVD/ARQ completion
+callbacks (`dvdread_callback`/`aram_cb`/`trans2aram_cb`, `src/game/dvd.cpp`) were checked too, per
+the coordinator's request: all three only flip plain flag bits, never call into the OSThread
+scheduler, so Aurora's real background-thread delivery of those was never unsafe and needed no
+change -- confirmed by reading every one of them, not assumed.
+
+**Verified**: `re4_boot` now runs many real frames past the point that used to spin forever --
+confirmed by new log lines appearing (`SS/cmn/title.snd`, `ss/cmn/save_e.dat`, `Slot A Unmount`, a
+real memory-card probe) that never printed in the spinning state.
+
+### 2. Toward title.dat: one real Aurora bug found and fixed, one new (honest) blocker
+
+Past the fix above, `re4_boot` crashed quickly and reproducibly (`lldb`, `EXC_BAD_ACCESS` at
+`0x0`): `CARDProbeEx` (Aurora's `lib/dolphin/card.cpp`) unconditionally dereferenced its
+`memSize`/`sectorSize` output parameters; the real SDK (`src/lib/CARDMount.c`, this decompilation's
+own already-verified source) treats both as optional (`if (memSize) *memSize = ...`), and
+`cCard::errorDisp()` calls it wanting only the result code, with both null. A genuine Aurora bug,
+not a game-code or fiber-scheduler issue -- fixed with a 2-line null check,
+`tools/port/aurora-patches/0005-card-probe-ex-null-check.patch` (Aurora checkout itself left
+clean, patch applied by CMake same as the other four).
+
+Past that fix, `re4_boot` reaches further still (a new screenshot, `boot_fiber_7.png`, shows new
+content never seen before: a row of short debug-log bar segments near the bottom-left, confirming
+real frames are now rendering and accumulating log output -- still no font glyphs, still not the
+title screen) and then crashes again, reproducibly, in `lldb`: `EXC_BAD_ACCESS` at address `0x8`,
+in `MessageData::getAddr()` (`src/game/mes.cpp:289`), reached via `cCard::errorDisp() ->
+cardMesSet() -> MessageControl::MesSet() -> Message::init()`. Root cause, read directly: `tbl =
+(u32*) ptr[data_type]` (`data_type=0`, the "core" message table) is null -- `CoreDataRead()`
+(`STUB: CoreDataRead() called`, visible in every log this session) is still a logging-only stub
+that never actually loads the core message-table data from disc, so `MessageData::ptr[0]` is never
+set. This is a real, separate, and sizable gap (a DVD-backed data-loading subsystem, not a
+scheduler or callback-timing issue) -- **not fixed this pass** (budget): implementing it means
+adding a real `CoreDataRead()` (find the message/font archive on disc, read it, populate
+`MessageData::ptr[]`), which is its own unit of work, not a quick patch. Flagged here with the
+exact call chain and root cause for whoever picks this up next.
+
+### 3. Screenshots, honestly described
+
+`boot_fiber_3.png` (before this pass's fix, during the 100%-CPU spin): unchanged from every prior
+section's debug overlay -- expected, since nothing was rendering new content while stuck spinning
+on `vsync_cnt`.
+
+`boot_fiber_7.png` (after both fixes above, captured ~400ms after window open, right before the
+`MessageData::getAddr()` crash): genuinely new content -- a taller pair of dark vertical bars on
+the left (with a small green mark at the very top, not seen before), the same pale-purple bar on
+the right, and, new, a row of five short horizontal light-gray bar segments plus one shorter
+segment beneath them, roughly a third of the way down the window. Read plainly: this looks like the
+debug log renderer (`pLog->disp()`, called every frame) drawing accumulated log lines as
+placeholder bars (no font texture bound yet, so text has no glyph shapes, matching every prior
+section's finding on that specific point) -- but the fact that there are now multiple distinct
+bars, where every previous screenshot in this whole effort showed either nothing or one fixed short
+strip, is itself the real evidence that multiple real frames rendered and accumulated log output
+before this crash, which did not happen before this pass's fixes. Still not the title screen; still
+no glyph shapes.
+
+### Commits this pass
+
+- `b672aa9c` -- `main.cpp`/`vi.cpp`/`vi.h`: pump deferred VI callbacks in the vsync busy-wait
+  (touches outside `src/port`/`include/port`, remote-verified)
+- `c11c270b` -- Aurora patch: null-check `CARDProbeEx`'s output pointers (`tools/port/`, not
+  `src/`/`include/`, no remote round trip needed by the stated rule, but the fix is entirely in the
+  vendored-but-patched Aurora tree, not this repo's own game/port code)
