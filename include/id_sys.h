@@ -4,6 +4,9 @@
 #include "types.h"
 #include "vec.h"
 #include "hermite.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
 // Screen id (widget) unit (game/id_sys.cpp), 0x138 bytes.
 struct IdUnit {
@@ -89,7 +92,15 @@ struct IdData {
     u8 flags_7F;     // 0x6B
     u8 transSub;     // 0x6C
     u8 pad_6D[3];
-    u32 ofs[6];      // 0x70  path0, path1, curve[4] (offsets from the table start, 0 = none)
+    // Byte offsets from the table start (path0, path1, curve[4]); 0 = none. On-disc, big-endian
+    // (Phase 3, docs/port-phase3.md) -- BE<u32> under TARGET_PC (IDSystem::set adds these straight
+    // to `data`'s address; unswapped on this little-endian host they are huge garbage offsets that
+    // walk FuncPathParametrize/Hermite1 pointers off the end of the loaded buffer).
+#ifdef TARGET_PC
+    re4_port::BE<u32> ofs[6];      // 0x70
+#else
+    u32 ofs[6];      // 0x70
+#endif
 };
 
 struct IdData2 {
@@ -122,7 +133,12 @@ struct IdData2 {
     u8 flags_7F;     // 0x6F
     u8 transSub;     // 0x70
     u8 pad_71[3];
+    // Same reasoning as IdData::ofs above -- BE<u32> under TARGET_PC.
+#ifdef TARGET_PC
+    re4_port::BE<u32> ofs[6];      // 0x74
+#else
     u32 ofs[6];      // 0x74
+#endif
 };
 
 // Id data table header: version string, entry count, entries from 0x08.
