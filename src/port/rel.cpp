@@ -10,6 +10,7 @@
 #include "dolphin/os/OSModule.h"
 
 #include <cassert>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -22,11 +23,18 @@ namespace {
 // already linked by this host" (OSLink.c's real relocator uses the same field for the real module
 // queue; nothing on this host walks that queue, so it is free to reuse as a marker). A REL buffer
 // freshly read off disc has never had this host write to it, so `link.next` there is whatever the
-// file's own bytes are (zero, in every REL this tree has looked at) -- never this address. Address
-// of a static object, not a magic integer: guaranteed unique per process, never equal to a real
-// heap/stack address the game could plausibly leave lying in that field.
-char g_hostLinkedMarkerStorage;
-OSModuleInfo* const kHostLinkedMarker = reinterpret_cast<OSModuleInfo*>(&g_hostLinkedMarkerStorage);
+// file's own bytes are (zero, in every REL this tree has looked at) -- never this handle.
+//
+// A raw `Ptr32<OSModuleInfo>` handle value (`FromRaw()`/`raw_handle()`), not a real host pointer's
+// address: `link.next`/`prev` are `Ptr32<OSModuleInfo>` (include/dolphin/os/OSModule.h, "BSS SIZE
+// OVER!!!" fix, docs/port-phase3.md) so the REL header's on-disc layout matches the real GameCube's
+// 4-byte-pointer struct; a real host pointer (this file's previous approach, the address of a static
+// object) is 8 bytes here and is not a valid arena-window handle besides -- `Ptr32<T>`'s normal
+// pointer constructor would abort on it (`GC32()`'s out-of-window check). `IsFresh()`/`OSLink()`
+// never dereference this field as a real pointer, only compare/store the raw handle, so any fixed
+// 32-bit value that a real disc-read `next`/`prev` (always 0) or an actual relocated pointer's own
+// compressed handle could never collide with works.
+constexpr std::uint32_t kHostLinkedMarkerHandle = 0xFFFFFFFEu;
 
 struct Entry {
     const RelModuleDesc* desc;
@@ -52,7 +60,7 @@ Entry* Find(unsigned id)
 
 bool IsFresh(const OSModuleInfo* info)
 {
-    return info->link.next != kHostLinkedMarker;
+    return info->link.next.raw_handle() != kHostLinkedMarkerHandle;
 }
 
 } // namespace
@@ -119,7 +127,7 @@ BOOL OSLink(OSModuleInfo* newModule, void* bss)
         std::fprintf(stderr, "re4_port: OSLink: module '%s' (id %u) relink (state preserved)\n",
                      e->desc->name, e->desc->id);
     }
-    newModule->link.next = re4_port::kHostLinkedMarker;
+    newModule->link.next = re4_port::Ptr32<OSModuleInfo>::FromRaw(re4_port::kHostLinkedMarkerHandle);
     newModule->link.prev = nullptr;
     e->linked = true;
     (void) header;

@@ -17,6 +17,7 @@
 // bytes are unaffected.
 #if defined(TARGET_PC) && defined(__cplusplus)
 #include "port/be.h"
+#include "port/ptr32.h"
 #endif
 
 #ifdef __cplusplus
@@ -48,8 +49,24 @@ struct OSModuleQueue {
 };
 
 struct OSModuleLink {
+    // TARGET_PC: `Ptr32<OSModuleInfo>` (4 bytes), not a raw host pointer (8 bytes on this arch) --
+    // found live (docs/port-phase3.md, "BSS SIZE OVER!!!"/DIAG session): with real 8-byte pointers
+    // here, `OSModuleInfo` widens from the GameCube's 0x20 bytes to 0x30 (alignment padding for the
+    // two pointers), pushing every field this same header is overlaid on top of after `link`
+    // (`numSections`, `sectionInfoOffset`, ..., `OSModuleHeader::bssSize`) 0x10 bytes further into
+    // the raw REL bytes than the real GameCube field, so e.g. `pModule->bssSize` reads someone
+    // else's field entirely (confirmed: `sizeof(OSModuleInfo)` 48 instead of 32, a real REL's
+    // `bssSize` of 8 misread as 16843008). `re4_port::OSLink()` (src/port/rel.cpp) never
+    // dereferences `link.next`/`prev` as real pointers (its own "fresh vs already-linked" marker
+    // scheme reads/writes a raw handle value via `Ptr32<T>::FromRaw()`/`raw_handle()`, never
+    // `operator T*()`), so this costs that mechanism nothing -- see rel.cpp's own comment.
+#if defined(TARGET_PC) && defined(__cplusplus)
+    re4_port::Ptr32<OSModuleInfo> next;
+    re4_port::Ptr32<OSModuleInfo> prev;
+#else
     OSModuleInfo* next;
     OSModuleInfo* prev;
+#endif
 };
 
 struct OSModuleInfo {
