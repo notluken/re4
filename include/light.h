@@ -184,7 +184,18 @@ public:
 // manager keeps a copy of the current one at cLightMgr+0x38 (returned by getEnvPtr).
 struct cLightEnv {
     GXColor AmbientScr;     // 0x00  model ambient (trans_lit LightSetModel / cloth / water; versionUp 0x23 copies it to AmbientEm / AmbientEsp)
+    // On-disc, big-endian (Phase 3, docs/port-phase3.md), same as cLit's own header -- read raw as
+    // a plain u32 this came out enormous on this little-endian host, clamped to nArray by
+    // registCut() (LightRegistCut() LIGHT NUM OVER 100), then underflowed cLightMgr::update()'s
+    // `n = nMaxLight - nLight` into a near-UINT32_MAX loop count that ran cManager<cLight>::create()
+    // until the pool was exhausted and crashed on the resulting NULL. The rest of cLightEnv (Fog
+    // colours, FocusZ, ...) is still raw/unconverted -- docs/port-next.md step 4's own "remaining
+    // raw room formats" sweep, not fixed here; only the field that was crashing.
+#ifdef TARGET_PC
+    re4_port::BE<u32> nLight;      // 0x04
+#else
     u32 nLight;      // 0x04
+#endif
     LightFog Fog;    // 0x08  Type: gx_sub: 0 = the background colour has no rgb (alpha only); Color: fog / background colour
     LightFog MirrorFog;   // 0x18  mirror fog (db_light "MIRROR FOG")
     s32 FocusZ;         // 0x28  focus depth (screen z, 0..65535)
