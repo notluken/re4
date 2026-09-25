@@ -381,18 +381,44 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
     // back to a whole-screen capture if that fails) while the process (and its window) is still
     // alive. Best-effort: if the process has already crashed by the time this fires, the capture
     // simply shows the desktop -- `view` the PNG afterward to tell which happened, don't assume.
+    // RE4_PORT_SCREENSHOT_AT_FRAME=N (fixed-VI retrace count, coordinator's determinism request):
+    // a wall-clock delay only reproduces a given scene by luck (real elapsed time before the delay
+    // fires has no fixed relationship to how many game frames RE4_PORT_INPUT's script has advanced
+    // through, especially with RE4_PORT_FIXED_VI=1, where the game thread -- not this loop -- is
+    // the only tick source and can run arbitrarily faster/slower than real time). When set, this
+    // polls VIGetRetraceCount() (g_retraceCount, bumped once per VIWaitForRetrace()/
+    // TickOneRetraceNow() call, i.e. once per game frame) instead of sleeping a fixed duration, so
+    // the same RE4_PORT_INPUT script reaches the same on-screen state before the capture fires on
+    // every run, independent of real time. Takes priority over RE4_PORT_SCREENSHOT_DELAY_MS if
+    // both are set. A short extra sleep after the target retrace is still needed (poll granularity
+    // + letting Present() actually flip before capturing), but its length no longer affects which
+    // frame's content is captured -- only how promptly after it.
     if (const char* path = std::getenv("RE4_PORT_SCREENSHOT")) {
-        int delayMs = 1500;
-        if (const char* delayEnv = std::getenv("RE4_PORT_SCREENSHOT_DELAY_MS")) {
-            delayMs = std::atoi(delayEnv);
-        }
         std::string dest(path);
-        std::fprintf(stderr, "re4_boot: screenshot thread armed, firing in %d ms -> %s\n", delayMs,
-                     dest.c_str());
-        std::thread([dest, delayMs] {
-            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-            re4_port::CaptureOwnWindowScreenshot(dest.c_str());
-        }).detach();
+        if (const char* frameEnv = std::getenv("RE4_PORT_SCREENSHOT_AT_FRAME")) {
+            u32 targetFrame = (u32) std::atol(frameEnv);
+            std::fprintf(stderr,
+                         "re4_boot: screenshot thread armed, firing at retrace %u -> %s\n",
+                         targetFrame, dest.c_str());
+            std::thread([dest, targetFrame] {
+                while (VIGetRetraceCount() < targetFrame) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                re4_port::CaptureOwnWindowScreenshot(dest.c_str());
+            }).detach();
+        } else {
+            int delayMs = 1500;
+            if (const char* delayEnv = std::getenv("RE4_PORT_SCREENSHOT_DELAY_MS")) {
+                delayMs = std::atoi(delayEnv);
+            }
+            std::fprintf(stderr, "re4_boot: screenshot thread armed, firing in %d ms -> %s\n",
+                         delayMs, dest.c_str());
+            std::thread([dest, delayMs] {
+                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+                re4_port::CaptureOwnWindowScreenshot(dest.c_str());
+            }).detach();
+        }
     }
 
     // Paces this loop's retrace tick to ~59.94 Hz (real NTSC field rate, VIGetTvFormat()==0) with an
