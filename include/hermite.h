@@ -2,17 +2,34 @@
 #define HERMITE_H
 
 #include "types.h"
+#ifdef TARGET_PC
+#include "port/be.h"
+#endif
 
-// game/hermite.cpp: 1-D cubic Hermite curve (C linkage).
+// game/hermite.cpp: 1-D cubic Hermite curve (C linkage). Curve tables are on-disc, big-endian
+// (Phase 3, docs/port-phase3.md) -- BE<T> under TARGET_PC; every hermite.cpp routine only ever
+// reads/writes through `->num`/`->key[i].t/v/in/out`, which round-trip through BE<T>'s implicit
+// conversion (and its +=/-=/*=// compound-assignment operators) unchanged, no call-site edits.
 struct HermiteKey {
+#ifdef TARGET_PC
+    re4_port::BE<f32> t;    // 0x00  key time
+    re4_port::BE<f32> v;    // 0x04  value
+    re4_port::BE<f32> out;  // 0x08  tangent leaving this key
+    re4_port::BE<f32> in;   // 0x0C  tangent arriving at this key
+#else
     f32 t;    // 0x00  key time
     f32 v;    // 0x04  value
     f32 out;  // 0x08  tangent leaving this key
     f32 in;   // 0x0C  tangent arriving at this key
+#endif
 };
 
 struct Hermite1 {
+#ifdef TARGET_PC
+    re4_port::BE<s32> num;   // 0x00
+#else
     s32 num;             // 0x00
+#endif
     HermiteKey key[1];   // 0x04  num entries
 };
 
