@@ -3246,3 +3246,77 @@ points; `pendulum.cpp` (a separate, still-excluded unit hitting the identical lo
 -- not on `trans.cpp`'s own call path, so not touched); the title screen itself (still blocked
 behind `trans.cpp`'s full un-exclusion, now behind `shape.cpp`/`shadow.cpp` instead of its own
 math).
+
+## 47. `get_bind_group` fatal root-caused and fixed: a real cross-thread race between the game
+    thread's GX frames and the host thread's `aurora_update()` (2026-09-25)
+
+By this point `shape.cpp`/`shadow.cpp`/`cloth.cpp` and the three missing Aurora GX entry points
+(`GXSetDrawSync`/`GXSetDrawSyncCallback`/`__GXSetIndirectMask`, `af35c9b2`) had all landed in a
+prior pass (not documented here as its own section -- see the commit log around `94b1e934`..
+`e0fd2c18`), so `trans.cpp` links for real and `re4_boot` reaches actual 3D `Render()`. Running it
+(`RE4_PORT_INPUT`, `RE4_PORT_FIXED_VI=1`) got past `common_p.fnt`/`option.dat`/`title.snd`/
+`save_e.dat` loading and then fataled: `[fatal] [aurora::gfx] get_bind_group: failed to locate
+d2529830a6ce635c`.
+
+**Root cause, found by temporarily instrumenting Aurora** (`../aurora/lib/gfx/resource_cache.cpp`'s
+`bind_group_ref`/`clear_bind_group_cache`/`find_bind_group`, and `../aurora/lib/webgpu/gpu.cpp`'s
+`resize_swapchain_internal`, all reverted after -- not committed, `git diff --stat` in the Aurora
+checkout confirms only the 8 existing patches remain applied): a genuine three-way race between this
+port's own two real host threads and Aurora's internal async render-worker thread, not a struct
+layout or GX-bracketing bug (hypotheses (a)/(c) from the brief did not hold -- bind groups are
+created and looked up correctly within Drain-mode FIFO processing; discarded frames per patch 0007
+never call `bind_group_ref`/`find_bind_group` at all, so a discarded session can't leak a stale
+reference).
+
+Traced live with frame-numbered logging: `bind_group_ref` created a bind group once (frame 1, a
+static title-screen texture reused every frame after via a cache HIT, which does not recreate the
+GPU object). At frame 17, macOS/SDL fired `SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED` (the window's real
+content size settling a few frames after opening, `2560x1920` -> `2560x1780`) -- delivered by
+`aurora_update()`, which this port calls from the **host main thread** (`RunPresentLoop()`,
+`src/port/vi.cpp`). Aurora's own resize path (`resize_swapchain_internal`) reacts to a size change by
+calling `gfx::clear_caches()` (wipes the bind-group cache) after `gpu_synchronize()`
+(`render_worker::synchronize()`, which drains Aurora's own internal render-worker thread of whatever
+was already queued). That synchronize only waits for work already enqueued at the moment it runs --
+it has no way to know about the **game thread** (a second, independent real host thread in this
+port's design, per `include/port/vi.h`'s own threading-design comment) concurrently calling
+`gx::render()`, doing its own `bind_group_ref()` cache HIT on the soon-to-be-evicted id, and about to
+hand a new frame packet referencing that id to the same render-worker queue. When the clear lands in
+that gap, the render worker later dequeues the packet and calls `find_bind_group()` on an id that no
+longer exists -- confirmed by an `lldb` backtrace landing squarely in `aurora::gfx::render_worker`'s
+own worker thread, not the game thread or the host thread. Aurora's own single-game-thread design
+(one thread drives both window events and GX submission, so a resize can never race a not-yet-queued
+draw) is exactly what this port deliberately does not do -- the same underlying class already found
+twice before in this port (the GX FIFO worker's missed wakeup, section 43; the begin-frame/
+window-ready race, section 44), now surfacing a third time in the swapchain-resize path.
+
+**Fix** (`src/port/vi.cpp`, no Aurora patch needed -- this is entirely about which of the port's own
+two threads may run Aurora entry points at a given moment, not an Aurora-internal bug): a new mutex,
+`g_gxHostMutex`, held by the game thread for its whole GX-frame span (`BeginGxFrame()`'s
+`t_gxHostLock.lock()`, right after the window-ready wait so it can never deadlock against
+`RunPresentLoop()`'s own initial `aurora_initialize()`, through `EndGxFrame()`'s unlock -- a
+thread-local `std::unique_lock` since the lock has to outlive the single function call that acquires
+it) and by the host thread around each `aurora_update()` call (scoped to just that call, not the
+pacing sleep after it). The two can now never run concurrently, so a resize's synchronize+clear
+sequence always either completes entirely before or entirely after a given game-thread GX frame,
+never straddling one.
+
+**Verified**: `re4_boot` (`build-pc-boot`, `RE4_U32_32=ON`) builds clean and now runs past the fatal
+entirely -- traced-instrumented rerun showed the identical race resolved (`clear_bind_group_cache`
+and the game thread's next `bind_group_ref` no longer interleave); production rerun (instrumentation
+reverted) ran for the same input script with no crash, card-read errors only (`bh4_data00`..`19`,
+expected -- no memory card present), reaching a real, fully-rendered in-game screen (the debug
+save/load menu, `boot_1.png` -- see the report for the image; further than the title screen itself,
+which the `RE4_PORT_INPUT` script's own scripted `A`/`START` presses drove past). Host default build
+(`build-pc`, `RE4_U32_32=OFF`): `ctest` 7/7 passed (unchanged); `src/port/vi.cpp` is not part of that
+build's pre-existing failing-file set (`model.cpp`'s pointer-truncation cast and the
+`RE4_PC_BUILD_ALL_GAME=ON` kitchen-sink target's ~60 already-excluded-from-`re4_boot`-by-design
+files, all pre-existing and untouched by this change) -- **TO VERIFY**: no exact pre-change baseline
+count was captured at the start of this specific session to diff one-for-one against, but the change
+touches only `src/port/vi.cpp`, which none of those failing files depend on, so a regression is not
+plausible from inspection alone. Committed `116910c7`.
+
+**Not reached this pass**: the actual title screen (main menu) itself was not screenshotted in
+isolation -- the run that reached `boot_1.png` used the same `RE4_PORT_INPUT` script from earlier
+sessions, whose scripted `A`/`START` presses drive straight through the title screen into the debug
+save/load menu; a title-screen-only screenshot (no scripted input, or input that stops before the
+first `A` press) is easy follow-up work, not attempted here given the session's remaining budget.
