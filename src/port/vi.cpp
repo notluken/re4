@@ -421,6 +421,9 @@ void RunPresentLoop(const char* appName, std::atomic<bool>* shouldExit)
             const AuroraEvent* event = aurora_update();
             while (event != nullptr && event->type != AURORA_NONE) {
                 if (event->type == AURORA_EXIT) {
+                    std::fprintf(stderr, "re4_port: RunPresentLoop: aurora_update() reported "
+                                          "AURORA_EXIT -- host main thread will now tear Aurora "
+                                          "down\n");
                     exiting = true;
                 }
                 ++event;

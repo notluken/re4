@@ -44,6 +44,8 @@ void* GameThreadEntry(void*)
     re4_port::MarkCurrentThreadAsMainOSThread();
     main_game(); // never expected to return in practice (src/game/main.cpp's main() is an infinite
                  // frame loop) -- this is just the "if it somehow does" case.
+    std::fprintf(stderr, "re4_port: GameThreadEntry: main_game() RETURNED -- this should never "
+                          "happen in practice; RunPresentLoop() will now tear Aurora down\n");
     g_gameThreadDone.store(true);
     return nullptr;
 }

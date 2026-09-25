@@ -33,6 +33,11 @@
 #include "title.h"
 #include <string.h>
 #include <dolphin/os.h>
+#ifdef TARGET_PC
+#include <cstdio>
+#include <cstdlib>
+extern "C" u32 VIGetRetraceCount(void); // debug trace only, see RE4_PORT_TITLE_TRACE below
+#endif
 
 #define KEY_START 0x1000
 
@@ -110,6 +115,28 @@ void Title_task()
 #line 114 "D:/Bio4/Prog/title.cpp"
     w = (TitleWork*) MEM_CALLOC(sizeof(TitleWork), 1, 13);
     for (;;) {
+#ifdef TARGET_PC
+        // Debug-only, RE4_PORT_TITLE_TRACE=1: log every Rno0/Rno1 transition so a real host run's
+        // vsync-tick number for reaching titleMain()/New Game can be read off a log instead of
+        // guessed (docs/port-boot.md New Game crash investigation). No effect at all unless the env
+        // var is set; never touches game state.
+        if (const char* env = std::getenv("RE4_PORT_TITLE_TRACE")) {
+            if (env[0] == '1') {
+                static int lastRno0 = -1;
+                static int lastRno1 = -1;
+                static int lastCursor = -1;
+                if (w->Rno0 != lastRno0 || w->Rno1 != lastRno1 || w->cursor != lastCursor) {
+                    std::fprintf(stderr,
+                                 "re4_port: title trace: vcount=%u Rno0=%d Rno1=%d cursor=%d "
+                                 "Key.trg=0x%08x\n",
+                                 VIGetRetraceCount(), w->Rno0, w->Rno1, w->cursor, Key.trg);
+                    lastRno0 = w->Rno0;
+                    lastRno1 = w->Rno1;
+                    lastCursor = w->cursor;
+                }
+            }
+        }
+#endif
         titleFuncTbl[w->Rno0](w);
         TaskSleep(1);
     }
